@@ -46,6 +46,8 @@ All live runs use the Claude agent (benchmark mode) with the engine's tools.
 | Warm-up questions (where is, how many, routes, step-free, closures, tours) | build | 18 / 18 |
 | Both sets reworded by Claude (casual, terse, formal, roundabout) | build | 41 / 41 |
 | **Hold-out, run once, nothing tuned on it** | **hold-out** | **34 / 36 (94%)** |
+| After the same-name fix and definitions-as-parameters: benchmark, warm-up, reworded | build | 83 / 83 |
+| Novel questions the dataset never asks (16 kinds, `evals/novel.py`) | build | 31 / 31 |
 
 The two hold-out misses (`osm-way37850565-H03`, `osm-way52060470-H06`) name a room whose name exists more
 than once on its floor ("Büro" three times, "Genusswerk" twice), so the question doesn't say which one is
@@ -55,7 +57,7 @@ Offline checks (`uv run pytest`, free): tools + code-written answer lines on eve
 question; warm-up routes exact to the centimetre; an independent router; invariance under renaming,
 reordering, moving and rotating; stress buildings; every tool on every build and test building.
 
-Cost: about $0.03 per question (prompt caching on), $4.20 for all runs above.
+Cost: about $0.04 per question (prompt caching on), about $8.60 for all runs above.
 
 `submission/team_answers.csv` is from the earlier template-based version and will be replaced by the
 agent's run.
