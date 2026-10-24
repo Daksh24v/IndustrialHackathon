@@ -9,6 +9,7 @@ Endpoints
 - POST /buildings/{id}/route              a route without the agent: length + lines per floor
 - POST /sessions                          start a conversation with the agent about one building
 - POST /sessions/{id}/chat                one turn: {reply, question, map}
+- POST /sessions/{id}/position             where the person is (from the phone's AR, later)
 - DELETE /sessions/{id}                   end it
 - POST /imports                           set up a new building from floor plans: a builder conversation
 - POST /imports/{session_id}/save         save it (the agent can also save when the person confirms)
@@ -239,6 +240,21 @@ def save_import(session_id: str, request: SaveRequest) -> dict:
         raise HTTPException(422, str(error)) from error
     forget_buildings()
     return {"saved": True, "building_id": path.name}
+
+
+class PositionRequest(BaseModel):
+    space: str = Field(min_length=1, description="where the person is: a space id or 'Name (Floor name)'")
+
+
+@app.post("/sessions/{session_id}/position")
+def set_position(session_id: str, request: PositionRequest) -> dict:
+    """Where the person is, as the phone worked it out (the AR camera, later). From then on the agent uses it
+    instead of asking, and the map shows it as 'you are here'."""
+    agent = agent_for(session_id)
+    try:
+        return agent.session.set_position(request.space)
+    except EngineError as error:
+        raise HTTPException(422, str(error)) from error
 
 
 @app.delete("/sessions/{session_id}")

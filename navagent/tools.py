@@ -46,6 +46,7 @@ class Session:
     closed: set[str] = field(default_factory=set)
     new_openings: list[dict] = field(default_factory=list)
     pending_question: dict | None = None  # set by ask_user; the app shows it as option chips
+    here: str | None = None  # where the person is (a space id), when the phone knows it (AR, later)
     submitted: dict | None = None  # set by submit_answer in benchmark mode
     last_route: list[Route] | None = None  # legs of the most recent find_route, for show_on_map
     map_view: dict | None = None  # what the app should draw after this turn (show_on_map)
@@ -567,6 +568,13 @@ class Session:
             ],
         }
 
+    def set_position(self, place: str) -> dict:
+        """Where the person is, as the phone determined it (AR camera, later): a space name or id."""
+        space_id = find_space(self.building, place)
+        self.here = space_id
+        return {"space_id": space_id, "label": self.building.label(space_id),
+                "floor_id": self.building.spaces[space_id]["floor_id"]}
+
     # ---------- map ----------
 
     def show_on_map(
@@ -577,6 +585,7 @@ class Session:
         last computed route as lines per floor. Nothing is guessed: positions and lines come from the data."""
         building = self.building
         view: dict = {"you_are_here": None, "target": None, "route": None, "focus_floor_id": None}
+        you_are_here = you_are_here or self.here
         if you_are_here:
             space_id = find_space(building, you_are_here)
             x, y = building.anchor(space_id)

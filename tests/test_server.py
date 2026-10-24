@@ -149,3 +149,17 @@ def test_outline_has_one_footprint_set_per_floor(http):
         assert area == pytest.approx(union, rel=0.02)
         assert floor["height_m"] > 0
     assert http.get("/buildings/nope/outline").status_code == 404
+
+
+def test_position_from_the_phone_is_used_without_asking(http):
+    fake = http.script(([("show_on_map", {"target": "Office 1.04 (Floor 1)"})], "It's upstairs."))
+    session = http.post("/sessions", json={"building_id": BUILDING}).json()["session_id"]
+    placed = http.post(f"/sessions/{session}/position", json={"space": "Quality lab 0.21 (Ground floor)"}).json()
+    assert placed["label"] == "Quality lab 0.21 (Ground floor)"
+    body = http.post(f"/sessions/{session}/chat", json={"text": "Where is office 1.04?"}).json()
+    sent = fake.requests[0]["messages"][-1]["content"]
+    assert sent.startswith("[Position from the phone: the person is in Quality lab 0.21 (Ground floor)]")
+    assert sent.endswith("Where is office 1.04?")
+    assert body["map"]["you_are_here"]["label"] == "Quality lab 0.21 (Ground floor)"  # the map shows it too
+    assert http.post(f"/sessions/{session}/position", json={"space": "Nowhere 9.99"}).status_code == 422
+    assert http.post("/sessions/nope/position", json={"space": "0.21"}).status_code == 404
