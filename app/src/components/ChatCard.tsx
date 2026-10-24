@@ -18,6 +18,11 @@ export interface Message {
 
 export const STARTERS = ["Where's the coffee machine?", "Where's the nearest exit?", 'Find a toilet'];
 
+/** Messages are shown as plain text: drop markdown emphasis and heading marks if the guide still writes them. */
+export function plain(text: string): string {
+  return text.replace(/\*\*(.+?)\*\*/g, '$1').replace(/__(.+?)__/g, '$1').replace(/^#{1,6}\s+/gm, '');
+}
+
 interface Props {
   messages: Message[];
   question: Question | null;
@@ -105,7 +110,7 @@ export function ChatCard({ messages, question, busy, onSend, onMic, mic = 'off' 
               <ScrollView ref={scroll} style={styles.messages} contentContainerStyle={{ gap: 6 }}>
                 {messages.map((message, index) => (
                   <Text key={index} style={message.from === 'you' ? styles.you : styles.guide}>
-                    {message.text}
+                    {plain(message.text)}
                   </Text>
                 ))}
                 {busy && <Text style={styles.thinking}>Finni is looking…</Text>}
@@ -127,7 +132,7 @@ export function ChatCard({ messages, question, busy, onSend, onMic, mic = 'off' 
             </>
           )}
           {!open && messages.length > 0 && (
-            <Text style={styles.folded} numberOfLines={1}>{messages[messages.length - 1].text}</Text>
+            <Text style={styles.folded} numberOfLines={1}>{plain(messages[messages.length - 1].text)}</Text>
           )}
         </View>
       )}

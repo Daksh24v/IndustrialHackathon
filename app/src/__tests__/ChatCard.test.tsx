@@ -79,3 +79,12 @@ describe('ChatCard microphone', () => {
     expect(screen.queryByTestId('mic')).toBeNull(); // a spinner while it works
   });
 });
+
+describe('plain text', () => {
+  it('drops markdown emphasis and headings', () => {
+    const { plain } = jest.requireActual('../components/ChatCard');
+    expect(plain('The closest is in **Kitchen 0.31**, about **62 m** away.')).toBe('The closest is in Kitchen 0.31, about 62 m away.');
+    expect(plain('## Route\nturn __left__')).toBe('Route\nturn left');
+    expect(plain('3 * 4 = 12')).toBe('3 * 4 = 12');
+  });
+});
