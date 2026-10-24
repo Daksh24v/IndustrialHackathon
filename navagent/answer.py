@@ -1,36 +1,56 @@
 """The benchmark entry point: answer(building_directory, question_text) -> full reply.
 
-Recognised question wordings are answered by navcore directly (exact, free, instant). Anything else goes
-to the Claude agent, which reaches the same engine through tools. Set NAVAGENT_OFFLINE=1 to never call
-the API (unrecognised questions then get a reply without an Answer line)."""
+Claude reads every question (benchmark mode) and answers with the engine's tools; the final 'Answer:'
+line is written by code from its submit_answer call. With double_check, each question runs twice and a
+third run breaks a disagreement."""
 
 import os
-from functools import lru_cache
+from collections import Counter
 from pathlib import Path
 
-from navcore.engine import Building, EngineError
-from navcore.questions import answer_deterministic
+import anthropic
 
-OFFLINE_ENVIRONMENT_VARIABLE = "NAVAGENT_OFFLINE"
+from navagent.agent import BENCHMARK, BuildingAgent
+from navagent.tools import Session
+from navcore.engine import Building
+
+LOG_DIRECTORY = Path("agent_output") / "logs"
+DOUBLE_CHECK_ENVIRONMENT_VARIABLE = "NAVAGENT_DOUBLE_CHECK"
+
+_client: anthropic.Anthropic | None = None
 
 
-@lru_cache(maxsize=8)
-def load_building(building_directory: str) -> Building:
-    return Building.load(Path(building_directory))
+def client() -> anthropic.Anthropic:
+    global _client
+    if _client is None:
+        _client = anthropic.Anthropic(max_retries=5)
+    return _client
 
 
-def answer(building_directory: Path, question_text: str) -> str:
-    building = load_building(str(building_directory))
-    try:
-        reply = answer_deterministic(building, question_text)
-    except EngineError:
-        reply = None
-    if reply is not None:
-        return reply
-    if os.environ.get(OFFLINE_ENVIRONMENT_VARIABLE):
-        return "I could not match this question to a known pattern (offline mode, no agent)."
-    from navagent.agent import BuildingAgent
-    from navagent.tools import Session
+def answer_line(reply: str) -> str | None:
+    lines = [line for line in reply.splitlines() if line.startswith("Answer:")]
+    return lines[-1] if lines else None
 
-    # A fresh Building: the agent may edit its session, which must not leak into the cached one.
-    return BuildingAgent(Session(Building.load(Path(building_directory)))).ask(question_text)
+
+def run_once(building_directory: Path, question_text: str, log_name: str | None) -> str:
+    # A fresh Building per run: nothing one question does can leak into the next.
+    session = Session(Building.load(building_directory))
+    log_path = LOG_DIRECTORY / f"{log_name}.json" if log_name else None
+    return BuildingAgent(session, client(), mode=BENCHMARK, log_path=log_path).answer_benchmark(question_text)
+
+
+def answer(
+    building_directory: Path, question_text: str, question_id: str | None = None, double_check: bool | None = None
+) -> str:
+    if double_check is None:
+        double_check = bool(os.environ.get(DOUBLE_CHECK_ENVIRONMENT_VARIABLE))
+    if not double_check:
+        return run_once(building_directory, question_text, question_id)
+    replies = [run_once(building_directory, question_text, f"{question_id}-{n}" if question_id else None) for n in (1, 2)]
+    if answer_line(replies[0]) != answer_line(replies[1]):
+        replies.append(run_once(building_directory, question_text, f"{question_id}-3" if question_id else None))
+    votes = Counter(answer_line(reply) for reply in replies if answer_line(reply))
+    if not votes:
+        return replies[0]
+    best = votes.most_common(1)[0][0]
+    return next(reply for reply in replies if answer_line(reply) == best)

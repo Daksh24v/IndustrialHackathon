@@ -1,6 +1,7 @@
-> **Our project.** Phase 1 (the engine and the benchmark agent) is in `navcore/` and `navagent/`; see
-> [BENCHMARK.md](BENCHMARK.md) for the one-command run and the results. Tests: `uv run pytest`
-> (add `--train` to also check the 200 train buildings). Chat with a building:
+> **Our project.** `navcore/` is the engine (route graph and geometry), `navagent/` the Claude agent that
+> reads every question and answers with the engine's tools. See [BENCHMARK.md](BENCHMARK.md) for the
+> one-command run. Tests: `uv run pytest` (free, offline); `--holdout` checks the locked hold-out buildings,
+> `--live` runs the paid API tests. Chat with a building:
 > `uv run --env-file .env python -m navagent data/dev/proc-factory-dev-003`.
 > The challenge brief from the student kit follows unchanged.
 

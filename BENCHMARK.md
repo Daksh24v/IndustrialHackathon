@@ -7,7 +7,7 @@ uv sync
 uv run --env-file .env python -m navagent.benchmark <input> --out <answers.csv>
 ```
 
-`<input>` can be any of:
+`.env` holds `ANTHROPIC_API_KEY=...` (gitignored). `<input>` can be any of:
 
 | Input | Example |
 |---|---|
@@ -15,35 +15,33 @@ uv run --env-file .env python -m navagent.benchmark <input> --out <answers.csv>
 | One building directory with `building.json` and `questions.jsonl` (the Sunday building) | `data/sunday/<building_id>` |
 | A `questions.csv` or `.jsonl` with `id`, `building_id`, `question`, next to the building directories | `data/test/questions.csv` |
 
-The output is the submission CSV (`question_id,answer`, full replies, each ending with an `Answer:` line).
-When the questions carry answers (train/dev), the run also prints the score per kind.
-
-## The test-set submission
-
-```bash
-uv run --env-file .env python -m navagent.benchmark data/test --out submission/team_answers.csv
-```
-
-The committed `submission/team_answers.csv` was produced by exactly this command.
+Options: `--per-kind N` (first N questions of each kind), `--buildings <file>` (only these building ids),
+`--double-check` (each question twice, a third run on disagreement), `--resume` (keep answers already in
+`--out`; an interrupted run never pays twice). The CSV is rewritten after every question.
 
 ## How it answers
 
-1. **`navcore` (deterministic).** It loads `building.json` and builds the README's route graph (space anchors at
-   `representative_point()`, door nodes, stairs 12 m per floor, lifts 15 m + 6 m per floor, one `outside` node).
-   Geometry comes from shapely: areas, centroids, wall sharing (1 m within 0.35 m), floor stacking by overlap.
-2. **Question reading.** Known benchmark wordings are parsed and every name is resolved to an id
-   ("Garderobe A (Floor 1)", "the basement 1", "fire extinguisher", "Lift 2"). If a room name exists several times
-   on a floor, every reading is solved and the most common answer is used.
-3. **Claude fallback.** Any question the parser doesn't recognise goes to the Claude agent (`navagent/agent.py`),
-   which reaches the same engine through tools. Without `ANTHROPIC_API_KEY` set, or with `NAVAGENT_OFFLINE=1`,
-   recognised questions still work; others get a reply without an `Answer:` line.
+- **Claude reads every question** (`navagent/agent.py`, benchmark mode, `claude-opus-5-5`, effort high).
+  No templates or word-for-word matching: it decides what is asked and calls tools.
+- **The engine does every calculation** (`navcore/engine.py`): the README's route graph, areas,
+  shared walls, stacking, reachability, what-if doors. The tools return its numbers.
+- **The `Answer:` line is written by code** from Claude's `submit_answer` call (a number copied from a tool
+  result, or a room id; room areas come from the engine), so the format the scorer needs never depends on prose.
+- Every question's full tool log is saved to `agent_output/logs/<question_id>.json`.
+
+## Hold-out
+
+`holdout/build.txt` (192 buildings) is for development, `holdout/holdout.txt` (48) is locked: split by site
+(`group_id`), stratified by source (`holdout/split.py`). Tests use build buildings; `uv run pytest --holdout`
+checks the hold-out and is run only at checkpoints. The kit's `data/test` is a second blind set.
 
 ## Results
 
-| Split | Correct |
+| Check | Result |
 |---|---|
-| dev (138 questions) | 138 / 138 |
-| train (517 questions) | 515 / 517 (the 2 misses name a room that exists three or nine times on its floor) |
-| dev warm-up routes, step-free, closures, tours (229) | all match the optimal length to the centimetre |
+| Offline: tools + code-written answer line on all build-set benchmark questions | all pass (`uv run pytest`) |
+| Offline: build-set warm-up routes, step-free, closures, tours | match the official lengths to the centimetre |
+| Live agent: build sample / hold-out / test submission | pending the paid runs |
 
-Reproduce with `uv run pytest --train` or `uv run python -m navagent.benchmark data/dev --out dev.csv`.
+`submission/team_answers.csv` is from the earlier template-based version and will be replaced by the
+agent's run.

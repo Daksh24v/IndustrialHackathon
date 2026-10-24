@@ -273,12 +273,14 @@ class Building:
         return [space["id"] for space in self.spaces_on(floor_id, rooms_only=True) if space["id"] in distances]
 
     def stacked_room(self, space_id: str, direction: str) -> str | None:
-        """The space on the next floor up/down whose outline covers most of this room's outline."""
-        level = self.level(self.spaces[space_id]["floor_id"]) + (1 if direction == "above" else -1)
-        try:
-            floor_id = self.floor_by_level(level)
-        except EngineError:
+        """The space on the next floor up/down whose outline covers most of this room's outline.
+        'Next' is the next floor that exists: in a building with levels -2, 0, 1 the floor below 0 is -2."""
+        level = self.level(self.spaces[space_id]["floor_id"])
+        levels = sorted({floor["level"] for floor in self.floors.values()})
+        candidates = [other for other in levels if (other > level if direction == "above" else other < level)]
+        if not candidates:
             return None
+        floor_id = self.floor_by_level(min(candidates) if direction == "above" else max(candidates))
         polygon = self.polygons[space_id]
         overlaps = [
             (self.polygons[other["id"]].intersection(polygon).area, other["id"]) for other in self.spaces_on(floor_id)

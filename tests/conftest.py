@@ -77,4 +77,14 @@ def tiny() -> Building:
 
 
 def pytest_addoption(parser):
-    parser.addoption("--train", action="store_true", help="also check against the 200 train buildings (slower)")
+    parser.addoption("--holdout", action="store_true", help="check the locked hold-out buildings instead")
+    parser.addoption("--live", action="store_true", help="run the paid tests that call the Claude API")
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--live"):
+        return
+    skip = pytest.mark.skip(reason="calls the Claude API (costs credits); run with --live")
+    for item in items:
+        if "live" in item.keywords:
+            item.add_marker(skip)

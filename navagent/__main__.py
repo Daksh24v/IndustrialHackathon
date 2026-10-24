@@ -12,6 +12,17 @@ from navcore.engine import Building
 EXIT_WORDS = {"exit", "quit", "bye"}
 
 
+def show_question(question: dict | None) -> None:
+    """ask_user in the terminal: the question and numbered options; type a number or your own answer."""
+    if not question:
+        return
+    print(f"\nguide> {question['question']}")
+    for number, option in enumerate(question["options"], start=1):
+        detail = f" - {option['description']}" if option.get("description") else ""
+        print(f"  {number}. {option['label']}{detail}")
+    print("  (or type your own answer)")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="navagent", description="Chat with an indoor building guide.")
     parser.add_argument("building", type=Path, help="building directory (with building.json) or a building.json")
@@ -27,8 +38,14 @@ def main() -> None:
             continue
         if user_text.lower() in EXIT_WORDS:
             break
+        options = (agent.session.pending_question or {}).get("options", [])
+        if user_text.isdigit() and 1 <= int(user_text) <= len(options):
+            user_text = options[int(user_text) - 1]["label"]  # picked an option by its number
         try:
-            print(f"\nguide> {agent.ask(user_text)}")
+            reply = agent.ask(user_text)
+            if reply:
+                print(f"\nguide> {reply}")
+            show_question(agent.session.pending_question)
         except anthropic.AuthenticationError:
             print("No valid API credentials: set ANTHROPIC_API_KEY in .env.")
             return

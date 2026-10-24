@@ -21,6 +21,8 @@ class Session:
     building: Building
     closed: set[str] = field(default_factory=set)
     new_openings: list[dict] = field(default_factory=list)
+    pending_question: dict | None = None  # set by ask_user; the app shows it as option chips
+    submitted: dict | None = None  # set by submit_answer in benchmark mode
 
     def constraints(
         self, step_free: bool = False, min_width_m: float = 0.0, closed: list[str] | None = None
@@ -125,6 +127,20 @@ class Session:
             "assets": assets[:MAX_RESULTS],
         }
 
+    def largest_room(self, floor: str, room_type: str) -> dict:
+        """The largest space of one room type on a floor, with the runner-up for comparison."""
+        building = self.building
+        floor_id = find_floor(building, floor)
+        wanted = find_type(room_type, room_types(building))
+        ranked = sorted(building.rooms_of_type(floor_id, wanted), key=building.area, reverse=True)
+        if not ranked:
+            raise EngineError(f"No {wanted} on {building.floor_name(floor_id)}.")
+        return {
+            "largest": self.space_summary(ranked[0]),
+            "runner_up": self.space_summary(ranked[1]) if len(ranked) > 1 else None,
+            "count": len(ranked),
+        }
+
     def list_rooms(self, floor: str, room_type: str | None = None) -> dict:
         """Every space on a floor (optionally one room type), largest first, with areas and the total."""
         building = self.building
@@ -168,6 +184,29 @@ class Session:
             "directly_above": building.label(above) if above else None,
             "directly_below": building.label(below) if below else None,
             "assets": [asset["name"] for asset in building.assets.values() if asset["space_id"] == space_id][:40],
+        }
+
+    def stacked_room(self, room: str, direction: str) -> dict:
+        """The space on the next floor up or down whose outline covers most of this room's outline."""
+        building = self.building
+        space_id = find_space(building, room)
+        if direction not in ("above", "below"):
+            raise EngineError("direction must be 'above' or 'below'.")
+        other = building.stacked_room(space_id, direction)
+        if other is None:
+            raise EngineError(f"No floor {direction} {building.label(space_id)}, or nothing overlaps it.")
+        return {"room": building.label(space_id), "direction": direction, "stacked": self.space_summary(other)}
+
+    def wall_neighbours(self, room: str) -> dict:
+        """Rooms and halls on the same floor whose wall runs along this room for at least 1 m (within 0.35 m),
+        with or without a door. Corridors, stairwells, lifts and outdoor areas are not counted."""
+        building = self.building
+        space_id = find_space(building, room)
+        neighbours = building.wall_neighbours(space_id)
+        return {
+            "room": building.label(space_id),
+            "count": len(neighbours),
+            "neighbours": [building.label(other) for other in neighbours],
         }
 
     # ---------- routes ----------
@@ -245,6 +284,22 @@ class Session:
             "walk_m": rounded(distance),
         }
 
+    def errand_walk(self, start: str, asset_type: str, destination: str, step_free: bool = False) -> dict:
+        """Walk from start to the nearest room holding an asset type, then on to the destination."""
+        building = self.building
+        start_id, target_id = find_space(building, start), find_space(building, destination)
+        wanted = find_type(asset_type, asset_types(building))
+        constraints = self.constraints(step_free)
+        via, first_leg = building.nearest_space_with_asset(start_id, wanted, constraints)
+        total = building.errand(start_id, wanted, target_id, constraints)[1]
+        return {
+            "pickup_room": building.label(via),
+            "first_leg_m": rounded(first_leg),
+            "second_leg_m": rounded(total - first_leg),
+            "total_walk_m": rounded(total),
+            "step_free": step_free,
+        }
+
     def reachable_rooms(
         self, start: str, floor: str, step_free: bool = False, min_width_m: float = 0.0, avoid: list[str] | None = None
     ) -> dict:
@@ -295,3 +350,51 @@ class Session:
         self.new_openings.append(door)
         return {"added": door}
 
+    # ---------- conversation ----------
+
+    def ask_user(self, question: str, options: list[dict]) -> dict:
+        """Record a question with 2-4 options for the person; the app shows them as chips."""
+        if not 2 <= len(options) <= 4:
+            raise EngineError("Give 2 to 4 options.")
+        cleaned = []
+        for option in options:
+            label = str(option.get("label", "")).strip()
+            if not label:
+                raise EngineError("Every option needs a label.")
+            cleaned.append({"label": label, "description": str(option.get("description", "")).strip()})
+        self.pending_question = {"question": question.strip(), "options": cleaned, "allow_free_text": True}
+        return {"shown_to_user": True, "instruction": "End your turn now; the reply arrives as the next message."}
+
+    def submit_answer(
+        self, answer_type: str, value: float | None = None, room: str | None = None, include_area: bool = False
+    ) -> dict:
+        """Record the final benchmark answer; answer_line() turns it into the scored 'Answer:' line."""
+        building = self.building
+        if answer_type == "number":
+            if value is None or not math.isfinite(value):
+                raise EngineError("A number answer needs a finite value.")
+            self.submitted = {"type": "number", "value": float(value)}
+        elif answer_type == "room":
+            if not room:
+                raise EngineError("A room answer needs the room (preferably its space id).")
+            space_id = find_space(building, room)
+            self.submitted = {"type": "room", "space_id": space_id, "include_area": include_area}
+        else:
+            raise EngineError("answer_type must be 'number' or 'room'.")
+        return {"recorded": self.submitted, "answer_line": self.answer_line()}
+
+    def answer_line(self) -> str | None:
+        """'Answer: 42.17' or 'Answer: Office 0.21, 18.40 m²', exactly as the scorer expects."""
+        answer = self.submitted
+        if answer is None:
+            return None
+        if answer["type"] == "number":
+            value = answer["value"]
+            text = str(int(value)) if float(value).is_integer() else f"{value:.2f}"
+            return f"Answer: {text}"
+        space = self.building.spaces[answer["space_id"]]
+        name, ref = space["name"], space.get("ref")
+        label = name if not ref or ref in name else f"{name} ({ref})"
+        if answer.get("include_area"):  # the engine's area, never a number typed by the model
+            return f"Answer: {label}, {self.building.area(answer['space_id']):.2f} m²"
+        return f"Answer: {label}"

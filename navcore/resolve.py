@@ -5,11 +5,19 @@ import re
 
 from navcore.engine import Building, EngineError
 
+
 class AmbiguousSpace(EngineError):
     """Several spaces carry the same name on one floor (OSM has e.g. three rooms called 'Büro')."""
 
-    def __init__(self, words: str, candidates: list[str]) -> None:
-        super().__init__(f"'{words}' is ambiguous: {', '.join(candidates[:10])}.")
+    def __init__(self, words: str, candidates: list[str], building: Building | None = None) -> None:
+        if building is None:
+            listed = ", ".join(candidates[:10])
+        else:
+            listed = "; ".join(
+                f"{space_id} = {building.label(space_id)}, {building.area(space_id):.1f} m²"
+                for space_id in candidates[:10]
+            )
+        super().__init__(f"'{words}' matches {len(candidates)} spaces: {listed}. Pass one of these ids.")
         self.candidates = candidates
 
 
@@ -67,7 +75,7 @@ def find_space(building: Building, words: str, floor_id: str | None = None) -> s
         by_name = [space for space in candidates if normalise(space["name"]) == text]
         if len(by_name) == 1:
             return by_name[0]["id"]
-        raise AmbiguousSpace(words, sorted(space["id"] for space in candidates))
+        raise AmbiguousSpace(words, sorted(space["id"] for space in candidates), building)
     raise EngineError(f"No space called '{words}'" + (f" on {building.floor_name(floor_id)}." if floor_id else "."))
 
 

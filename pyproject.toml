@@ -23,3 +23,4 @@ dev = ["pytest>=8"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = ["live: calls the Claude API and costs credits (run with --live)"]
