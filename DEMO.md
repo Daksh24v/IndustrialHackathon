@@ -7,8 +7,8 @@ uv run --env-file .env uvicorn server.app:app --port 8000
 cd app && npx expo start --web          # opens http://localhost:8081
 ```
 
-Open the website on the factory (default building). Turn the sound on for Finni's voice. Every step below was
-run on the website on 2026-10-24 in one conversation, in this order, with the replies shown (Finni's wording
+Open the website on the factory (default building; on a laptop-wide window the chat sits left of the map, and the building picker at the top switches buildings, e.g. to the Sunday building). Turn the sound on for Finni's voice. Every step below was
+run on the website on 2026-10-24 (steps 1–7 in one conversation, step 8 in a fresh one at desktop width), with the replies shown (Finni's wording
 varies a little between runs; the landmark options can too, so pick any one on the ground floor).
 
 | # | You say or do | What happened | What it shows off |
@@ -20,6 +20,7 @@ varies a little between runs; the landmark options can too, so pick any one on t
 | 5 | "I use a wheelchair, take me to office 1.04" | Step-free via the Office lift, 103 m, a "Take Office lift to Floor 1 ›" button; "I'll keep all your routes step-free from now on" | Accessibility, remembered |
 | 6 | "Take me to room 9.99" | "There's no room 9.99 in this building", with real rooms as options | Wrong input handled honestly, no guess |
 | 7 | Tap the floor somewhere else | The dot jumps to where you tapped; the next route starts there without a question | "I'm here" without GPS or hardware |
+| 8 | Reload, then: "I'm in the quality lab. The office lift is out of service today, and I moved the coordinate measuring machine to office 1.04." | "I've updated three things …"; the lift turns red on the map ("Office lift closed"); on Floor 1 the machine stands in Office 1.04; "there's no step-free route to the machine today" | The facility manager: the map keeps up |
 
 Close with BENCHMARK.md: 145 test answers double-checked, build 114/114 and hold-out 35/36 on the organisers'
 1.1.0 rules, and LOCATING.md for how we find where people and things are.
