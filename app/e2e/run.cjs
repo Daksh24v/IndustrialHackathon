@@ -69,13 +69,28 @@ const OUT = process.argv[2] ?? 'e2e/screenshots';
     await page.waitForSelector('[data-testid="target-pin"]');
     await page.waitForTimeout(1500);
     await shot('8-upstairs-3d');
-    // back to the orb; "Map" opens the route again
-    await page.click('[data-testid="home"]');
-    await page.waitForSelector('[data-testid="open-map"]');
-    await page.waitForTimeout(800);
+    // back to the orb: it remembers the last answer; Map opens the route again
+    await page.click('[data-testid="mode-ask"]');
+    await page.waitForSelector('[data-testid="orb-home"][data-phase="answered"]', { timeout: 10000 });
+    const remembered = await page.textContent('[data-testid="orb-answer"]');
+    if (!remembered.includes('Office 1.04')) throw new Error(`orb forgot the answer: ${remembered}`);
+    await page.waitForTimeout(500);
     await shot('9-home-again');
-    await page.click('[data-testid="open-map"]');
+    await page.click('[data-testid="mode-map"]');
     await page.waitForSelector('[data-testid="floor-scene"]');
+    // a new question dropped with Escape never pulls the map in by itself
+    queue.push({ reply: 'Kitchen 0.31 is on the ground floor.', question: null, map: route.map });
+    await page.click('[data-testid="mode-ask"]');
+    await page.waitForSelector('[data-testid="orb-home"][data-phase="answered"]');
+    await page.click('[data-testid="orb-reset"]');
+    await page.waitForSelector('[data-testid="orb-home"][data-phase="idle"]');
+    await page.fill('[data-testid="orb-input"]', 'Where is the kitchen?');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('[data-testid="orb-home"][data-phase="think"]');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(3500);
+    if (await page.$('[data-testid="floor-scene"]')) throw new Error('the map came in after Escape');
+    if (!(await page.$('[data-testid="orb-home"][data-phase="idle"]'))) throw new Error('orb not back to idle');
     await page.close();
   }
   await browser.close();

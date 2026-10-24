@@ -1,17 +1,19 @@
 import { StatusBar } from 'expo-status-bar';
 import { Component, type ReactNode, useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
-  api, ApiError, buildingFromUrl, type BuildingRow, type ChatReply, pickBuilding, placeOf, type Point, showBuildingInUrl,
+  api, ApiError, buildingFromUrl, type BuildingRow, type ChatReply, pickBuilding, placeOf, type Point, type Question,
+  showBuildingInUrl,
 } from './src/api';
 import { BuildingBlocks } from './src/components/BuildingBlocks';
 import { BuildingPicker } from './src/components/BuildingPicker';
-import { ChatCard } from './src/components/ChatCard';
+import { ChatCard, plain } from './src/components/ChatCard';
 import { FinniLogo } from './src/components/FinniLogo';
 import { FloorPlan } from './src/components/FloorPlan';
 import { FloorScene } from './src/components/FloorScene';
+import { type Mode, ModeSwitch } from './src/components/ModeSwitch';
 import MorphOrb, { type OrbAnswer, type OrbHandle } from './src/orb/MorphOrb';
 import { chatTurn, RENEWED_NOTE } from './src/session';
 import { initial, nextStep, reduce } from './src/state';
@@ -59,7 +61,8 @@ function Guide() {
   const insets = useSafeAreaInsets();
   const wide = isWide(useWindowDimensions().width);
   // home: the orb (src/orb); map: the building and the route. An answer with a route brings the map in.
-  const [mode, setMode] = useState<'home' | 'map'>('home');
+  const [mode, setMode] = useState<Mode>('home');
+  const [attempt, setAttempt] = useState(0); // "Retry" after the server couldn't be reached
   const modeRef = useRef(mode);
   modeRef.current = mode;
   const orb = useRef<OrbHandle>(null);
@@ -77,7 +80,7 @@ function Guide() {
         dispatch({ type: 'error', message: (error as Error).message });
       }
     })();
-  }, []);
+  }, [attempt]);
 
   // Open it with a new conversation; switching buildings starts over (and ends the old conversation).
   const generation = useRef(0); // answers that arrive after a switch belong to the old building
@@ -98,7 +101,7 @@ function Guide() {
         if (mine === generation.current) dispatch({ type: 'error', message: (error as Error).message });
       }
     })();
-  }, [buildingId]);
+  }, [buildingId, attempt]);
 
   const pickOther = useCallback((id: string) => {
     showBuildingInUrl(id);
@@ -198,7 +201,7 @@ function Guide() {
         if (ask !== asks.current) return { text: '' }; // dropped (New question / Escape) or a newer question
         lastReply.current = turn.reply;
         void voice.say(turn.reply);
-        const said = [turn.reply.reply, turn.reply.question?.question].filter(Boolean).join('\n\n');
+        const said = [plain(turn.reply.reply), turn.reply.question?.question].filter(Boolean).join(' ');
         return { text: said || 'Here it is on the map.', options: turn.reply.question?.options };
       } catch (error) {
         voice.stop();
@@ -240,21 +243,40 @@ function Guide() {
   const row = buildings.find((item) => item.id === buildingId);
   const current = state.detail?.building ?? (row ? { id: row.id, name: row.name ?? row.id } : null);
 
+  const loadFailed = !!state.error && !state.detail;
+  const retry = () => {
+    dispatch({ type: 'error', message: '' });
+    setAttempt((n) => n + 1);
+  };
+  const switchTo = (next: Mode) => {
+    if (next === 'home') cancelMapSwitch();
+    setMode(next);
+  };
+
   if (mode === 'home') {
     return (
-      <View style={styles.home}>
+      <FadeIn key="home" style={styles.home}>
         <StatusBar style="dark" />
         <MorphOrb handleRef={orb} onSubmit={askFromOrb} onAnswered={onOrbAnswered} onCancel={dropOrbAnswer}
-                  mic={voice.mic} micNotice={voice.notice} onMic={voice.toggle}
-                  onOpenMap={state.map ? () => setMode('map') : undefined} notice={state.error ?? undefined} />
+                  mic={voice.mic} micNotice={voice.notice} onMic={voice.toggle} lastAnswer={lastAnswer(state)}
+                  notice={state.error || undefined} />
         <View style={styles.homePicker} pointerEvents="box-none">
           <BuildingPicker buildings={buildings} current={current} onPick={pickOther} />
         </View>
-      </View>
+        <View style={styles.homeSwitch} pointerEvents="box-none">
+          <ModeSwitch mode={mode} onChange={switchTo} mapReady={!!state.detail} />
+        </View>
+        {loadFailed && (
+          <Pressable testID="retry" onPress={retry} style={styles.homeRetry}>
+            <Text style={styles.stepText}>Retry</Text>
+          </Pressable>
+        )}
+      </FadeIn>
     );
   }
 
   return (
+    <FadeIn key="map" style={styles.screen}>
     <SafeAreaView style={[styles.screen, wide && styles.wide]} edges={['top', 'left', 'right']}>
       <StatusBar style="dark" />
       <View style={wide ? styles.side : styles.top} testID={wide ? 'side-panel' : 'top-panel'}>
@@ -269,7 +291,15 @@ function Guide() {
             <FinniLogo />
           </Pressable>
           <BuildingPicker buildings={buildings} current={current} onPick={pickOther} />
+          <View style={styles.headerSwitch}>
+            <ModeSwitch mode={mode} onChange={switchTo} mapReady={!!state.detail} />
+          </View>
         </View>
+        {loadFailed && (
+          <Pressable testID="retry" onPress={retry} style={styles.retry}>
+            <Text style={styles.stepText}>Retry</Text>
+          </Pressable>
+        )}
         <ChatCard messages={state.messages} question={state.question} busy={state.busy} onSend={send}
                   onMic={voice.toggle} mic={voice.mic} side={wide} note={state.note} />
         {state.error ? <Text testID="error" style={styles.error}>{state.error}</Text> : null}
@@ -302,6 +332,8 @@ function Guide() {
             <View style={styles.floors}>
               {floors.length > 1 && [...floors].reverse().map((floor) => (
                 <Pressable key={floor.id} testID={`floor-${floor.level}`} onPress={() => dispatch({ type: 'floor', floorId: floor.id })}
+                           accessibilityRole="button" accessibilityLabel={floor.name}
+                           accessibilityState={{ selected: floor.id === state.floorId }}
                            style={[styles.floorChip, floor.id === state.floorId && styles.floorChipActive]}>
                   <Text style={[styles.floorText, floor.id === state.floorId && styles.floorTextActive]}>
                     {floor.level === 0 ? 'G' : floor.level}
@@ -315,6 +347,7 @@ function Guide() {
                 const active = (mode === '3D') === threeD;
                 return (
                   <Pressable key={mode} testID={`view-${mode}`} onPress={() => setThreeD(mode === '3D')}
+                             accessibilityRole="tab" accessibilityState={{ selected: active }}
                              style={[styles.toggleItem, active && styles.toggleActive]}>
                     <Text style={[styles.toggleText, active && styles.toggleTextActive]}>{mode}</Text>
                   </Pressable>
@@ -335,11 +368,30 @@ function Guide() {
         ) : null}
       </View>
     </SafeAreaView>
+    </FadeIn>
   );
 }
 
+/** What Finni said last (and the question it is waiting on): the orb shows it when you come back. */
+function lastAnswer(state: { messages: { from: string; text: string }[]; question: Question | null }): OrbAnswer | null {
+  const last = [...state.messages].reverse().find((message) => message.from === 'guide');
+  if (!last && !state.question) return null;
+  const text = [last ? plain(last.text) : '', state.question?.question ?? ''].filter(Boolean).join(' ');
+  return { text, options: state.question?.options };
+}
+
+/** Screens fade in instead of swapping hard. */
+function FadeIn({ children, style }: { children: ReactNode; style: object }) {
+  const opacity = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(opacity, { toValue: 1, duration: FADE_MS, useNativeDriver: true }).start();
+  }, [opacity]);
+  return <Animated.View style={[style, { opacity }]}>{children}</Animated.View>;
+}
+
 const MAP_AFTER_MS = 1300; // the orb's answer card stays this long before the map comes in
-const SESSION_WAIT_MS = 8000; // an orb question asked while the building still loads waits this long
+const SESSION_WAIT_MS = 8000;
+const FADE_MS = 260; // an orb question asked while the building still loads waits this long
 
 /** The value once it's there (polled), or null after a while. */
 async function until<T>(get: () => T | null, timeoutMs = 20000): Promise<T | null> {
@@ -356,12 +408,16 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colours.background },
   home: { flex: 1, backgroundColor: '#FFFFFF' },
   homePicker: { position: 'absolute', top: 18, left: 0, right: 0, alignItems: 'center', zIndex: 3 },
+  homeSwitch: { position: 'absolute', top: 16, right: 16, zIndex: 4 },
+  homeRetry: { position: 'absolute', top: 110, alignSelf: 'center', backgroundColor: colours.accent, borderRadius: 20,
+               paddingHorizontal: 18, paddingVertical: 10, zIndex: 4 },
   wide: { flexDirection: 'row' },
   top: { zIndex: 2 }, // the building menu opens over the map
   side: { width: 360, zIndex: 2, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: colours.blockEdge,
           backgroundColor: colours.background },
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 6, paddingBottom: 10, gap: 6,
             zIndex: 2 },
+  headerSwitch: { marginLeft: 'auto' },
   back: { width: 28, height: 32, alignItems: 'center', justifyContent: 'center', marginLeft: -6 },
   backText: { fontSize: 32, color: colours.text, marginTop: -4 },
   title: { fontSize: 18, fontWeight: '700', color: colours.text },
@@ -383,7 +439,8 @@ const styles = StyleSheet.create({
                   shadowOffset: { width: 0, height: 1 }, elevation: 1 },
   toggleText: { color: colours.muted, fontWeight: '700', fontSize: 13 },
   toggleTextActive: { color: colours.accent },
-  retry: { alignSelf: 'flex-start', backgroundColor: colours.accent, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10 },
+  retry: { alignSelf: 'flex-start', backgroundColor: colours.accent, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10,
+           marginHorizontal: 16, marginBottom: 8 },
   step: { position: 'absolute', alignSelf: 'center', backgroundColor: colours.accent, borderRadius: 20,
           paddingHorizontal: 16, paddingVertical: 10 },
   stepText: { color: '#FFFFFF', fontWeight: '600' },

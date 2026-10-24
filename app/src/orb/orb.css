@@ -441,7 +441,7 @@
 .mo-notice {
   position: absolute;
   left: 50%;
-  top: 20px;
+  top: 64px; /* below the building picker */
   max-width: min(560px, calc(100vw - 140px));
   transform: translateX(-50%);
   padding: 8px 14px;

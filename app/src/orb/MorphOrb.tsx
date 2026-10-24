@@ -51,6 +51,7 @@ export interface MorphOrbProps {
   notice?: string; // something went wrong (e.g. the server can't be reached)
   micNotice?: string | null; // a friendly line about the mic ("I didn't hear anything…")
   onCancel?: () => void; // the person dropped this answer (New question, Escape): don't act on it any more
+  lastAnswer?: OrbAnswer | null; // shown as the card when the orb opens mid-conversation
   handleRef?: React.Ref<OrbHandle>;
 }
 
@@ -238,6 +239,8 @@ interface Runtime {
   reset(): void;
   hard(): void;
   home(): void;
+  /** Show an answer card straight away (coming back to the orb mid-conversation). */
+  show(answer: OrbAnswer): void;
   busy(): boolean;
   destroy(): void;
 }
@@ -592,6 +595,34 @@ function createRuntime(env: Env): Runtime {
       setNow("w", geo.pw);
       setNow("u", 0);
     },
+    show(answer) {
+      if (busy) return;
+      busy = true;
+      const ac = child();
+      current = ac;
+      env.ui.lock(true);
+      snapshot();
+      env.ui.setAnswer(answer);
+      env.ui.setPhase("unfold");
+      void (async () => {
+        await fitCard();
+        if (ac.signal.aborted) return;
+        ["oPill", "oInput", "oGlow", "oAur", "oRing", "rest", "oCard", "hOp", "dotS", "wp", "sOp"].forEach((ch) => setNow(ch, 0));
+        setNow("u", 1); setNow("w", geo.cw); setNow("h", geo.ch); setNow("r", 20); setNow("bloom", 0.625);
+        const n = Math.max(1, answer.text.split(/\s+/).filter(Boolean).length);
+        wDur = 320;
+        wStagger = n > 1 ? Math.min(30, 220 / (n - 1)) : 0;
+        await play([
+          T("oCard", 0, 1, 0, 300, E.out),
+          T("cHalo", 0, 0.22, 0, 300, E.out),
+          T("hOp", 0, 1, 100, 400, E.out),
+          T("dotS", 0, 1, 100, 450, E.spring),
+          T("wp", 0, 1, 150, 150 + (n - 1) * wStagger + wDur, E.lin),
+        ], ac.signal);
+        if (ac.signal.aborted) return;
+        env.ui.setPhase("answered");
+      })();
+    },
     busy: () => busy,
     destroy() {
       life.abort();
@@ -704,6 +735,8 @@ export default function MorphOrb(props: MorphOrbProps) {
       },
     });
     rtRef.current = rt;
+    const last = propsRef.current.lastAnswer;
+    if (last && (last.text.trim() || last.options?.length)) rt.show(last);
 
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
