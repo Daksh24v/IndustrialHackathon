@@ -4,7 +4,20 @@ without the API; agent.py wraps them as Claude tools. Every fact the agent state
 import math
 from dataclasses import dataclass, field
 
-from navcore.engine import DOOR_PREFIX, OUTSIDE, Building, Constraints, EngineError, Route
+from navcore.engine import (
+    DOOR_PREFIX,
+    MIN_SHARED_WALL_M,
+    OUTSIDE,
+    ROOM_TYPES,
+    SPACE_TYPES,
+    WALL_NEIGHBOUR_TYPES,
+    WALL_TOLERANCE_M,
+    WHAT_IF_IMPROVEMENT_M,
+    Building,
+    Constraints,
+    EngineError,
+    Route,
+)
 from navcore.resolve import asset_types, find_element, find_floor, find_space, find_type, normalise, room_types
 
 MAX_RESULTS = 25
@@ -12,6 +25,17 @@ MAX_RESULTS = 25
 
 def rounded(value: float) -> float:
     return round(value, 2)
+
+
+def space_types(types: list[str] | None, default: frozenset[str]) -> frozenset[str]:
+    """Which kinds of space count, e.g. ["room", "hall"]; None keeps the README default."""
+    if types is None:
+        return default
+    wanted = frozenset(normalise(item).rstrip("s") for item in types)
+    unknown = wanted - set(SPACE_TYPES)
+    if unknown:
+        raise EngineError(f"Unknown space types {sorted(unknown)}; use {', '.join(SPACE_TYPES)}.")
+    return wanted
 
 
 @dataclass
@@ -217,12 +241,20 @@ class Session:
             raise EngineError(f"No floor {direction} {building.label(space_id)}, or nothing overlaps it.")
         return {"room": building.label(space_id), "direction": direction, "stacked": self.space_summary(other)}
 
-    def wall_neighbours(self, room: str) -> dict:
-        """Rooms and halls on the same floor whose wall runs along this room for at least 1 m (within 0.35 m),
-        with or without a door. Corridors, stairwells, lifts and outdoor areas are not counted."""
+    def wall_neighbours(
+        self,
+        room: str,
+        min_length_m: float = MIN_SHARED_WALL_M,
+        tolerance_m: float = WALL_TOLERANCE_M,
+        count_types: list[str] | None = None,
+    ) -> dict:
+        """Spaces on the same floor whose wall runs along this room for at least min_length_m (within
+        tolerance_m), with or without a door. Default: rooms and halls count; corridors, stairwells, lifts and
+        outdoor areas don't."""
         building = self.building
         space_id = find_space(building, room)
-        neighbours = building.wall_neighbours(space_id)
+        types = space_types(count_types, WALL_NEIGHBOUR_TYPES)
+        neighbours = building.wall_neighbours(space_id, min_length_m, tolerance_m, types)
         return {
             "room": building.label(space_id),
             "count": len(neighbours),
@@ -321,14 +353,22 @@ class Session:
         }
 
     def reachable_rooms(
-        self, start: str, floor: str, step_free: bool = False, min_width_m: float = 0.0, avoid: list[str] | None = None
+        self,
+        start: str,
+        floor: str,
+        step_free: bool = False,
+        min_width_m: float = 0.0,
+        avoid: list[str] | None = None,
+        count_types: list[str] | None = None,
     ) -> dict:
-        """Which rooms on a floor can be reached from start under the constraints (corridors etc. not counted)."""
+        """Which spaces on a floor can be reached from start under the constraints. Default: only spaces of
+        type room count (corridors, halls, stairwells, lifts and outdoor areas don't)."""
         building = self.building
         floor_id = find_floor(building, floor)
         constraints = self.constraints(step_free, min_width_m, avoid)
-        rooms = building.reachable_rooms(find_space(building, start), floor_id, constraints)
-        total = len(building.spaces_on(floor_id, rooms_only=True))
+        types = space_types(count_types, ROOM_TYPES)
+        rooms = building.reachable_rooms(find_space(building, start), floor_id, constraints, types)
+        total = len([space for space in building.spaces_on(floor_id) if space["type"] in types])
         return {
             "floor": building.floor_name(floor_id),
             "reachable_rooms": len(rooms),
@@ -341,12 +381,23 @@ class Session:
         first_id, second_id = find_space(building, first), find_space(building, second)
         return {"distance_m": rounded(building.straight_line_3d(first_id, second_id))}
 
-    def what_if_door(self, first: str, second: str, floor: str) -> dict:
+    def what_if_door(
+        self,
+        first: str,
+        second: str,
+        floor: str,
+        threshold_m: float = WHAT_IF_IMPROVEMENT_M,
+        count_types: list[str] | None = None,
+        step_free: bool = False,
+    ) -> dict:
         """Effect of a new door (middle of the shared wall) on every room's walk out of the building."""
         building = self.building
         first_id, second_id = find_space(building, first), find_space(building, second)
         floor_id = find_floor(building, floor)
-        improved = building.what_if_door(first_id, second_id, floor_id)
+        types = space_types(count_types, ROOM_TYPES)
+        improved = building.what_if_door(
+            first_id, second_id, floor_id, threshold_m, types, self.constraints(step_free)
+        )
         return {
             "floor": building.floor_name(floor_id),
             "rooms_with_shorter_exit": len(improved),
@@ -369,6 +420,148 @@ class Session:
         door.update(width_m=width_m, step_free=step_free, id=f"{door['floor_id']}-O-new{len(self.new_openings) + 1}")
         self.new_openings.append(door)
         return {"added": door}
+
+    # ---------- general queries (for questions no specific tool covers) ----------
+
+    def query_spaces(
+        self,
+        floor: str | None = None,
+        space_type: str | None = None,
+        room_type: str | None = None,
+        name_contains: str | None = None,
+        min_area_m2: float | None = None,
+        max_area_m2: float | None = None,
+        sort_by: str = "area_desc",
+        distance_from: str | None = None,
+        step_free: bool = False,
+        limit: int = MAX_RESULTS,
+    ) -> dict:
+        """Filter spaces and get count, total/min/max/mean area; optionally sorted by walking distance."""
+        building = self.building
+        floor_id = find_floor(building, floor) if floor else None
+        kind = space_types([space_type], frozenset()) if space_type else None
+        wanted = find_type(room_type, room_types(building)) if room_type else None
+        words = normalise(name_contains).split() if name_contains else []
+        chosen = []
+        for space in building.spaces.values():
+            if floor_id and space["floor_id"] != floor_id:
+                continue
+            if kind and space["type"] not in kind:
+                continue
+            if wanted and space["room_type"] != wanted:
+                continue
+            if words and not all(word in normalise(f"{space['name']} {space.get('ref') or ''}") for word in words):
+                continue
+            area = building.area(space["id"])
+            if (min_area_m2 is not None and area < min_area_m2) or (max_area_m2 is not None and area > max_area_m2):
+                continue
+            chosen.append(space["id"])
+        distances = {}
+        if distance_from:
+            distances = building.distances_from(find_space(building, distance_from), self.constraints(step_free))
+        keys = {
+            "area_desc": lambda space_id: -building.area(space_id),
+            "area_asc": building.area,
+            "name": lambda space_id: building.spaces[space_id]["name"],
+            "distance": lambda space_id: distances.get(space_id, math.inf),
+        }
+        if sort_by not in keys:
+            raise EngineError(f"sort_by must be one of {', '.join(keys)}.")
+        if sort_by == "distance" and not distance_from:
+            raise EngineError("sort_by='distance' needs distance_from.")
+        chosen.sort(key=keys[sort_by])
+        areas = [building.area(space_id) for space_id in chosen]
+        rows = []
+        for space_id in chosen[: max(1, limit)]:
+            row = self.space_summary(space_id)
+            if distance_from:
+                walk = distances.get(space_id)
+                row["walk_m"] = rounded(walk) if walk is not None else None
+            rows.append(row)
+        return {
+            "count": len(chosen),
+            "total_area_m2": rounded(sum(areas)),
+            "min_area_m2": rounded(min(areas)) if areas else None,
+            "max_area_m2": rounded(max(areas)) if areas else None,
+            "mean_area_m2": rounded(sum(areas) / len(areas)) if areas else None,
+            "spaces": rows,
+        }
+
+    def list_doors(
+        self,
+        room: str | None = None,
+        floor: str | None = None,
+        max_width_m: float | None = None,
+        min_width_m: float | None = None,
+        kind: str | None = None,
+        step_free: bool | None = None,
+    ) -> dict:
+        """Doors, openings and entrances (of one room or one floor), filtered by width, kind and steps."""
+        building = self.building
+        space_id = find_space(building, room) if room else None
+        floor_id = find_floor(building, floor) if floor else None
+        rows = []
+        for opening in [*building.openings.values(), *self.new_openings]:
+            if space_id and space_id not in opening["space_ids"]:
+                continue
+            if floor_id and opening["floor_id"] != floor_id:
+                continue
+            width = opening.get("width_m") or 0.0
+            if (max_width_m is not None and width > max_width_m + 1e-9) or (
+                min_width_m is not None and width < min_width_m - 1e-9
+            ):
+                continue
+            if kind and opening["kind"] != kind:
+                continue
+            if step_free is not None and bool(opening.get("step_free", True)) != step_free:
+                continue
+            rows.append(
+                {
+                    "id": opening["id"],
+                    "kind": opening["kind"],
+                    "between": [
+                        "outside" if side == OUTSIDE else building.label(side) for side in opening["space_ids"]
+                    ],
+                    "width_m": opening.get("width_m"),
+                    "step_free": opening.get("step_free"),
+                }
+            )
+        widths = [row["width_m"] for row in rows if row["width_m"] is not None]
+        return {
+            "count": len(rows),
+            "narrowest_m": min(widths) if widths else None,
+            "widest_m": max(widths) if widths else None,
+            "doors": rows[: MAX_RESULTS * 2],
+        }
+
+    def find_assets(self, asset_type: str, floor: str | None = None, near: str | None = None) -> dict:
+        """Every thing of one type with its room and position; with `near`, sorted by walking distance."""
+        building = self.building
+        wanted = find_type(asset_type, asset_types(building))
+        floor_id = find_floor(building, floor) if floor else None
+        distances = building.distances_from(find_space(building, near)) if near else {}
+        found = [
+            asset
+            for asset in building.assets.values()
+            if asset["type"] == wanted and (floor_id is None or asset["floor_id"] == floor_id)
+        ]
+        if near:
+            found.sort(key=lambda asset: distances.get(asset["space_id"], math.inf))
+        return {
+            "asset_type": wanted,
+            "count": len(found),
+            "assets": [
+                {
+                    "id": asset["id"],
+                    "name": asset["name"],
+                    "room": building.label(asset["space_id"]),
+                    "space_id": asset["space_id"],
+                    "position": asset["position"],
+                    **({"walk_m": rounded(distances[asset["space_id"]])} if asset["space_id"] in distances else {}),
+                }
+                for asset in found[: MAX_RESULTS * 2]
+            ],
+        }
 
     # ---------- conversation ----------
 

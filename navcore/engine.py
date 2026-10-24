@@ -24,13 +24,17 @@ STAIRS_COST_PER_FLOOR_M = 12.0
 LIFT_WAIT_COST_M = 15.0
 LIFT_COST_PER_FLOOR_M = 6.0
 
-# "Rooms" in reachability counts are spaces of type "room" (calibrated on train/dev answers).
+# Defaults from the README definitions. Every one of them is a parameter of the query that uses it, so a
+# question that defines things differently ("at least 2 m of wall", "halls count too") can be answered.
+# "Rooms" in reachability counts are spaces of type "room".
 ROOM_TYPE = "room"
+ROOM_TYPES = frozenset({ROOM_TYPE})
 # Shared-wall counts also include halls; corridors, stairwells, lifts and outdoor areas don't count.
 WALL_NEIGHBOUR_TYPES = frozenset({"room", "hall"})
 WALL_TOLERANCE_M = 0.35
 MIN_SHARED_WALL_M = 1.0
 WHAT_IF_IMPROVEMENT_M = 1.0
+SPACE_TYPES = ("room", "corridor", "stair", "lift", "hall", "outdoor")
 
 
 class EngineError(ValueError):
@@ -127,9 +131,9 @@ class Building:
         centroid = self.polygons[space_id].centroid
         return (centroid.x, centroid.y, self.floors[self.spaces[space_id]["floor_id"]]["elevation_m"])
 
-    def shared_wall(self, first: str, second: str) -> LineString | None:
-        """The part of first's outline that runs within WALL_TOLERANCE_M of second's outline."""
-        near = self.polygons[second].exterior.buffer(WALL_TOLERANCE_M)
+    def shared_wall(self, first: str, second: str, tolerance_m: float = WALL_TOLERANCE_M) -> LineString | None:
+        """The part of first's outline that runs within tolerance_m of second's outline."""
+        near = self.polygons[second].exterior.buffer(tolerance_m)
         shared = self.polygons[first].exterior.intersection(near)
         if shared.is_empty or shared.length == 0:
             return None
@@ -143,8 +147,8 @@ class Building:
             return merged
         return max(merged.geoms, key=lambda line: line.length)
 
-    def shared_wall_length(self, first: str, second: str) -> float:
-        near = self.polygons[second].exterior.buffer(WALL_TOLERANCE_M)
+    def shared_wall_length(self, first: str, second: str, tolerance_m: float = WALL_TOLERANCE_M) -> float:
+        near = self.polygons[second].exterior.buffer(tolerance_m)
         return self.polygons[first].exterior.intersection(near).length
 
     # ---------- graph ----------
@@ -268,9 +272,11 @@ class Building:
             raise EngineError(f"No route from {self.label(via)} to {self.label(target)}.")
         return via, first_leg + second_leg
 
-    def reachable_rooms(self, start: str, floor_id: str, constraints: Constraints = Constraints()) -> list[str]:
+    def reachable_rooms(
+        self, start: str, floor_id: str, constraints: Constraints = Constraints(), types: frozenset[str] = ROOM_TYPES
+    ) -> list[str]:
         distances = self.distances_from(start, constraints)
-        return [space["id"] for space in self.spaces_on(floor_id, rooms_only=True) if space["id"] in distances]
+        return [space["id"] for space in self.spaces_on(floor_id) if space["type"] in types and space["id"] in distances]
 
     def stacked_room(self, space_id: str, direction: str) -> str | None:
         """The space on the next floor up/down whose outline covers most of this room's outline.
@@ -288,28 +294,36 @@ class Building:
         overlaps = [item for item in overlaps if item[0] > 0]
         return max(overlaps)[1] if overlaps else None
 
-    def wall_neighbours(self, space_id: str) -> list[str]:
+    def wall_neighbours(
+        self,
+        space_id: str,
+        min_length_m: float = MIN_SHARED_WALL_M,
+        tolerance_m: float = WALL_TOLERANCE_M,
+        types: frozenset[str] = WALL_NEIGHBOUR_TYPES,
+    ) -> list[str]:
+        """Spaces of the given types on the same floor with at least min_length_m of this space's outline
+        within tolerance_m of theirs (walls have thickness)."""
         floor_id = self.spaces[space_id]["floor_id"]
         polygon = self.polygons[space_id]
         neighbours = []
         for other in self.spaces_on(floor_id):
-            if other["id"] == space_id or other["type"] not in WALL_NEIGHBOUR_TYPES:
+            if other["id"] == space_id or other["type"] not in types:
                 continue
-            if self.polygons[other["id"]].distance(polygon) > WALL_TOLERANCE_M:
+            if self.polygons[other["id"]].distance(polygon) > tolerance_m:
                 continue
-            if self.shared_wall_length(space_id, other["id"]) >= MIN_SHARED_WALL_M:
+            if self.shared_wall_length(space_id, other["id"], tolerance_m) >= min_length_m:
                 neighbours.append(other["id"])
         return neighbours
 
     def straight_line_3d(self, first: str, second: str) -> float:
         return math.dist(self.centroid_3d(first), self.centroid_3d(second))
 
-    def door_between(self, first: str, second: str) -> dict:
-        """A new door in the middle of the wall the two spaces share."""
+    def door_between(self, first: str, second: str, along: float = 0.5) -> dict:
+        """A new door on the wall the two spaces share, at `along` (0..1) of its length; 0.5 is the middle."""
         wall = self.shared_wall(first, second)
         if wall is None:
             raise EngineError(f"{self.label(first)} and {self.label(second)} don't share a wall.")
-        middle = wall.interpolate(0.5, normalized=True)
+        middle = wall.interpolate(min(max(along, 0.0), 1.0), normalized=True)
         return {
             "id": f"new-door:{first}:{second}",
             "floor_id": self.spaces[first]["floor_id"],
@@ -324,18 +338,31 @@ class Building:
     def distances_to_exit(self, constraints: Constraints = Constraints()) -> dict[str, float]:
         return self.distances_from(OUTSIDE, constraints)
 
-    def what_if_door(self, first: str, second: str, floor_id: str) -> list[str]:
-        """Rooms on floor_id whose walk to the nearest entrance gets shorter by more than 1 m."""
-        before = self.distances_to_exit()
+    def what_if_door(
+        self,
+        first: str,
+        second: str,
+        floor_id: str,
+        threshold_m: float = WHAT_IF_IMPROVEMENT_M,
+        types: frozenset[str] = ROOM_TYPES,
+        constraints: Constraints = Constraints(),
+    ) -> list[str]:
+        """Spaces of the given types on floor_id whose walk to the nearest entrance gets shorter by more than
+        threshold_m once a door is added in the middle of the wall first and second share."""
+        before = self.distances_to_exit(constraints)
         door = self.door_between(first, second)
-        after = self.distances_to_exit(Constraints(extra_openings=(door,)))
+        after = self.distances_to_exit(
+            Constraints(constraints.step_free, constraints.min_width_m, constraints.closed, (door,))
+        )
         improved = []
-        for space in self.spaces_on(floor_id, rooms_only=True):
+        for space in self.spaces_on(floor_id):
+            if space["type"] not in types:
+                continue
             new = after.get(space["id"])
             if new is None:
                 continue
             old = before.get(space["id"], math.inf)
-            if old - new > WHAT_IF_IMPROVEMENT_M:
+            if old - new > threshold_m:
                 improved.append(space["id"])
         return improved
 

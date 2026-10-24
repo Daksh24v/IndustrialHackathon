@@ -20,6 +20,7 @@ from anthropic.lib.tools import ToolError
 
 from navagent.tools import Session
 from navcore.engine import EngineError
+from navcore.resolve import AmbiguousSpace
 
 MODEL = "claude-opus-5-5"
 MAX_TOKENS = 16000
@@ -28,23 +29,32 @@ EFFORT = {"chat": "medium", "benchmark": "high"}
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 CHAT = "chat"
 BENCHMARK = "benchmark"
+MAX_READINGS = 10  # a name shared by more spaces than this is reported, not expanded
 
 COMMON_RULES = """You are the indoor guide for one building, like Google Maps but inside.
 
 Every fact and number (rooms, things, areas, distances, counts, routes) must come from your tools; never \
 estimate or do geometry yourself. Prefer the tool that answers the whole question in one call \
 (largest_room, list_rooms totals, errand_walk, reachable_rooms, wall_neighbours, stacked_room, \
-straight_line_distance, what_if_door) over adding numbers up yourself.
+straight_line_distance, what_if_door) over adding numbers up yourself. For anything else, combine the \
+general tools (query_spaces, list_doors, find_assets, find_route, room_details): any question about this \
+building that its data can answer should be answered.
+
+Follow the question's own definitions. The tools' defaults are the usual ones (a shared wall is at least \
+1 m within 0.35 m; "rooms" are spaces of type room; a what-if door must shorten a walk by more than 1 m), \
+but when a question sets a different value or says which spaces count, pass it as a parameter \
+(min_length_m, tolerance_m, threshold_m, count_types, min_width_m, step_free, avoid).
 
 Reading requests:
 - Names usually come as "Name (Floor name)"; pass them to tools exactly like that.
 - Room types and item types are words like "generic room", "living room", "fire extinguisher".
 - Step-free: wheelchairs, prams, trolleys, beds, pallets, "no stairs", "can't carry it on the stairs". \
 A load W metres wide needs step_free=true and min_width_m=W (lifts are fine).
-- "Rooms" in counts are spaces of type room; corridors, stairwells, lifts and outdoor areas don't count.
+- Unless the question says otherwise, "rooms" in counts are spaces of type room; corridors, stairwells, \
+lifts and outdoor areas don't count.
 - Something "out of service" or "closed" goes into `avoid` (or set_closed in a conversation).
-- If a tool says a name matches several spaces, it lists their ids: choose by the floor and details \
-given, then pass the id."""
+- Same-named rooms: if a name matches several spaces on that floor, the tool answers for each of them \
+("readings"). If the question's details (floor, area, neighbours, contents) single one out, use that one."""
 
 CHAT_RULES = """
 Talking to a person:
@@ -53,6 +63,8 @@ from your tools (floors, rooms, things that exist). Examples: which floor they'r
 has several and "nearest" depends on it; where they are on that floor; which of several same-named rooms.
 - After ask_user, end your turn with no further text; the reply comes as the next message.
 - Remember what they told you (floor, position, step-free, closures) for the rest of the conversation.
+- If a tool returns several readings for a same-named room and they give different answers, ask which \
+room they mean, with the readings as options (e.g. "Büro 0.11, 26 m²").
 - Keep replies short: what you found, where, and how far (e.g. "Coffee machine in Kitchen 2.04, 40 m"). \
 The app draws the route on the map, so don't write step-by-step lists unless asked.
 - When told something is closed or a door is added, apply it with the tools and say what changes."""
@@ -60,6 +72,8 @@ The app draws the route on the map, so don't write step-by-step lists unless ask
 BENCHMARK_RULES = """
 Answering a scored question:
 - Nobody can answer questions back, so never ask. Choose the most plausible reading and say which.
+- If a tool returns several readings for a same-named room and nothing in the question singles one out, \
+answer with the result most readings agree on (on a tie, the first reading), and say so.
 - Finish by calling submit_answer exactly once, then stop:
   - answer_type "number": the single number the question asks for, copied from a tool result \
 (a count, a distance in metres, an area in m²);
@@ -79,11 +93,41 @@ def tool(function: Callable) -> Callable:
     @wraps(function)
     def wrapper(*args, **kwargs):
         try:
-            return json.dumps(function(*args, **kwargs), ensure_ascii=False, separators=(",", ":"))
+            return json.dumps(with_readings(function, kwargs), ensure_ascii=False, separators=(",", ":"))
         except EngineError as error:
             raise ToolError(str(error)) from error
 
     return beta_tool(wrapper)
+
+
+def with_readings(function: Callable, kwargs: dict, depth: int = 0) -> dict:
+    """Call the tool; if a name matches several spaces, call it once per space instead and return every
+    reading, so the model can see whether the duplicates change the answer (works for any tool)."""
+    try:
+        return function(**kwargs)
+    except AmbiguousSpace as error:
+        keys = [key for key, value in kwargs.items() if value == error.words or (
+            isinstance(value, list) and error.words in value)]
+        if not keys or depth >= 2 or len(error.candidates) > MAX_READINGS:
+            raise
+        readings = []
+        for space_id in error.candidates:
+            substituted = {
+                key: ([space_id if item == error.words else item for item in value] if isinstance(value, list)
+                      else space_id) if key in keys else value
+                for key, value in kwargs.items()
+            }
+            try:
+                readings.append({"space_id": space_id, "result": with_readings(function, substituted, depth + 1)})
+            except EngineError as failure:
+                readings.append({"space_id": space_id, "error": str(failure)})
+        answers = [json.dumps(reading.get("result", reading.get("error")), sort_keys=True) for reading in readings]
+        return {
+            "ambiguous_name": error.words,
+            "note": f"'{error.words}' matches {len(readings)} spaces; the tool was run once for each.",
+            "all_readings_agree": len(set(answers)) == 1,
+            "readings": readings,
+        }
 
 
 def make_tools(session: Session, mode: str = CHAT) -> list:
@@ -149,15 +193,21 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
         return session.stacked_room(room, direction)
 
     @tool
-    def wall_neighbours(room: str) -> dict:
-        """How many other rooms on the same floor share a wall with this room: their wall runs along it for
-        at least 1 m (within 0.35 m, walls have thickness), with or without a door. Corridors, stairwells,
-        lifts and outdoor areas are not counted.
+    def wall_neighbours(
+        room: str, min_length_m: float = 1.0, tolerance_m: float = 0.35, count_types: list[str] | None = None
+    ) -> dict:
+        """How many other spaces on the same floor share a wall with this room: their wall runs along it for
+        at least min_length_m, within tolerance_m (walls have thickness), with or without a door. By default
+        rooms and halls count; corridors, stairwells, lifts and outdoor areas don't.
 
         Args:
             room: The room.
+            min_length_m: Minimum shared wall length (default 1 m); use the question's value if it gives one.
+            tolerance_m: How close the outlines must run (default 0.35 m).
+            count_types: Which space types count, from room, hall, corridor, stair, lift, outdoor.
+                Omit for the default (room, hall).
         """
-        return session.wall_neighbours(room)
+        return session.wall_neighbours(room, min_length_m, tolerance_m, count_types)
 
     @tool
     def find_route(
@@ -216,7 +266,12 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
 
     @tool
     def reachable_rooms(
-        start: str, floor: str, step_free: bool = False, min_width_m: float = 0.0, avoid: list[str] | None = None
+        start: str,
+        floor: str,
+        step_free: bool = False,
+        min_width_m: float = 0.0,
+        avoid: list[str] | None = None,
+        count_types: list[str] | None = None,
     ) -> dict:
         """How many rooms on a floor can be reached from start under constraints (e.g. a wheelchair with a
         lift out of service, or a 1.1 m wide trolley).
@@ -227,8 +282,10 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
             step_free: True for wheelchairs and wheeled loads.
             min_width_m: Minimum door width for a wide load.
             avoid: Lifts, stairs, doors or rooms out of service.
+            count_types: Which space types count, from room, hall, corridor, stair, lift, outdoor.
+                Omit for the default (only room).
         """
-        return session.reachable_rooms(start, floor, step_free, min_width_m, avoid)
+        return session.reachable_rooms(start, floor, step_free, min_width_m, avoid, count_types)
 
     @tool
     def straight_line_distance(first: str, second: str) -> dict:
@@ -241,16 +298,93 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
         return session.straight_line(first, second)
 
     @tool
-    def what_if_door(first: str, second: str, floor: str) -> dict:
-        """Simulate a new door in the middle of the wall two rooms share and count the rooms on a floor whose
-        walk to the nearest entrance gets shorter by more than 1 m. Doesn't change the building.
+    def what_if_door(
+        first: str,
+        second: str,
+        floor: str,
+        threshold_m: float = 1.0,
+        count_types: list[str] | None = None,
+        step_free: bool = False,
+    ) -> dict:
+        """Simulate a new door in the middle of the wall two spaces share and count the rooms on a floor whose
+        walk to the nearest entrance gets shorter by more than threshold_m. Doesn't change the building.
 
         Args:
-            first: First room.
-            second: Second room (same floor, sharing a wall).
+            first: First space.
+            second: Second space (same floor, sharing a wall).
             floor: The floor whose rooms to check.
+            threshold_m: How much shorter a walk must get (default: more than 1 m).
+            count_types: Which space types count; omit for the default (only room).
+            step_free: True to measure step-free walks.
         """
-        return session.what_if_door(first, second, floor)
+        return session.what_if_door(first, second, floor, threshold_m, count_types, step_free)
+
+    @tool
+    def query_spaces(
+        floor: str | None = None,
+        space_type: str | None = None,
+        room_type: str | None = None,
+        name_contains: str | None = None,
+        min_area_m2: float | None = None,
+        max_area_m2: float | None = None,
+        sort_by: str = "area_desc",
+        distance_from: str | None = None,
+        step_free: bool = False,
+        limit: int = 25,
+    ) -> dict:
+        """General search over spaces with filters: count, total/min/max/mean area and the matching spaces.
+        Use it for smallest/largest/how many/average questions, or sorted by walking distance for
+        nearest/farthest questions.
+
+        Args:
+            floor: Only this floor.
+            space_type: One of room, hall, corridor, stair, lift, outdoor.
+            room_type: e.g. "office", "toilet", "generic room".
+            name_contains: Words the name or room number must contain.
+            min_area_m2: Only spaces at least this big.
+            max_area_m2: Only spaces at most this big.
+            sort_by: "area_desc", "area_asc", "name" or "distance" (needs distance_from).
+            distance_from: A space to measure walking distances from.
+            step_free: Measure step-free walking distances.
+            limit: How many spaces to list (the statistics always cover all matches).
+        """
+        return session.query_spaces(
+            floor, space_type, room_type, name_contains, min_area_m2, max_area_m2, sort_by, distance_from,
+            step_free, limit,
+        )
+
+    @tool
+    def list_doors(
+        room: str | None = None,
+        floor: str | None = None,
+        max_width_m: float | None = None,
+        min_width_m: float | None = None,
+        kind: str | None = None,
+        step_free: bool | None = None,
+    ) -> dict:
+        """Doors, openings and entrances of one room or one floor, filtered by width, kind and steps, with
+        the count and the narrowest and widest.
+
+        Args:
+            room: Only doors of this room.
+            floor: Only doors on this floor.
+            max_width_m: Only doors at most this wide.
+            min_width_m: Only doors at least this wide.
+            kind: "door", "opening" or "entrance".
+            step_free: True for only step-free ones, False for only ones with steps.
+        """
+        return session.list_doors(room, floor, max_width_m, min_width_m, kind, step_free)
+
+    @tool
+    def find_assets(asset_type: str, floor: str | None = None, near: str | None = None) -> dict:
+        """Every thing of one type with its room and position; with `near`, sorted by walking distance.
+
+        Args:
+            asset_type: e.g. "printer", "cnc mill", "desk".
+            floor: Only this floor.
+            near: A space to sort by walking distance from.
+        """
+        return session.find_assets(asset_type, floor, near)
 
     tools = [
         search_building,
@@ -267,6 +401,9 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
         reachable_rooms,
         straight_line_distance,
         what_if_door,
+        query_spaces,
+        list_doors,
+        find_assets,
     ]
 
     if mode == CHAT:

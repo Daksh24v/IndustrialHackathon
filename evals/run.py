@@ -84,7 +84,7 @@ def main() -> None:
     parser.add_argument("--only", nargs="+", default=None, help="only these set names")
     arguments = parser.parse_args()
     if arguments.which == "build":
-        names = ["build_benchmark", "build_warmup", "build_reworded"]
+        names = ["build_benchmark", "build_warmup", "build_reworded", "build_novel"]
         sets = {name: load(name) for name in names if (Path(__file__).parent / "sets" / f"{name}.jsonl").exists()}
     else:
         sets = holdout_sets()

@@ -18,6 +18,7 @@ class AmbiguousSpace(EngineError):
                 for space_id in candidates[:10]
             )
         super().__init__(f"'{words}' matches {len(candidates)} spaces: {listed}. Pass one of these ids.")
+        self.words = words
         self.candidates = candidates
 
 
@@ -57,8 +58,8 @@ def find_space(building: Building, words: str, floor_id: str | None = None) -> s
     if match and floor_id is None:
         try:
             return find_space(building, match.group("name"), find_floor(building, match.group("floor")))
-        except AmbiguousSpace:
-            raise
+        except AmbiguousSpace as error:
+            raise AmbiguousSpace(words, error.candidates, building) from None  # report the name as given
         except EngineError:
             pass  # the parentheses were part of the name, e.g. "Bedroom 3.10 (apartment 14)"
     text = normalise(words)
