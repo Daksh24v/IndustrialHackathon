@@ -106,8 +106,8 @@ answer with the result most readings agree on (on a tie, the first reading), and
   - answer_type "text": only when the question asks for neither, e.g. "no step-free route exists".
 - When the question gives no answer format: for "where is X" submit the room that holds it; for \
 "how many X" the count; for a route ("how do I get from A to B", tours, with closures or step-free) write \
-the rooms of the route in order in your reply and submit the total length in metres; if no route exists, \
-submit text saying so."""
+the rooms of the route in order in your reply and submit the total length in metres (code adds the route \
+itself on a 'Route:' line); if no route exists, submit answer_type "text" with exactly "No route exists."."""
 
 BUILDER_RULES = """
 Setting up a new building from its floor plans (a draft, not saved yet):
@@ -777,7 +777,8 @@ class BuildingAgent:
         if self.session.submitted is None:
             text += "\n" + self.ask("You didn't call submit_answer. Call it now with your final answer.")
         line = self.session.answer_line()
-        return f"{text}\n{line}" if line else text
+        route = self.session.route_line()  # before the Answer: line, which the scorer reads and must stay last
+        return "\n".join(part for part in (text, route, line) if part)
 
     def track_usage(self, message: object) -> None:
         usage = message.usage

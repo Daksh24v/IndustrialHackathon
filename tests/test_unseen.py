@@ -39,3 +39,26 @@ def test_unseen_building(building_id):
     farthest = max((space_id for space_id in distances if space_id in building.spaces), key=distances.get)
     steps = [step for leg in session.route(None, farthest)["legs"] for step in leg["steps"]]
     assert steps and steps[-1].startswith("Walk about")  # turn-by-turn works in buildings never seen
+
+
+def test_a_building_json_with_missing_fields_and_broken_outlines_still_answers():
+    """What an unseen file might do wrong: no heights or floor names, spaces without type or name, no
+    equipment list, a lift whose floors and spaces don't pair up, an outline that crosses itself."""
+    import json
+
+    data = json.loads((TEST / "proc-campus-test-013" / "building.json").read_text())
+    for floor in data["floors"]:
+        floor.pop("elevation_m"), floor.pop("name")
+    for space in data["spaces"][::7]:
+        space.pop("room_type"), space.pop("name")
+    data.pop("assets")
+    data["vertical_connectors"][0]["space_ids"] = data["vertical_connectors"][0]["space_ids"][:-1]
+    room = next(space for space in data["spaces"] if space["type"] == "room")
+    (x0, y0), (x1, y1) = room["polygon"][0], room["polygon"][2]
+    room["polygon"] = [[x0, y0], [x1, y1], [x1, y0], [x0, y1]]  # a bow tie
+    building = Building(data)
+    session = Session(building)
+    assert session.overview()["floors"] and building.floors[building.floor_by_level(1)]["elevation_m"] == 3.0
+    rooms = [space_id for space_id, space in building.spaces.items() if space["type"] == "room"]
+    assert session.route(rooms[0], rooms[-1])["length_m"] > 0
+    assert building.distances_from(room["id"], Constraints())  # the bow-tie room is walkable

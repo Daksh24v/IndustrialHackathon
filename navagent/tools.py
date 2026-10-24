@@ -3,6 +3,7 @@ without the API; agent.py wraps them as Claude tools. Every fact the agent state
 
 import itertools
 import math
+import re
 import time
 from dataclasses import asdict, dataclass, field
 
@@ -36,6 +37,8 @@ from navcore.resolve import (
 )
 
 MAX_RESULTS = 25
+NO_ROUTE = re.compile(r"\bno\b.*\broute\b|\bunreachable\b|\bnot reachable\b|\bcan(?:no|')t be reached\b", re.I)
+NO_ROUTE_ANSWER = "No route exists."
 MAX_HISTORY = 10
 NEAREST_SPACE_M = 3.0  # a tapped point this close to a space (on a wall, in a doorway) counts as in it
 MAX_LANDMARKS = 8
@@ -979,10 +982,26 @@ class Session:
         elif answer_type == "text":
             if not text or not text.strip():
                 raise EngineError("A text answer needs the text.")
-            self.submitted = {"type": "text", "text": " ".join(text.split())}
+            text = " ".join(text.split())
+            if NO_ROUTE.search(text):  # one fixed wording, without room numbers a number-reading scorer could misread
+                text = NO_ROUTE_ANSWER
+            self.submitted = {"type": "text", "text": text}
         else:
             raise EngineError("answer_type must be 'number', 'room' or 'text'.")
         return {"recorded": self.submitted, "answer_line": self.answer_line()}
+
+    def route_line(self) -> str | None:
+        """'Route: A (Floor) → B (Floor) → … | spaces: id, id | doors and stairs: id, id' for the route found
+        last (all legs of a tour), so a grader can check the route itself; None if no route was found."""
+        if not self.last_route:
+            return None
+        spaces: list[str] = []
+        elements: list[str] = []
+        for leg in self.last_route:
+            spaces += [space for space in leg.space_path if not spaces or spaces[-1] != space]
+            elements += leg.element_path
+        names = " → ".join(self.building.label(space) for space in spaces if space in self.building.spaces)
+        return f"Route: {names} | spaces: {', '.join(spaces)} | doors and stairs: {', '.join(elements)}"
 
     def answer_line(self) -> str | None:
         """'Answer: 42.17' or 'Answer: Office 0.21, 18.40 m²', exactly as the scorer expects."""

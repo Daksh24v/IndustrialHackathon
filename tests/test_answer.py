@@ -11,15 +11,15 @@ def test_question_sources():
     assert len(load_questions(DATA / "test")) == 145
     assert len(load_questions(DATA / "test" / "questions.csv")) == 145
     single = load_questions(DATA / "dev" / "proc-factory-dev-003")
-    assert single and all(directory.name == "proc-factory-dev-003" for directory, _ in single)
+    assert single and all(item.building.name == "proc-factory-dev-003" for item in single)
 
 
 def test_select_per_kind_and_buildings():
-    pairs = load_questions(DATA / "test")
-    one_each = select(pairs, 1, None)
-    assert len(one_each) == len({question["kind"] for _, question in pairs})
-    only = select(pairs, None, {"osm-way363805324"})
-    assert only and all(directory.name == "osm-way363805324" for directory, _ in only)
+    items = load_questions(DATA / "test")
+    one_each = select(items, 1, None)
+    assert len(one_each) == len({item.question["kind"] for item in items})
+    only = select(items, None, {"osm-way363805324"})
+    assert only and all(item.building.name == "osm-way363805324" for item in only)
 
 
 def test_run_writes_csv_scores_and_resumes(tmp_path, monkeypatch):
