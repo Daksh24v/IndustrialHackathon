@@ -37,21 +37,24 @@ checks the hold-out and is run only at checkpoints. The kit's `data/test` is a s
 
 ## Results
 
-All live runs use the Claude agent (benchmark mode) with the engine's tools.
+All live runs use the Claude agent (benchmark mode) with the engine's tools, scored against the kit 1.1.0
+answers (the organisers' route rules: door to door, stairs and lifts by height, no way round the outside).
 
-| Run (date 2026-10-24) | Buildings | Correct |
+| Run (date 2026-10-24, kit 1.1.0) | Buildings | Correct |
 |---|---|---|
-| Smoke test, one question per kind | build | 9 / 9 |
 | Benchmark questions, 3 per kind | build | 24 / 24 |
 | Warm-up questions (where is, how many, routes, step-free, closures, tours) | build | 18 / 18 |
 | Both sets reworded by Claude (casual, terse, formal, roundabout) | build | 41 / 41 |
-| **Hold-out, run once, nothing tuned on it** | **hold-out** | **34 / 36 (94%)** |
-| After the same-name fix and definitions-as-parameters: benchmark, warm-up, reworded | build | 83 / 83 |
 | Novel questions the dataset never asks (16 kinds, `evals/novel.py`) | build | 31 / 31 |
+| **Hold-out, run once, nothing tuned on it** | **hold-out** | **35 / 36 (97%)** |
 
-The two hold-out misses (`osm-way37850565-H03`, `osm-way52060470-H06`) name a room whose name exists more
-than once on its floor ("Büro" three times, "Genusswerk" twice), so the question doesn't say which one is
-meant. This was known before the split (see the Phase 1 notes); the hold-out questions themselves were not read.
+Build sets: 114/114, $4.46. Hold-out: benchmark 23/24 and warm-up 12/12, $1.59; the one miss is a
+room-stacked question, and as for every hold-out run its questions were not read and nothing was changed
+for it. The engine alone (`tests/test_dataset.py`, free) reproduces every route, step-free route, closure,
+tour, errand, what-if and reachability answer of all build and hold-out buildings to the centimetre.
+
+Before kit 1.1.0 (old route rules, old answers) the same sets gave build 83/83 and hold-out 34/36; those
+numbers are kept only for the record.
 
 Offline checks (`uv run pytest`, free): tools + code-written answer lines on every build-set benchmark
 question; warm-up routes exact to the centimetre; an independent router; invariance under renaming,
