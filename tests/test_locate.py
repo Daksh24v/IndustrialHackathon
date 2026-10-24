@@ -157,3 +157,29 @@ def test_turn_words():
     assert turn_word(east, north) == "turn left" and turn_word(east, south) == "turn right"
     assert turn_word(east, east) == "go straight" and turn_word(east, west) == "turn around and go"
     assert turn_word(None, east) == "go"
+
+
+def test_a_facility_manager_moves_a_machine_and_closes_a_lift(factory):
+    session = Session(Building.load(FACTORY))  # its own copy: the move must not leak into other tests
+    machine = next(asset for asset in session.building.assets.values() if asset["type"] == "coordinate_measuring_machine")
+    moved = session.move_thing("coordinate measuring machine", "Office 1.04 (Floor 1)")
+    assert moved["to"] == "Office 1.04 (Floor 1)" and machine["space_id"] == "proc-factory-dev-003-F1-S004"
+    assert session.map_view["changes"]["moved"][0]["asset_id"] == machine["id"]
+    session.set_closed("the lift", True)
+    session.set_position("Quality lab 0.21 (Ground floor)")
+    nearest = session.nearest_with_asset(None, "coordinate measuring machine")
+    assert nearest["nearest_room"] == "Office 1.04 (Floor 1)"  # found at its new place
+    changes = session.map_view["changes"]
+    assert changes["closed"] == ["proc-factory-dev-003-V02"] and changes["moved"]
+    with pytest.raises(EngineError, match="Which one"):
+        session.move_thing("coffee machine", "Office 1.04 (Floor 1)")  # several: it asks which
+
+
+def test_a_failed_route_request_drops_the_old_route():
+    session = Session(Building.load(FACTORY))
+    session.set_position("Quality lab 0.21 (Ground floor)")
+    session.route(None, "Office 1.04 (Floor 1)")
+    session.set_closed("the lift", True)
+    with pytest.raises(EngineError):
+        session.route(None, "Office 1.04 (Floor 1)", step_free=True)
+    assert session.active_route is None

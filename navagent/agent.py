@@ -92,7 +92,7 @@ to yourself before tool calls, and use plain text: no markdown (no **bold**, hea
 - Keep replies short: what you found, where, and how far (e.g. "Coffee machine in Kitchen 2.04, 40 m"). \
 Show it with show_on_map (their position, the target, the route from find_route): the app draws the route \
 on the map, so don't write step-by-step lists unless asked.
-- When told something is closed or a door is added, apply it with the tools and say what changes."""
+- When told something is closed, a door is added or a thing was moved, apply it with the tools (set_closed, add_door, move_thing; the map shows it at once) and say what changes for them."""
 
 BENCHMARK_RULES = """
 Answering a scored question:
@@ -166,6 +166,19 @@ def with_readings(function: Callable, kwargs: dict, depth: int = 0) -> dict:
             "all_readings_agree": len(set(answers)) == 1,
             "readings": readings,
         }
+
+
+def cached(messages: list[dict]) -> list[dict]:
+    """The conversation with a cache mark on its newest user message, so every later step and turn reads the
+    history from the prompt cache instead of paying for it again (the system prompt has the other mark)."""
+    marked = list(messages)
+    for index in range(len(marked) - 1, -1, -1):
+        message = marked[index]
+        if message["role"] == "user" and isinstance(message["content"], str):
+            marked[index] = {"role": "user", "content": [
+                {"type": "text", "text": message["content"], "cache_control": {"type": "ephemeral"}}]}
+            break
+    return marked
 
 
 def position_note(session: Session) -> str | None:
@@ -530,6 +543,17 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
             return session.add_door(first, second, width_m, step_free)
 
         @tool
+        def move_thing(thing: str, to_room: str) -> dict:
+            """A thing now stands in another room (a facility manager moved a machine, a printer, ...): finding
+            it, routes to it and the map use the new place for the rest of the conversation.
+
+            Args:
+                thing: Its name ("CNC mill H-A1-A"), id, or its kind when the building has only one of it.
+                to_room: The room it is in now.
+            """
+            return session.move_thing(thing, to_room)
+
+        @tool
         def set_my_position(place: str) -> dict:
             """Record where the person says they are now ("I'm at the lift", "next to the CNC mill H-A1-A",
             "I just came in the main entrance"). Routes then start there without asking, and if they are
@@ -552,7 +576,7 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
             """
             return session.where_am_i_options(floor)
 
-        tools += [set_closed, add_door, set_my_position, where_am_i_options]
+        tools += [set_closed, add_door, move_thing, set_my_position, where_am_i_options]
 
     if mode == BENCHMARK:
 
@@ -749,7 +773,7 @@ class BuildingAgent:
             max_iterations=MAX_TOOL_ITERATIONS,
             system=self.system,
             tools=self.tools,
-            messages=list(self.messages),
+            messages=cached(self.messages),
             output_config={"effort": SPOKEN_EFFORT if spoken else EFFORT[self.mode]},
             betas=[FALLBACK_BETA],
             fallbacks="default",

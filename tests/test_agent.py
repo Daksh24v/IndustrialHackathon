@@ -10,7 +10,7 @@ from navagent.agent import BENCHMARK, CHAT, BuildingAgent
 from navagent.tools import Session
 from navcore.engine import Building
 from tests.conftest import DATA
-from tests.fake_claude import FakeClient, tool_names
+from tests.fake_claude import FakeClient, text_of, tool_names
 
 
 def test_benchmark_mode_offers_submit_but_never_ask(tiny: Building):
@@ -47,7 +47,7 @@ def test_ask_user_with_options_then_answer(tiny: Building):
     assert agent.session.pending_question is None  # cleared once answered
     assert client.log[-1][2] is False  # the tool call succeeded
     # the second request carries the whole conversation, including the question and the reply
-    assert any(message["content"] == "Floor 1" for message in client.requests[1]["messages"])
+    assert any(text_of(message["content"]) == "Floor 1" for message in client.requests[1]["messages"])
 
 
 def test_ask_user_rejects_bad_option_counts(tiny: Building):

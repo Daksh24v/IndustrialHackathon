@@ -97,3 +97,17 @@ def test_an_unknown_position_is_asked_once_by_landmarks():
     agent.ask(question["options"][0]["label"])
     assert agent.session.pending_question is None, "one question was enough"
     assert agent.session.active_route is not None
+
+
+def test_a_facility_manager_closes_the_lift_and_moves_a_machine():
+    agent = factory_agent()
+    agent.session.set_position("Quality lab 0.21 (Ground floor)", source="phone")
+    agent.ask("The office lift is out of service today, and I've moved the coordinate measuring machine to "
+              "office 1.04.")
+    assert "proc-factory-dev-003-V02" in agent.session.closed, "the lift is closed"
+    assert agent.session.moved, "the machine was moved"
+    assert agent.session.map_view and agent.session.map_view["changes"], "the map shows the changes"
+    reply = agent.ask("I'm in a wheelchair. Take me to the coordinate measuring machine.")
+    route = agent.session.active_route
+    assert route is None or route["step_free"], "with the only lift closed there is no step-free way up"
+    assert "lift" in reply.lower() and "step-free" in reply.lower(), "it says why"

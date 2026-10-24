@@ -59,3 +59,10 @@ def tool_names(request) -> set[str]:
 
 def loads(result: str) -> dict:
     return json.loads(result)
+
+
+def text_of(content) -> str:
+    """A message's text, whether sent as a string or as text blocks (the newest user turn carries a cache mark)."""
+    if isinstance(content, str):
+        return content
+    return "".join(block.get("text", "") for block in content if isinstance(block, dict))

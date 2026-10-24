@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from server import app as server
-from tests.fake_claude import FakeClient
+from tests.fake_claude import FakeClient, text_of
 
 BUILDING = "proc-factory-dev-003"
 
@@ -238,7 +238,7 @@ def test_position_from_the_phone_is_used_without_asking(http):
     placed = http.post(f"/sessions/{session}/position", json={"space": "Quality lab 0.21 (Ground floor)"}).json()
     assert placed["label"] == "Quality lab 0.21 (Ground floor)"
     body = http.post(f"/sessions/{session}/chat", json={"text": "Where is office 1.04?"}).json()
-    sent = fake.requests[0]["messages"][-1]["content"]
+    sent = text_of(fake.requests[0]["messages"][-1]["content"])
     assert sent.startswith("[Position: the person is in Quality lab 0.21 (Ground floor) "
                            "(id proc-factory-dev-003-F0-S021), from the phone.]")
     assert sent.endswith("Where is office 1.04?")

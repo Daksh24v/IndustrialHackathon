@@ -126,6 +126,7 @@ class Session:
     history: list[Position] = field(default_factory=list)  # where they were before, newest last
     active_route: dict | None = None  # the route they are following: stops, spaces in order, progress
     submitted: dict | None = None  # set by submit_answer in benchmark mode
+    moved: dict[str, dict] = field(default_factory=dict)  # things moved in this conversation, by asset id
     last_route: list[Route] | None = None  # legs of the most recent find_route, for show_on_map
     map_view: dict | None = None  # what the app should draw after this turn (show_on_map)
     draft: object | None = None  # navagent.builder.Draft while a building is being set up from plans
@@ -372,7 +373,11 @@ class Session:
         constraints = self.constraints(step_free, min_width_m, avoid)
         stops = [self.start_or_here(start), *[find_space(building, stop) for stop in via or []]]
         stops.append(find_space(building, destination))
-        legs = building.tour(stops, constraints)
+        try:
+            legs = building.tour(stops, constraints)
+        except EngineError:
+            self.active_route = None  # they asked for another way: the old route is not the one they follow
+            raise
         self.last_route = legs
         spaces: list[str] = []
         for leg in legs:
@@ -543,6 +548,7 @@ class Session:
             self.closed.add(element_id)
         else:
             self.closed.discard(element_id)
+        self.show_change(self.floor_of(element_id))
         return {"element_id": element_id, "closed": closed, "all_closed": sorted(self.closed)}
 
     def add_door(self, first: str, second: str, width_m: float = 0.9, step_free: bool = True) -> dict:
@@ -550,7 +556,63 @@ class Session:
         door = building.door_between(find_space(building, first), find_space(building, second))
         door.update(width_m=width_m, step_free=step_free, id=f"{door['floor_id']}-O-new{len(self.new_openings) + 1}")
         self.new_openings.append(door)
+        self.show_change(door["floor_id"])
         return {"added": door}
+
+    def move_thing(self, thing: str, to_room: str) -> dict:
+        """A thing (machine, printer, ...) now stands in another room: from now on finding it, routing to it and
+        the map use the new place. It stands at the room's centre."""
+        building = self.building
+        asset = self.find_thing(thing)
+        space_id = find_space(building, to_room)
+        before = building.label(asset["space_id"])
+        asset.update(space_id=space_id, floor_id=building.spaces[space_id]["floor_id"],
+                     position=[round(value, 3) for value in building.anchor(space_id)])
+        self.moved[asset["id"]] = asset
+        self.show_change(asset["floor_id"])
+        return {"moved": asset["name"], "from": before, "to": building.label(space_id)}
+
+    def find_thing(self, thing: str) -> dict:
+        """One thing by id, by name ('CNC mill H-A1-A'), or by kind when the building has only one of it."""
+        building = self.building
+        if thing in building.assets:
+            return building.assets[thing]
+        named = [asset for asset in building.assets.values() if fold(asset["name"]) == fold(thing)]
+        if len(named) == 1:
+            return named[0]
+        kind = find_asset_type(building, thing)
+        of_kind = [asset for asset in building.assets.values() if asset["type"] == kind]
+        if len(of_kind) == 1:
+            return of_kind[0]
+        listed = "; ".join(f"{asset['name']} in {building.label(asset['space_id'])}" for asset in of_kind[:8])
+        raise EngineError(f"There are {len(of_kind)} of those: {listed}. Which one?")
+
+    def floor_of(self, element_id: str) -> str | None:
+        building = self.building
+        if element_id in building.spaces:
+            return building.spaces[element_id]["floor_id"]
+        if element_id in building.openings:
+            return building.openings[element_id]["floor_id"]
+        if element_id in building.connectors:
+            return building.connectors[element_id]["floor_ids"][0]
+        return None
+
+    def changes(self) -> dict | None:
+        """What this conversation changed, for the map: closed doors, stairs, lifts and rooms, new doors, moved
+        things. None when nothing changed."""
+        if not (self.closed or self.new_openings or self.moved):
+            return None
+        return {
+            "closed": sorted(self.closed),
+            "new_doors": [{"id": door["id"], "floor_id": door["floor_id"], "position": door["position"],
+                           "width_m": door.get("width_m")} for door in self.new_openings],
+            "moved": [{"asset_id": asset["id"], "label": asset["name"], "space_id": asset["space_id"],
+                       "floor_id": asset["floor_id"], "position": asset["position"]} for asset in self.moved.values()],
+        }
+
+    def show_change(self, floor_id: str | None) -> None:
+        """A change shows on the map at once, on its floor (the agent can still show a route after it)."""
+        self.show_on_map(floor=floor_id) if floor_id else self.show_on_map()
 
     # ---------- general queries (for questions no specific tool covers) ----------
 
@@ -923,6 +985,7 @@ class Session:
             first = view["you_are_here"] or (view["route"] and {"floor_id": view["route"]["pieces"][0]["floor_id"]}) \
                 or view["target"]
             view["focus_floor_id"] = first["floor_id"] if first else None
+        view["changes"] = self.changes()
         self.map_view = view
         return {"shown": True, "focus_floor": building.floor_name(view["focus_floor_id"])
                 if view["focus_floor_id"] else None}
