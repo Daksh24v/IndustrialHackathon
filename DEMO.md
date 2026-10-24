@@ -10,16 +10,22 @@ cd app && npx expo start --web          # opens http://localhost:8081
 Or build once and use one address: `cd app && npm run build`, then open http://localhost:8000 (the backend serves
 the site).
 
-**Home is the orb:** the website opens on a white screen with the orange orb and the "Ask Finni…" pill. Step 1 is
-asked there; Finni's options appear as chips in the orb's card, and when the answer has a route the map screen
-takes over. The rest of the steps run in the map screen as below. The **Ask / Map** switch (top right) moves
-between the two at any time; the orb shows Finni's last answer when you come back.
+**One screen:** the website opens with "Find using FINNI" over the slowly turning 3D building, which shrinks into
+the "Ask FINNI" label above the orange orb. Step 1 is asked there; FINNI's options appear as chips in its card, and
+when the answer has a route the floor opens beside it (a column on a laptop, the top of the screen on a phone):
+no switching between asking and the map. "‹ Building" goes back out; hover a floor of the building (it turns
+grey) and click it to open that floor. Turn the map all the way round with Shift+drag or right-drag (two fingers
+on a phone); the compass puts north up again. "Earlier" in FINNI's card shows the whole conversation.
+
+**Optional, the real venue:** with `EXPO_PUBLIC_GOOGLE_MAPS_KEY` in `app/.env` (see app/README.md) the opening flies
+round Munich Urban Colab in Google's photorealistic 3D before our building takes over. Add `?intro=1` to the
+address to show the opening again.
 
 **For the jury's phones (QR code):** `scripts/share.sh` prints one public HTTPS link with an access code; make the
 QR code from it. The mic works on phones only over that HTTPS link. Turn the tunnel off after judging.
 
-Open the website on the factory (default building; on a laptop-wide window the chat sits left of the map, and the building picker at the top switches buildings, e.g. to the Sunday building). Turn the sound on for Finni's voice. Every step below was
-run on the website on 2026-10-24 (steps 1–7 in one conversation, step 8 in a fresh one at desktop width), with the replies shown (Finni's wording
+Open the website on the factory (default building; on a laptop-wide window FINNI sits left of the map, and the building picker at the top switches buildings, e.g. to the Sunday building). Turn the sound on for FINNI's voice. Every step below was
+run on the website on 2026-10-24 (steps 1–7 in one conversation, step 8 in a fresh one at desktop width), with the replies shown (FINNI's wording
 varies a little between runs; the landmark options can too, so pick any one on the ground floor).
 
 | # | You say or do | What happened | What it shows off |

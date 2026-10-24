@@ -1,4 +1,4 @@
-/** The conversation at the top, under the logo (so the keyboard never covers it): the "Talk to Finni…" field
+/** The conversation at the top, under the logo (so the keyboard never covers it): the "Talk to FINNI…" field
  * with an orange mic (src/useVoice.ts: tap once to talk, again to interrupt or stop), and under it a card with
  * the replies and the agent's question as tappable chips. The card folds away to give the map more room.
  * On a wide screen (side) it is a full-height panel beside the map instead, and the messages fill it. */
@@ -66,7 +66,7 @@ export function ChatCard({ messages, question, busy, onSend, onMic, mic = 'off',
         <TextInput
           testID="chat-input"
           style={styles.input}
-          placeholder="Talk to Finni…"
+          placeholder="Talk to FINNI…"
           placeholderTextColor={colours.muted}
           value={text}
           onChangeText={setText}
@@ -84,7 +84,7 @@ export function ChatCard({ messages, question, busy, onSend, onMic, mic = 'off',
             </Svg>
           </Pressable>
         ) : (
-          <Pressable testID="mic" accessibilityLabel={mic === 'off' ? 'Speak to Finni' : 'Stop'}
+          <Pressable testID="mic" accessibilityLabel={mic === 'off' ? 'Speak to FINNI' : 'Stop'}
                      accessibilityState={{ selected: mic !== 'off' }}
                      style={[styles.round, mic !== 'off' && styles.micOn]} onPress={onMic}>
             <MicIcon colour={mic === 'off' ? colours.accent : '#FFFFFF'} />
@@ -121,7 +121,7 @@ export function ChatCard({ messages, question, busy, onSend, onMic, mic = 'off',
                     {plain(message.text)}
                   </Text>
                 ))}
-                {busy && <Text style={styles.thinking}>Finni is looking…</Text>}
+                {busy && <Text style={styles.thinking}>FINNI is looking…</Text>}
                 {!!note && <Text testID="note" style={styles.note}>{note}</Text>}
               </ScrollView>
               {question && (

@@ -5,10 +5,11 @@
 > `--live` runs the paid API tests. Chat with a building:
 > `uv run --env-file .env python -m navagent data/dev/proc-factory-dev-003`.
 >
-> **The website (Finni).** Put `ANTHROPIC_API_KEY` and `ELEVENLABS_API_KEY` in `.env` (see `.env.example`), then
+> **The website (FINNI).** Put `ANTHROPIC_API_KEY` and `ELEVENLABS_API_KEY` in `.env` (see `.env.example`), then
 > `cd app && npm install && npm run build`, and from the repo root
 > `uv run --env-file .env uvicorn server.app:app --host 0.0.0.0 --port 8000`; open http://localhost:8000. It opens
-> on the orb (ask by typing or with the mic), the Ask / Map switch shows the building and the route.
+> with "Find using FINNI" over the 3D building, then one screen: ask FINNI (typing or the mic) and the route opens
+> beside the answer; hover a floor of the building and click it to look inside; drag to turn it all the way round.
 > To share it with a public HTTPS link (QR code, mic on phones): `scripts/share.sh`. Details: `app/README.md`,
 > the demo script: [DEMO.md](DEMO.md).
 >

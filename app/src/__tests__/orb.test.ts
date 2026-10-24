@@ -2,6 +2,8 @@ import {
   ASSEMBLE, COLORS, CONDENSE, cubicBezier, DX, DY, DZ, E, INIT, launchTracks, N, RINGS, sampleAt, unfoldTracks,
   valueAt, type Sample,
 } from '../orb/motion';
+import { placeFrom } from '../orb/GoogleIntro';
+import { wantIntro } from '../orb/Intro';
 
 describe('easing', () => {
   it('starts at 0, ends at 1 and never goes backwards (no overshoot curve)', () => {
@@ -82,5 +84,22 @@ describe('comet trail', () => {
     expect(out.y).toBe(-20);
     sampleAt([], 5, out);
     expect(out.d).toBe(0);
+  });
+});
+
+describe('the opening', () => {
+  it('shows once per visit, never with ?intro=0, always with ?intro=1', () => {
+    expect(wantIntro('', null)).toBe(true);
+    expect(wantIntro('', '1')).toBe(false);
+    expect(wantIntro('?code=abc&intro=0', null)).toBe(false);
+    expect(wantIntro('?intro=1', '1')).toBe(true);
+  });
+
+  it('reads the venue from "lat,lng" and ignores anything else', () => {
+    expect(placeFrom('48.1568, 11.5518')).toEqual({ lat: 48.1568, lng: 11.5518 });
+    expect(placeFrom(undefined)).toBeNull();
+    expect(placeFrom('')).toBeNull();
+    expect(placeFrom('Munich')).toBeNull();
+    expect(placeFrom('120,11')).toBeNull();
   });
 });
