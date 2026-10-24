@@ -209,6 +209,8 @@ class Session:
             "asset_types": sorted(asset_types(building)),
             "closed": sorted(self.closed),
             "added_doors": [opening["id"] for opening in self.new_openings],
+            "moved": [{"id": asset["id"], "name": asset["name"], "room": building.label(asset["space_id"])}
+                      for asset in self.moved.values()],
         }
 
     def search(self, query: str, floor: str | None = None) -> dict:

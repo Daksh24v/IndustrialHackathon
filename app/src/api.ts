@@ -1,4 +1,5 @@
 /** Typed client for the backend server (server/app.py). */
+import { accessHeaders } from './access';
 
 export type Point = [number, number];
 
@@ -132,7 +133,7 @@ async function call<T>(path: string, init?: RequestInit, fetcher: typeof fetch =
   try {
     response = await fetcher(`${API_URL}${path}`, {
       ...init,
-      headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
+      headers: { 'content-type': 'application/json', ...accessHeaders(), ...(init?.headers ?? {}) },
     });
   } catch {
     throw new ApiError(`Can't reach the server at ${API_URL}.`, 0);

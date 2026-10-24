@@ -5,3 +5,6 @@ __pycache__/
 .pytest_cache/
 agent_output/
 data/imported/
+
+# screenshots made while working on the website
+finni-screens/

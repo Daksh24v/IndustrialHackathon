@@ -71,7 +71,9 @@ export function changesOn(detail: BuildingDetail, map: MapView | null, floorId: 
     }
   }
   for (const door of changes.new_doors ?? []) {
-    if (door.floor_id === floorId) result.doors.push(mark(door.id, door.position, door.width_m, 'new', polygons));
+    if (door.floor_id !== floorId) continue;
+    const kind = closed.has(door.id) ? 'closed' : 'new'; // a new door can be closed again
+    result.doors.push(mark(door.id, door.position, door.width_m, kind, polygons));
   }
   for (const thing of changes.moved ?? []) {
     if (thing.floor_id === floorId) result.moved.push({ id: thing.asset_id, at: thing.position, label: thing.label });

@@ -1,5 +1,6 @@
 /** Client for the voice endpoints (../voice, served by the backend): speech to text, and answers in Finni's
  * voice. Plain functions, tested without a microphone; src/useVoice.ts does the recording and playing. */
+import { accessHeaders } from './access';
 import { API_URL, ApiError, type ChatReply } from './api';
 
 // The backend serves /voice too; EXPO_PUBLIC_VOICE_URL only if voice runs as its own service (port 8001).
@@ -15,7 +16,9 @@ export interface Spoken {
 async function post<T>(path: string, body: BodyInit, contentType: string, fetcher: typeof fetch = fetch): Promise<T> {
   let response: Response;
   try {
-    response = await fetcher(`${VOICE_URL}${path}`, { method: 'POST', headers: { 'content-type': contentType }, body });
+    response = await fetcher(`${VOICE_URL}${path}`, {
+      method: 'POST', headers: { 'content-type': contentType, ...accessHeaders() }, body,
+    });
   } catch {
     throw new ApiError(`Can't reach the voice service at ${VOICE_URL}.`, 0);
   }

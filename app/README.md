@@ -2,12 +2,13 @@
 
 Expo (React Native) app for phones and the web. It talks to the backend in `../server` (see `../server/README.md`).
 
-Home: **the orb** (`src/orb/MorphOrb.tsx`, styles `src/orb/orb.css`, timelines `src/orb/motion.ts`). A black
-screen with a dotted orb resting in the middle, the "Ask Finni…" pill (with the orange mic) at the bottom and
+Home: **the orb** (`src/orb/MorphOrb.tsx`, styles `src/orb/orb.css`, timelines `src/orb/motion.ts`). A white
+screen with an orange dotted orb resting in the middle, the "Ask Finni…" pill (with the orange mic) at the bottom and
 the building picker at the top. Send a question: the pill shrinks into a ball, flies into the orb, the orb
 thinks ("Searching the building…"), turns green and unfolds into the answer card; when Finni asks back, the
-options are chips in the card. When an answer has a route, the map screen takes over (below); the Finni logo
-there goes back to the orb, and the orb's "Map" button opens the map again. Same conversation throughout.
+options are chips in the card; it turns green when the answer is ready. When an answer has a route, the map
+screen takes over (below). The **Ask / Map** switch (`src/components/ModeSwitch.tsx`, top right) moves between
+the two at any time; the orb shows Finni's last answer when you come back. Same conversation throughout.
 
 The map screen: the building you're in, seen from outside as white blocks; Finni asks back with options when it
 needs to (which floor, where you are); then the view flies into that floor:
@@ -38,6 +39,9 @@ npm install
 EXPO_PUBLIC_API_URL=http://<your-laptop-ip>:8000 npx expo start
 ```
 
+- **Public link:** `../scripts/share.sh` builds the site, starts the backend and opens a Cloudflare tunnel: one
+  HTTPS link with `?code=` (the access code from `.env`, `FINNI_ACCESS_CODE`) for the QR code; the mic works on
+  phones only over HTTPS.
 - **One address (website):** `npm run build` (in this folder) puts the site in `dist/`; the backend then serves it
   at http://localhost:8000 too (site and API on one address, for hosting and a QR code). The site talks to its
   own address unless `EXPO_PUBLIC_API_URL` is set at build time.

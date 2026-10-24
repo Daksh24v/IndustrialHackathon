@@ -282,3 +282,26 @@ def test_the_backend_serves_the_website_and_the_api_still_wins(http):
     page = http.get("/")
     assert page.status_code == 200 and "<html" in page.text.lower()
     assert http.get("/buildings").headers["content-type"].startswith("application/json")
+
+
+def test_a_moved_machine_reaches_the_map_over_http(http):
+    """The facility manager's "I moved the CMM to office 1.04": the chat reply carries it for the map."""
+    http.script(([("move_thing", {"thing": "coordinate measuring machine", "to_room": "Office 1.04 (Floor 1)"})],
+                 "Moved it."))
+    session_id = http.post("/sessions", json={"building_id": BUILDING}).json()["session_id"]
+    body = http.post(f"/sessions/{session_id}/chat", json={"text": "I moved the CMM to office 1.04"}).json()
+    moved = body["map"]["changes"]["moved"]
+    assert [item["space_id"] for item in moved] == ["proc-factory-dev-003-F1-S004"]
+    assert server._sessions[session_id].session.overview()["moved"][0]["room"] == "Office 1.04 (Floor 1)"
+
+
+def test_a_shared_link_needs_its_access_code(http, monkeypatch):
+    monkeypatch.setenv("FINNI_ACCESS_CODE", "pretzel")
+    assert http.get("/buildings").status_code == 200  # the site and the building data stay open
+    assert http.post("/sessions", json={"building_id": BUILDING}).status_code == 401
+    assert http.post("/voice/speak", json={"text": "hi"}).status_code == 401
+    ok = http.post("/sessions", json={"building_id": BUILDING}, headers={"x-finni-code": "pretzel"})
+    assert ok.status_code == 200
+    assert http.post("/sessions?code=pretzel", json={"building_id": BUILDING}).status_code == 200
+    monkeypatch.delenv("FINNI_ACCESS_CODE")
+    assert http.post("/sessions", json={"building_id": BUILDING}).status_code == 200  # no code set: open
