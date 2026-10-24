@@ -106,7 +106,10 @@ def test_a_thing_or_an_entrance_is_a_position(factory):
 
 def test_landmarks_come_from_the_building_and_nearest_first(factory):
     session = Session(factory)
-    assert session.where_am_i_options()["ask_first"] == "Which floor are you on?"
+    both = session.where_am_i_options()["landmarks"]  # two floors: one question finds floor and place
+    assert {landmark["floor"] for landmark in both} == {"Ground floor", "Floor 1"}
+    tall = Session(Building.load(DATA / "dev" / "osm-way22744230"))  # eight floors: the floor first
+    assert tall.where_am_i_options()["ask_first"] == "Which floor are you on?"
     options = session.where_am_i_options("Ground floor")
     kinds = {landmark["kind"] for landmark in options["landmarks"]}
     assert options["landmarks"] and kinds <= {"thing", "stairs", "lift", "entrance", "room"}

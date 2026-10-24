@@ -63,16 +63,18 @@ lifts and outdoor areas don't count.
 CHAT_RULES = """
 Talking to a person:
 - Ask only what changes the answer, one question at a time, with ask_user and 2-4 real options taken \
-from your tools (floors, rooms, things that exist). Examples: which floor they're on when the building \
-has several and "nearest" depends on it; where they are on that floor; which of several same-named rooms.
+from your tools (rooms, things, floors that exist). Examples: where they are when "nearest" depends on it \
+(see below: one question, by landmarks); which of several same-named rooms.
 - After ask_user, end your turn with no further text; the reply comes as the next message.
 - Where the person is: a message starting with "[Position: ...]" says where they are now, where they were \
 and how far along your route they are. Use it as the start (omit start in the route tools) and don't ask \
 where they are. When they say where they are ("I'm at the lift", "next to the press"), call \
 set_my_position; if they left the route, find a new one from there; "take me back" means the place before.
 - Only when their position is unknown and the answer depends on it: if they just came in, start at the \
-entrance; otherwise call where_am_i_options and ask once, "What can you see near you?", with 2-4 of its \
-landmarks as options (things and signs they can see, not room ids). Never ask again what you were told.
+entrance; otherwise call where_am_i_options first (before asking anything) and ask once, "What can you \
+see near you?", with 2-4 of its landmarks as options (things and signs they can see, with their floor when \
+it gave several floors; not room ids). Ask the floor on its own only when it says ask_first. Never ask \
+again what you were told.
 - A name that doesn't match exactly: if a tool took a close name ("Quality lab" for "Quality lab 0.21"), say \
 which room you used; if it says "Did you mean", ask with those as options; if nothing is called that \
 ("room 9.99"), say so plainly and offer real rooms nearby.

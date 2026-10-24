@@ -39,6 +39,7 @@ MAX_HISTORY = 10
 NEAREST_SPACE_M = 3.0  # a tapped point this close to a space (on a wall, in a doorway) counts as in it
 MAX_LANDMARKS = 8
 LANDMARK_MAX_PER_FLOOR = 2  # a kind of thing that occurs at most this often on a floor is a landmark
+MAX_FLOORS_IN_ONE_QUESTION = 4  # more floors than this: ask the floor first, then landmarks
 
 
 @dataclass
@@ -754,16 +755,33 @@ class Session:
     def where_am_i_options(self, floor: str | None = None) -> dict:
         """Landmarks to ask 'what's near you?' with, taken from this building's own data: things that are rare
         on the floor, stairs and lifts, entrances, rooms with a name nothing else has. Nearest to the last known
-        position first, else the rarest first."""
+        position first, else the rarest first. With the floor unknown and up to 4 floors, the landmarks span
+        the floors (each says its floor), so one question finds floor and place together."""
         building = self.building
         floor_id = find_floor(building, floor) if floor else self.position.floor_id if self.position else None
-        if floor_id is None:
-            if len(building.floors) > 1:
-                ordered = sorted(building.floors.values(), key=lambda item: item["level"])
-                return {"ask_first": "Which floor are you on?", "floors": [item["name"] for item in ordered]}
-            floor_id = next(iter(building.floors))
         last = self.position or (self.history[-1] if self.history else None)
         distances = building.distances_from(last.space_id, self.constraints()) if last else {}
+        how = "Ask once, 'What can you see near you?', with 2-4 of these as options."
+        ordered = sorted(building.floors.values(), key=lambda item: item["level"])
+        if floor_id is None and len(ordered) > 1:
+            if len(ordered) > MAX_FLOORS_IN_ONE_QUESTION:
+                return {"ask_first": "Which floor are you on?", "floors": [item["name"] for item in ordered]}
+            per_floor = max(2, MAX_LANDMARKS // len(ordered))
+            landmarks = [landmark for item in ordered
+                         for landmark in self.floor_landmarks(item["id"], distances)[:per_floor]]
+            return {"floor": None, "last_known": last.label if last else None, "landmarks": landmarks,
+                    "how_to_ask": how + " Each option names its floor, so this one question also finds the floor."}
+        floor_id = floor_id or ordered[0]["id"]
+        return {
+            "floor": building.floor_name(floor_id),
+            "last_known": last.label if last else None,
+            "landmarks": self.floor_landmarks(floor_id, distances)[:MAX_LANDMARKS],
+            "how_to_ask": how,
+        }
+
+    def floor_landmarks(self, floor_id: str, distances: dict[str, float]) -> list[dict]:
+        """Every landmark on one floor, nearest (by walk from the last known place) first, else rarest first."""
+        building = self.building
         in_building: dict[str, int] = {}
         on_floor: dict[str, int] = {}
         for asset in building.assets.values():
@@ -800,15 +818,10 @@ class Session:
         for landmark in landmarks:
             walk = distances.get(landmark["space_id"])
             landmark["walk_m"] = rounded(walk) if walk is not None else None
+            landmark["floor"] = building.floor_name(floor_id)
         landmarks.sort(key=lambda item: (item["walk_m"] if item["walk_m"] is not None else math.inf,
                                          item["rarity"], item["label"]))
-        return {
-            "floor": building.floor_name(floor_id),
-            "last_known": last.label if last else None,
-            "landmarks": [{key: value for key, value in item.items() if key != "rarity"}
-                          for item in landmarks[:MAX_LANDMARKS]],
-            "how_to_ask": "Ask once, 'What can you see near you?', with 2-4 of these as options.",
-        }
+        return [{key: value for key, value in item.items() if key != "rarity"} for item in landmarks]
 
     # ---------- map ----------
 
