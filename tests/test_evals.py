@@ -26,6 +26,8 @@ def test_warmup_checker():
     blocked = {"kind": "route_step_free", "answer": {"reachable": False}}
     assert check_warmup(blocked, "Answer: No step-free route exists.")
     assert not check_warmup(blocked, "Answer: 40")
+    assert check_warmup(blocked, "Answer: No route from Bedroom 1.23 (Floor 1) to Bedroom 2.28 (Floor 2).")
+    assert not check_warmup(blocked, "Answer: not via stairs, 40 m via the lift")
     count = {"kind": "count", "answer": {"count": 3}}
     assert check_warmup(count, "Answer: 3") and not check_warmup(count, "Answer: 4")
 

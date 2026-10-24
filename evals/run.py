@@ -37,7 +37,10 @@ def check_warmup(question: dict, reply: str) -> bool:
     if kind == "count":
         return len(numbers) == 1 and numbers[0] == answer["count"]
     if answer.get("reachable") is False:
-        return not numbers and re.search(r"\b(no|not|none|unreachable|impossible)\b", text, re.IGNORECASE) is not None
+        # "no route" in words, and no distance (room names like "Bedroom 1.23" may hold numbers)
+        says_no = re.search(r"\b(no|not|none|unreachable|impossible)\b", text, re.IGNORECASE) is not None
+        gives_distance = re.search(r"\d\s*(m|metres|meters)\b", text, re.IGNORECASE) is not None
+        return says_no and not gives_distance
     expected = answer["optimal_length_m"]
     return len(numbers) == 1 and abs(numbers[0] - expected) <= max(0.01 * expected, 1.0)
 
