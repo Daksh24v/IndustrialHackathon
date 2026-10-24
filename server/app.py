@@ -9,6 +9,8 @@ Endpoints
 - POST /sessions                          start a conversation with the agent about one building
 - POST /sessions/{id}/chat                one turn: {reply, question, map}
 - DELETE /sessions/{id}                   end it
+- POST /imports                           set up a new building from floor plans: a builder conversation
+- POST /imports/{session_id}/save         save it (the agent can also save when the person confirms)
 """
 
 import threading
@@ -21,9 +23,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from navagent.agent import CHAT, BuildingAgent
+from navagent.agent import BUILDER, CHAT, BuildingAgent
+from navagent.builder import Draft
 from navagent.tools import Session
 from navcore.engine import Building, EngineError
+from navcore.plans import PlanError
 
 DATA = Path(__file__).resolve().parent.parent / "data"
 MAX_SESSIONS = 200
@@ -156,7 +160,64 @@ def chat(session_id: str, request: ChatRequest) -> dict:
         raise HTTPException(502, f"Claude API error {error.status_code}") from error
     except anthropic.APIConnectionError as error:
         raise HTTPException(503, "Can't reach the Claude API") from error
+    draft = agent.session.draft
+    if draft is not None and draft.saved_to is not None:
+        forget_buildings()  # the agent saved it: make it visible to GET /buildings and new sessions
     return {"reply": reply, "question": agent.session.pending_question, "map": agent.session.map_view}
+
+
+# ---------- new buildings from floor plans (Level 4) ----------
+
+class PlanFile(BaseModel):
+    name: str = Field(description="file name; floor_<level>.svg tells the floor level")
+    svg: str = Field(min_length=1, description="the SVG text of one floor plan")
+
+
+class ImportRequest(BaseModel):
+    files: list[PlanFile] = Field(min_length=1)
+    name: str | None = None
+
+
+class SaveRequest(BaseModel):
+    name: str | None = None
+
+
+def forget_buildings() -> None:
+    building_paths.cache_clear()
+    load.cache_clear()
+
+
+@app.post("/imports")
+def start_import(request: ImportRequest) -> dict:
+    """Read the plans into a draft and start a builder conversation about it. Chat with
+    /sessions/{session_id}/chat as usual; the agent shows what it understood and asks about what the plans
+    don't say (room types, door widths, floor heights, unmarked stairs)."""
+    building_id = f"imported-{uuid.uuid4().hex[:8]}"
+    try:
+        draft = Draft.from_svgs([(item.name, item.svg) for item in request.files], building_id, request.name)
+    except PlanError as error:
+        raise HTTPException(422, str(error)) from error
+    session = Session(draft.loaded(), draft=draft)
+    agent = BuildingAgent(session, client(), mode=BUILDER)
+    session_id = uuid.uuid4().hex
+    with _lock:
+        if len(_sessions) >= MAX_SESSIONS:
+            _sessions.pop(next(iter(_sessions)))
+        _sessions[session_id] = agent
+    return {"session_id": session_id, "building_id": building_id, "summary": draft.summary()}
+
+
+@app.post("/imports/{session_id}/save")
+def save_import(session_id: str, request: SaveRequest) -> dict:
+    agent = agent_for(session_id)
+    if agent.session.draft is None:
+        raise HTTPException(400, "This conversation isn't setting up a building.")
+    try:
+        path = agent.session.draft.save(request.name)
+    except EngineError as error:
+        raise HTTPException(422, str(error)) from error
+    forget_buildings()
+    return {"saved": True, "building_id": path.name}
 
 
 @app.delete("/sessions/{session_id}")

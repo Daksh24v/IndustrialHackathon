@@ -100,9 +100,13 @@ def measured_scale(text: str, outline_points: list[tuple[float, float]]) -> floa
 
 
 def read_svg(path: Path | str, points_per_metre: float | None = None) -> FloorPlan:
+    """Read one floor drawing from a file; see parse_svg."""
+    return parse_svg(Path(path).read_text(encoding="utf-8"), str(path), points_per_metre)
+
+
+def parse_svg(text: str, path: str = "plan", points_per_metre: float | None = None) -> FloorPlan:
     """Read one floor drawing. Coordinates: metres, y up, origin at the drawing's top-left corner.
     The scale is measured from the drawing (measured_scale) unless points_per_metre is given."""
-    text = Path(path).read_text(encoding="utf-8")
     try:
         root = ElementTree.fromstring(text)
     except ElementTree.ParseError as error:

@@ -25,10 +25,11 @@ from navcore.resolve import AmbiguousSpace
 MODEL = "claude-opus-5-5"
 MAX_TOKENS = 16000
 MAX_TOOL_ITERATIONS = 30
-EFFORT = {"chat": "medium", "benchmark": "high"}
+EFFORT = {"chat": "medium", "benchmark": "high", "builder": "medium"}
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 CHAT = "chat"
 BENCHMARK = "benchmark"
+BUILDER = "builder"
 MAX_READINGS = 10  # a name shared by more spaces than this is reported, not expanded
 
 COMMON_RULES = """You are the indoor guide for one building, like Google Maps but inside.
@@ -84,6 +85,19 @@ answer with the result most readings agree on (on a tie, the first reading), and
 "how many X" the count; for a route ("how do I get from A to B", tours, with closures or step-free) write \
 the rooms of the route in order in your reply and submit the total length in metres; if no route exists, \
 submit text saying so."""
+
+BUILDER_RULES = """
+Setting up a new building from its floor plans (a draft, not saved yet):
+- Start with plan_summary and tell the person in a few lines what you understood: floors, how many rooms, \
+corridors, stairs and lifts, doors and entrances, overall size. Then work through the open points.
+- The plans don't say what each room is, how wide the doors are or how high the floors are, and some plans \
+don't mark stairs. Ask about these with ask_user, one question at a time, with 2-4 concrete options built \
+from the draft (e.g. "Rooms 0.20-0.33 along the corridor: offices / labs / meeting rooms?", "Floor height: \
+3.5 m / 4 m / 8 m?", "Which space is the staircase: Corridor 1.01 (3.2 m²) / ...?"). For stairs, \
+stair_candidates suggests likely spaces.
+- Apply every answer with the edit tools, then say briefly what changed. Show a floor on the map when it \
+helps the person check (show_on_map with floor).
+- Only call save_building when the person says it's right. Never invent rooms, doors or numbers."""
 
 PROMPT = "{rules}\n\nBuilding overview:\n{overview}"
 
@@ -407,29 +421,7 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
         find_assets,
     ]
 
-    if mode == CHAT:
-
-        @tool
-        def set_closed(element: str, closed: bool) -> dict:
-            """Close or reopen a lift, staircase, door or room for the rest of this conversation.
-
-            Args:
-                element: Name or id, e.g. "Lift 1", "Stairs 2", a door id, a room.
-                closed: True to close, False to reopen.
-            """
-            return session.set_closed(element, closed)
-
-        @tool
-        def add_door(first: str, second: str, width_m: float = 0.9, step_free: bool = True) -> dict:
-            """Add a door in the middle of the wall two neighbouring rooms share (edits the building).
-
-            Args:
-                first: First room.
-                second: Second room.
-                width_m: Door width in metres.
-                step_free: Whether the door has no step.
-            """
-            return session.add_door(first, second, width_m, step_free)
+    if mode in (CHAT, BUILDER):
 
         @tool
         def show_on_map(
@@ -459,8 +451,38 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
             """
             return session.ask_user(question, options)
 
-        tools += [set_closed, add_door, show_on_map, ask_user]
-    else:
+        tools += [show_on_map, ask_user]
+
+    if mode == BUILDER:
+        tools += make_builder_tools(session)
+
+    if mode == CHAT:
+
+        @tool
+        def set_closed(element: str, closed: bool) -> dict:
+            """Close or reopen a lift, staircase, door or room for the rest of this conversation.
+
+            Args:
+                element: Name or id, e.g. "Lift 1", "Stairs 2", a door id, a room.
+                closed: True to close, False to reopen.
+            """
+            return session.set_closed(element, closed)
+
+        @tool
+        def add_door(first: str, second: str, width_m: float = 0.9, step_free: bool = True) -> dict:
+            """Add a door in the middle of the wall two neighbouring rooms share (edits the building).
+
+            Args:
+                first: First room.
+                second: Second room.
+                width_m: Door width in metres.
+                step_free: Whether the door has no step.
+            """
+            return session.add_door(first, second, width_m, step_free)
+
+        tools += [set_closed, add_door]
+
+    if mode == BENCHMARK:
 
         @tool
         def submit_answer(
@@ -486,6 +508,125 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
     return tools
 
 
+def make_builder_tools(session: Session) -> list:
+    """Edit tools for a draft building (session.draft); after each edit the session sees the new draft."""
+    draft = session.draft
+
+    def edited(result: dict) -> dict:
+        session.building = draft.loaded()
+        return result
+
+    @tool
+    def plan_summary() -> dict:
+        """What the plans gave: floors, rooms by kind, size, doors, entrances, stairs and lifts, and the open
+        points still to ask about."""
+        return draft.summary()
+
+    @tool
+    def set_room_type(rooms: list[str], room_type: str) -> dict:
+        """Say what kind of rooms these are; they're renamed '<Type> <number>'.
+
+        Args:
+            rooms: Room numbers, names or ids, e.g. ["0.20", "0.21"].
+            room_type: e.g. office, lab, toilet, kitchen, meeting room, production zone, storage.
+        """
+        return edited(draft.set_room_type(rooms, room_type))
+
+    @tool
+    def rename_space(room: str, name: str | None = None, number: str | None = None) -> dict:
+        """Give a space a new name and/or room number.
+
+        Args:
+            room: The space as it's called now.
+            name: New full name, e.g. "Canteen".
+            number: New room number, e.g. "0.18".
+        """
+        return edited(draft.rename(room, name, number))
+
+    @tool
+    def set_door(first: str, second: str, width_m: float | None = None, step_free: bool | None = None) -> dict:
+        """Change the door between two spaces ("outside" for an entrance): width and/or whether it has a step.
+
+        Args:
+            first: One side.
+            second: The other side, or "outside".
+            width_m: New width in metres.
+            step_free: False if there is a step.
+        """
+        return edited(draft.set_door(first, second, width_m, step_free))
+
+    @tool
+    def set_door_widths(width_m: float, room_types: list[str] | None = None) -> dict:
+        """Set the width of all doors, or of all doors of rooms of the given types (e.g. halls 1.6 m).
+
+        Args:
+            width_m: Width in metres.
+            room_types: Only doors touching these room types; omit for every door.
+        """
+        return edited(draft.set_all_doors(width_m, room_types))
+
+    @tool
+    def add_plan_door(first: str, second: str, width_m: float = 0.9) -> dict:
+        """Add a door the plan doesn't show, in the middle of the wall two spaces share.
+
+        Args:
+            first: First space.
+            second: Second space.
+            width_m: Width in metres.
+        """
+        return edited(draft.add_door(first, second, width_m))
+
+    @tool
+    def stair_candidates() -> dict:
+        """Spaces that may be unmarked stairs (small corridors on top of each other). Suggestions only."""
+        return {"candidates": draft.stair_candidates()}
+
+    @tool
+    def mark_stairs(spaces: list[str], kind: str = "stairs", name: str | None = None) -> dict:
+        """Make spaces (one per floor) into one staircase or lift linking those floors.
+
+        Args:
+            spaces: One space per floor, e.g. ["Corridor 0.05 (Ground floor)", "Corridor 1.05 (Floor 1)"].
+            kind: "stairs" or "lift".
+            name: Optional name, e.g. "East stairs".
+        """
+        return edited(draft.mark_stairs(spaces, kind, name))
+
+    @tool
+    def set_floor_height(floor: str, height_m: float) -> dict:
+        """Set one floor's height; the floors above (and below) are restacked.
+
+        Args:
+            floor: e.g. "Ground floor".
+            height_m: Height in metres.
+        """
+        return edited(draft.set_floor_height(floor, height_m))
+
+    @tool
+    def set_known_length(room: str, length_m: float, side: str = "longest") -> dict:
+        """Correct the size of everything from one length the person knows.
+
+        Args:
+            room: A room whose size they know.
+            length_m: Its real length in metres.
+            side: "longest", "shortest", "width" (left-right) or "depth" (front-back).
+        """
+        return edited(draft.set_known_length(room, length_m, side))
+
+    @tool
+    def save_building(name: str | None = None) -> dict:
+        """Save the building once the person confirms it's right; after that everyone can use it.
+
+        Args:
+            name: The building's name, if they want to change it.
+        """
+        path = draft.save(name)
+        return {"saved": True, "building_id": path.name}
+
+    return [plan_summary, set_room_type, rename_space, set_door, set_door_widths, add_plan_door,
+            stair_candidates, mark_stairs, set_floor_height, set_known_length, save_building]
+
+
 class BuildingAgent:
     """Keeps the conversation and runs Claude's tool loop for each user turn."""
 
@@ -502,7 +643,7 @@ class BuildingAgent:
         self.tools = make_tools(session, mode)
         self.log_path = log_path
         overview = json.dumps(session.overview(), ensure_ascii=False, separators=(",", ":"))
-        rules = COMMON_RULES + (CHAT_RULES if mode == CHAT else BENCHMARK_RULES)
+        rules = COMMON_RULES + {CHAT: CHAT_RULES, BENCHMARK: BENCHMARK_RULES, BUILDER: CHAT_RULES + BUILDER_RULES}[mode]
         self.system = [
             {
                 "type": "text",

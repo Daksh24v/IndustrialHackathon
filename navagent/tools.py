@@ -49,6 +49,7 @@ class Session:
     submitted: dict | None = None  # set by submit_answer in benchmark mode
     last_route: list[Route] | None = None  # legs of the most recent find_route, for show_on_map
     map_view: dict | None = None  # what the app should draw after this turn (show_on_map)
+    draft: object | None = None  # navagent.builder.Draft while a building is being set up from plans
 
     def constraints(
         self, step_free: bool = False, min_width_m: float = 0.0, closed: list[str] | None = None
