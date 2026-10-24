@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Talk to your building</title>
+<style>
+  :root { --bg: #f6f5f2; --card: #fff; --ink: #1d1d1b; --muted: #6b6a66; --accent: #e5532d; --line: #e2e0da; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151514; --card: #201f1d; --ink: #f1efe9; --muted: #a29f97; --accent: #ff6a43; --line: #34322e; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.45 system-ui, -apple-system, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: 15px; }
+  .row { display: flex; gap: 8px; }
+  input { flex: 1; min-width: 0; font: inherit; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+          background: var(--card); color: var(--ink); }
+  button { font: inherit; border: 0; border-radius: 10px; padding: 10px 16px; cursor: pointer; }
+  .secondary { background: var(--card); color: var(--ink); border: 1px solid var(--line); }
+  #talk { display: block; width: 168px; height: 168px; margin: 28px auto 10px; border-radius: 50%;
+          background: var(--accent); color: #fff; font-size: 19px; font-weight: 600;
+          box-shadow: 0 6px 24px rgb(229 83 45 / .35); transition: transform .15s; }
+  #talk:disabled { opacity: .4; cursor: default; box-shadow: none; }
+  #talk.listening { animation: pulse 1.1s infinite; }
+  @keyframes pulse { 50% { transform: scale(1.06); } }
+  #status { text-align: center; color: var(--muted); min-height: 1.5em; margin-bottom: 18px; }
+  #log { display: flex; flex-direction: column; gap: 10px; }
+  .msg { padding: 10px 14px; border-radius: 14px; max-width: 88%; }
+  .you { align-self: flex-end; background: var(--accent); color: #fff; }
+  .bot { align-self: flex-start; background: var(--card); border: 1px solid var(--line); }
+  .note { font-size: 13px; color: var(--muted); margin-top: 4px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .chips button { background: var(--bg); color: var(--ink); border: 1px solid var(--line); padding: 6px 12px; }
+  #type { margin-top: 22px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Talk to your building</h1>
+  <p class="sub">Tap the button (or press space), ask, and stop talking. It answers out loud.</p>
+
+  <div class="row" id="setup">
+    <input id="building" value="proc-factory-dev-003" aria-label="Building id">
+    <button class="secondary" id="start">Start</button>
+  </div>
+
+  <button id="talk" disabled>Start first</button>
+  <div id="status"></div>
+  <div id="log"></div>
+
+  <form class="row" id="type">
+    <input id="text" placeholder="…or type it" aria-label="Type a message" disabled>
+    <button class="secondary" disabled>Send</button>
+  </form>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const SILENCE_MS = 1200;      // stop recording after this much quiet once they've spoken
+const MAX_MS = 15000;         // and never record longer than this
+let sessionId = null, recorder = null, busy = false;
+const player = new Audio();
+player.preservesPitch = true;
+
+function status(text) { $("status").textContent = text; }
+
+function add(cls, text, extra) {
+  const div = document.createElement("div");
+  div.className = "msg " + cls;
+  div.textContent = text;
+  if (extra) div.append(extra);
+  $("log").append(div);
+  div.scrollIntoView({ behavior: "smooth", block: "end" });
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, options);
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.detail || response.statusText);
+  return body;
+}
+
+$("start").onclick = async () => {
+  status("Starting…");
+  try {
+    const session = await api("/voice/sessions", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ building_id: $("building").value.trim() }),
+    });
+    sessionId = session.session_id;
+    $("log").innerHTML = "";
+    add("bot", `Connected to ${session.building_name}. Ask me where anything is.`);
+    $("talk").disabled = false; $("talk").textContent = "Talk";
+    $("text").disabled = false; $("type").querySelector("button").disabled = false;
+    status("");
+  } catch (error) { status("Couldn't start: " + error.message); }
+};
+
+function show(answer) {
+  if (answer.heard) add("you", answer.heard);
+  let extra = null;
+  if (answer.sent && answer.sent !== answer.heard) {
+    extra = document.createElement("div"); extra.className = "note"; extra.textContent = `(picked: ${answer.sent})`;
+  }
+  if (answer.question) {
+    const chips = document.createElement("div"); chips.className = "chips";
+    for (const option of answer.question.options) {
+      const chip = document.createElement("button");
+      chip.textContent = option.label;
+      chip.onclick = () => sendText(option.label);
+      chips.append(chip);
+    }
+    extra = extra ? (extra.append(chips), extra) : chips;
+  }
+  add("bot", answer.spoken, extra);
+  if (answer.audio_error) status("No audio: " + answer.audio_error);
+  if (answer.audio_base64) {
+    player.src = "data:audio/mpeg;base64," + answer.audio_base64;
+    player.playbackRate = answer.playback_rate || 1;
+    player.play();
+  }
+}
+
+async function run(request) {
+  busy = true; $("talk").disabled = true; status("Thinking…");
+  try { show(await request); status(""); }
+  catch (error) { status("Something went wrong: " + error.message); }
+  busy = false; $("talk").disabled = false;
+}
+
+function sendText(text) {
+  if (!sessionId || busy || !text.trim()) return;
+  run(api(`/voice/sessions/${sessionId}/say`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }),
+  }));
+}
+
+$("type").onsubmit = (event) => { event.preventDefault(); sendText($("text").value); $("text").value = ""; };
+
+async function listen() {
+  if (recorder) { recorder.stop(); return; }   // second tap: stop now
+  if (!sessionId || busy) return;
+  player.pause();
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  recorder = new MediaRecorder(stream);
+  const chunks = [];
+  recorder.ondataavailable = (event) => chunks.push(event.data);
+
+  // stop by itself after a pause in speech
+  const context = new AudioContext();
+  const analyser = context.createAnalyser();
+  context.createMediaStreamSource(stream).connect(analyser);
+  const samples = new Uint8Array(analyser.fftSize);
+  let spoke = false, quietSince = performance.now();
+  const started = performance.now();
+  const watch = setInterval(() => {
+    analyser.getByteTimeDomainData(samples);
+    const level = Math.max(...samples.map((v) => Math.abs(v - 128)));
+    const now = performance.now();
+    if (level > 12) { spoke = true; quietSince = now; }
+    if ((spoke && now - quietSince > SILENCE_MS) || now - started > MAX_MS) recorder.stop();
+  }, 100);
+
+  recorder.onstop = () => {
+    clearInterval(watch); context.close();
+    stream.getTracks().forEach((track) => track.stop());
+    $("talk").classList.remove("listening"); $("talk").textContent = "Talk";
+    const type = recorder.mimeType.split(";")[0] || "audio/webm";
+    recorder = null;
+    if (!spoke) { status("I didn't hear anything."); return; }
+    const audio = new Blob(chunks, { type });
+    run(api(`/voice/sessions/${sessionId}/turn`, { method: "POST", headers: { "content-type": type }, body: audio }));
+  };
+  recorder.start();
+  $("talk").classList.add("listening"); $("talk").textContent = "Listening…";
+  status("Speak now — I'll stop when you pause.");
+}
+
+$("talk").onclick = () => listen().catch((error) => status("Microphone: " + error.message));
+document.addEventListener("keydown", (event) => {
+  if (event.code === "Space" && document.activeElement.tagName !== "INPUT") {
+    event.preventDefault(); $("talk").click();
+  }
+});
+</script>
+</body>
+</html>
