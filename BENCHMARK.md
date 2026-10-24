@@ -57,7 +57,18 @@ Offline checks (`uv run pytest`, free): tools + code-written answer lines on eve
 question; warm-up routes exact to the centimetre; an independent router; invariance under renaming,
 reordering, moving and rotating; stress buildings; every tool on every build and test building.
 
-Cost: about $0.04 per question (prompt caching on), about $8.60 for all runs above.
+Cost: about $0.03–0.04 per question (prompt caching on).
 
-`submission/team_answers.csv` is from the earlier template-based version and will be replaced by the
-agent's run.
+## The test-set submission
+
+`submission/team_answers.csv` (145 answers) was made on 2026-10-24 by the Claude agent with
+
+```bash
+uv run --env-file .env python -m navagent.benchmark data/test --out agent_output/test_run.csv --resume
+```
+
+(single run, $3.99), then checked for free with
+`uv run python -m evals.check_submission submission/team_answers.csv --reference <other run>`:
+format OK (UTF-8, header, every test id once, under 5 MB), every answer line readable by the scorer, and
+145/145 answers agree with an independent earlier run (the Phase 1 template reader, 138/138 on dev).
+No answer was edited by hand.
