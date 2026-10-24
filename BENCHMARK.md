@@ -66,7 +66,7 @@ answers (the organisers' route rules: door to door, stairs and lifts by height, 
 | Novel questions the dataset never asks (16 kinds, `evals/novel.py`) | build | 31 / 31 |
 | **Hold-out, run once, nothing tuned on it** | **hold-out** | **35 / 36 (97%)** |
 
-Build sets: 114/114, $4.46. Hold-out: benchmark 23/24 and warm-up 12/12, $1.59; the one miss is a
+Build sets: 114/114, $4.46. After the code-written `Route:` line and the fixed no-route answer were added, the benchmark and warm-up sets were run again: 24/24 and 18/18 ($2.20). Hold-out: benchmark 23/24 and warm-up 12/12, $1.59; the one miss is a
 room-stacked question, and as for every hold-out run its questions were not read and nothing was changed
 for it. The engine alone (`tests/test_dataset.py`, free) reproduces every route, step-free route, closure,
 tour, errand, what-if and reachability answer of all build and hold-out buildings to the centimetre.
