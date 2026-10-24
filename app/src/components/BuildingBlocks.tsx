@@ -1,13 +1,13 @@
 /** The building from outside, like the block style of a map: each floor a white block, stacked by elevation,
  * drawn as an isometric view with SVG (no 3D engine, so it runs the same on every phone and on the web).
- * When a floor is chosen the view zooms onto it, the floors above fade away, and onArrived() hands over to
- * the 2D floor view. */
-import { useEffect, useMemo, useRef } from 'react';
-import { Animated, Easing, View } from 'react-native';
+ * When a floor is chosen (by the agent, or a click on its block) the view zooms onto it, the floors above
+ * fade away, and onArrived() hands over to the floor view. */
+import { type ComponentRef, useEffect, useMemo, useRef } from 'react';
+import { Animated, Easing, Pressable, View } from 'react-native';
 import Svg, { G, Path } from 'react-native-svg';
 
 import type { Outline, Point } from '../api';
-import { boundsOf, isoDepth, isoProject, signedArea, type Iso } from '../geometry';
+import { boundsOf, isoDepth, isoProject, pointInPolygon, signedArea, type Iso } from '../geometry';
 import { colours } from '../theme';
 
 const ZOOM_MS = 1300;
@@ -19,14 +19,25 @@ interface Props {
   outline: Outline;
   focusFloorId: string | null;
   onArrived?: () => void;
+  /** A click (tap) on a floor's block. */
+  onPickFloor?: (floorId: string) => void;
   width: number;
   height: number;
 }
 
 interface Face {
   d: string;
+  points: Point[]; // on screen
   fill: string;
   depth: number;
+}
+
+/** The floor whose block is drawn at a screen point: the highest one there, as it is drawn on top. */
+export function floorAt(floors: { id: string; faces: { points: Point[] }[] }[], point: Point): string | null {
+  for (let i = floors.length - 1; i >= 0; i -= 1) {
+    if (floors[i].faces.some((face) => pointInPolygon(point, face.points))) return floors[i].id;
+  }
+  return null;
 }
 
 const AnimatedG = Animated.createAnimatedComponent(G);
@@ -54,15 +65,16 @@ function floorFaces(iso: Iso, footprints: Point[][], bottom: number, top: number
       const quad = [isoProject(iso, a, bottom), isoProject(iso, b, bottom), isoProject(iso, b, top), isoProject(iso, a, top)]
         .map(toScreen);
       const shade = rx < ry ? colours.block : '#E4E4E4'; // left-facing walls lighter, right-facing darker
-      walls.push({ d: path(quad), fill: shade, depth: (isoDepth(iso, a) + isoDepth(iso, b)) / 2 });
+      walls.push({ d: path(quad), points: quad, fill: shade, depth: (isoDepth(iso, a) + isoDepth(iso, b)) / 2 });
     }
-    tops.push({ d: path(ring.map((p) => toScreen(isoProject(iso, p, top)))), fill: colours.blockTop, depth: Infinity });
+    const roof = ring.map((p) => toScreen(isoProject(iso, p, top)));
+    tops.push({ d: path(roof), points: roof, fill: colours.blockTop, depth: Infinity });
   }
   walls.sort((x, y) => x.depth - y.depth);
   return [...walls, ...tops];
 }
 
-export function BuildingBlocks({ outline, focusFloorId, onArrived, width, height }: Props) {
+export function BuildingBlocks({ outline, focusFloorId, onArrived, onPickFloor, width, height }: Props) {
   const floors = useMemo(() => [...outline.floors].sort((a, b) => a.elevation_m - b.elevation_m), [outline]);
   const all = useMemo(() => floors.flatMap((floor) => floor.footprints.flat()), [floors]);
   const plan = boundsOf(all);
@@ -77,6 +89,12 @@ export function BuildingBlocks({ outline, focusFloorId, onArrived, width, height
     width / 2 + (x - (box.minX + box.maxX) / 2) * scale,
     height / 2 + (y - (box.minY + box.maxY) / 2) * scale,
   ];
+
+  const blocks = floors.map((floor) => ({
+    id: floor.id,
+    faces: floorFaces(iso, floor.footprints, floor.elevation_m, floor.elevation_m + floor.height_m * (1 - FLOOR_GAP), toScreen),
+  }));
+  const frame = useRef<ComponentRef<typeof View>>(null);
 
   const focus = floors.find((floor) => floor.id === focusFloorId);
   const zoom = useRef(new Animated.Value(0)).current;
@@ -97,31 +115,40 @@ export function BuildingBlocks({ outline, focusFloorId, onArrived, width, height
   const shiftX = zoom.interpolate({ inputRange: [0, 1], outputRange: [0, (width / 2 - target[0]) * ZOOM_SCALE] });
   const shiftY = zoom.interpolate({ inputRange: [0, 1], outputRange: [0, (height / 2 - target[1]) * ZOOM_SCALE] });
   const fadeAbove = zoom.interpolate({ inputRange: [0, 0.6], outputRange: [1, 0], extrapolate: 'clamp' });
+  const pick = onPickFloor && !focus
+    ? ({ nativeEvent }: { nativeEvent: { pageX: number; pageY: number } }) =>
+        frame.current?.measureInWindow((left, top) => {
+          const floorId = floorAt(blocks, [nativeEvent.pageX - left, nativeEvent.pageY - top]);
+          if (floorId) onPickFloor(floorId);
+        })
+    : undefined;
 
   return (
-    <View style={{ width, height, backgroundColor: colours.background, overflow: 'hidden' }} testID="building-blocks">
-      <Animated.View style={{ width, height, transform: [{ translateX: shiftX }, { translateY: shiftY }, { scale: scaleAnim }] }}>
-        <Svg width={width} height={height}>
-          {/* a soft shadow under the building */}
-          <Path
-            d={path(floors[0]?.footprints[0]?.map((p) => toScreen(isoProject(iso, [p[0] + 1.5, p[1] - 1.5], 0))) ?? [])}
-            fill="#EDEDED"
-          />
-          {floors.map((floor) => {
-            const faces = floorFaces(iso, floor.footprints, floor.elevation_m,
-                                     floor.elevation_m + floor.height_m * (1 - FLOOR_GAP), toScreen);
-            const above = !!focus && floor.elevation_m > focus.elevation_m;
-            const content = faces.map((face, index) => (
-              <Path key={index} d={face.d} fill={face.fill} stroke={colours.blockEdge} strokeWidth={0.7} strokeLinejoin="round" />
-            ));
-            return above ? (
-              <AnimatedG key={floor.id} opacity={fadeAbove}>{content}</AnimatedG>
-            ) : (
-              <G key={floor.id}>{content}</G>
-            );
-          })}
-        </Svg>
-      </Animated.View>
+    <View ref={frame} style={{ width, height, backgroundColor: colours.background, overflow: 'hidden' }} testID="building-blocks">
+      <Pressable testID="pick-floor" accessibilityLabel="Open a floor" onPress={pick} disabled={!pick}
+                 style={{ width, height }}>
+        <Animated.View style={{ width, height, transform: [{ translateX: shiftX }, { translateY: shiftY }, { scale: scaleAnim }] }}>
+          <Svg width={width} height={height}>
+            {/* a soft shadow under the building */}
+            <Path
+              d={path(floors[0]?.footprints[0]?.map((p) => toScreen(isoProject(iso, [p[0] + 1.5, p[1] - 1.5], 0))) ?? [])}
+              fill="#EDEDED"
+            />
+            {floors.map((floor, i) => {
+              const faces = blocks[i].faces;
+              const above = !!focus && floor.elevation_m > focus.elevation_m;
+              const content = faces.map((face, index) => (
+                <Path key={index} d={face.d} fill={face.fill} stroke={colours.blockEdge} strokeWidth={0.7} strokeLinejoin="round" />
+              ));
+              return above ? (
+                <AnimatedG key={floor.id} opacity={fadeAbove}>{content}</AnimatedG>
+              ) : (
+                <G key={floor.id}>{content}</G>
+              );
+            })}
+          </Svg>
+        </Animated.View>
+      </Pressable>
     </View>
   );
 }

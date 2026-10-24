@@ -74,11 +74,19 @@ export interface RoutePiece {
   then: null | { kind: string; via?: string; name?: string; to_floor_id?: string };
 }
 
+/** Edits a facility manager made to the building in this conversation (absent = none). */
+export interface MapChanges {
+  closed: string[]; // opening ids, connector ids or space ids
+  new_doors: { id: string; floor_id: string; position: Point; width_m: number }[];
+  moved: { asset_id: string; label: string; space_id: string; floor_id: string; position: Point }[];
+}
+
 export interface MapView {
   you_are_here: Place | null;
   target: Place | null;
   route: { length_m: number; pieces: RoutePiece[] } | null;
   focus_floor_id: string | null;
+  changes?: MapChanges | null;
 }
 
 export interface Question {
@@ -91,6 +99,14 @@ export interface ChatReply {
   reply: string;
   question: Question | null;
   map: MapView | null;
+}
+
+/** One row of GET /buildings. */
+export interface BuildingRow {
+  id: string;
+  split: string;
+  name?: string;
+  source?: string;
 }
 
 export class ApiError extends Error {
@@ -124,7 +140,7 @@ async function call<T>(path: string, init?: RequestInit, fetcher: typeof fetch =
 }
 
 export const api = {
-  buildings: (fetcher?: typeof fetch) => call<{ id: string; split: string }[]>('/buildings', undefined, fetcher),
+  buildings: (fetcher?: typeof fetch) => call<BuildingRow[]>('/buildings', undefined, fetcher),
   building: (id: string, fetcher?: typeof fetch) => call<BuildingDetail>(`/buildings/${id}`, undefined, fetcher),
   outline: (id: string, fetcher?: typeof fetch) => call<Outline>(`/buildings/${id}/outline`, undefined, fetcher),
   startSession: (buildingId: string, fetcher?: typeof fetch) =>
@@ -133,6 +149,8 @@ export const api = {
       { method: 'POST', body: JSON.stringify({ building_id: buildingId }) },
       fetcher,
     ),
+  endSession: (sessionId: string, fetcher?: typeof fetch) =>
+    call<{ ended: boolean }>(`/sessions/${sessionId}`, { method: 'DELETE' }, fetcher),
   /** One turn. spoken: said into the mic and read out, so Finni answers in one short sentence (and faster). */
   chat: (sessionId: string, text: string, fetcher?: typeof fetch, spoken = false) =>
     call<ChatReply>(`/sessions/${sessionId}/chat`, { method: 'POST', body: JSON.stringify({ text, spoken }) }, fetcher),
@@ -167,6 +185,21 @@ export function placeOf(position: Position, detail: { spaces: { id: string; anch
   const anchor = detail.spaces.find((space) => space.id === position.space_id)?.anchor ?? [0, 0];
   return { label: position.label, floor_id: position.floor_id, position: position.point ?? anchor,
            space_id: position.space_id };
+}
+
+/** ?building=<id> in the page's address (web only). */
+export function buildingFromUrl(
+  search = typeof window !== 'undefined' && window.location ? window.location.search : '',
+): string | undefined {
+  return new URLSearchParams(search).get('building') ?? undefined;
+}
+
+/** Put the open building in the page's address, so a reload (or a shared link) opens it again (web only). */
+export function showBuildingInUrl(id: string) {
+  if (typeof window === 'undefined' || !window.history?.replaceState || !window.location) return;
+  const url = new URL(window.location.href);
+  url.searchParams.set('building', id);
+  window.history.replaceState(null, '', url.toString());
 }
 
 /** The building to open: EXPO_PUBLIC_BUILDING if set, else the first factory, else the first building. */

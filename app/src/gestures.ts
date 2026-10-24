@@ -1,7 +1,8 @@
 /** Drag with one finger, pinch with two: the drawing follows the fingers (a cheap transform), and when they
  * let go the scene redraws itself sharp at the new place and size (onCommit). A tap that doesn't move calls
- * onTap with the finger's position on the page ("I'm here"). */
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+ * onTap with the finger's position on the page ("I'm here"). On the web the mouse wheel (and a trackpad pinch)
+ * zooms about the cursor; a click is a tap. */
+import { type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Animated, PanResponder } from 'react-native';
 
 export interface Move {
@@ -13,12 +14,29 @@ export interface Move {
 const MIN_ZOOM = 0.4;
 const MAX_ZOOM = 6;
 const TAP_SLOP_PX = 6;
+const WHEEL_ZOOM = 0.0015; // per pixel of wheel travel
+const LINE_PX = 16; // wheels that count in lines
+
+/** One move, then another: what both do together. */
+export function compose(first: Move, then: Move): Move {
+  return { k: first.k * then.k, tx: then.k * first.tx + then.tx, ty: then.k * first.ty + then.ty };
+}
+
+/** A wheel turn as a move: zoom in for a wheel pushed away (deltaY < 0), keeping the point under the cursor
+ * (x, y in the view) where it is. */
+export function wheelMove(deltaY: number, deltaMode: number, [x, y]: [number, number], width: number,
+                          height: number): Move {
+  const pixels = deltaMode === 1 ? deltaY * LINE_PX : deltaMode === 2 ? deltaY * height : deltaY;
+  const k = Math.exp(-Math.max(-300, Math.min(300, pixels)) * WHEEL_ZOOM);
+  return { k, tx: (1 - k) * (x - width / 2), ty: (1 - k) * (y - height / 2) };
+}
 
 export function useMapGestures(
   width: number,
   height: number,
   onCommit: (move: Move) => void,
   onTap?: (page: [number, number]) => void,
+  frame?: RefObject<unknown>,
 ) {
   const translate = useRef(new Animated.ValueXY()).current;
   const zoom = useRef(new Animated.Value(1)).current;
@@ -95,6 +113,32 @@ export function useMapGestures(
     });
   }, [translate, zoom]);
 
+  // The mouse wheel (web): zoom about the cursor, one redraw per animation frame however fast it turns.
+  useEffect(() => {
+    const node = frame?.current as HTMLElement | null | undefined;
+    if (!node || typeof node.addEventListener !== 'function') return;
+    let pending: Move | null = null;
+    let request: number | null = null;
+    const flush = () => {
+      request = null;
+      if (pending) commit.current(pending);
+      pending = null;
+    };
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault(); // zoom the map, not the page
+      const box = node.getBoundingClientRect();
+      const { width: w, height: h } = size.current;
+      const step = wheelMove(event.deltaY, event.deltaMode, [event.clientX - box.left, event.clientY - box.top], w, h);
+      pending = pending ? compose(pending, step) : step;
+      if (request === null) request = requestAnimationFrame(flush);
+    };
+    node.addEventListener('wheel', onWheel, { passive: false });
+    return () => {
+      node.removeEventListener('wheel', onWheel);
+      if (request !== null) cancelAnimationFrame(request);
+    };
+  }, [frame]);
+
   // The redrawn scene is on screen now: drop the temporary transform in the same frame.
   useLayoutEffect(() => {
     translate.setValue({ x: 0, y: 0 });
@@ -103,7 +147,8 @@ export function useMapGestures(
 
   return {
     panHandlers: responder.panHandlers,
-    style: { transform: [{ translateX: translate.x }, { translateY: translate.y }, { scale: zoom }] },
+    style: { transform: [{ translateX: translate.x }, { translateY: translate.y }, { scale: zoom }],
+             cursor: onTap ? ('pointer' as const) : undefined }, // a click says "I'm here"
   };
 }
 

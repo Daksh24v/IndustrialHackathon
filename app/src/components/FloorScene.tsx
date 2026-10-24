@@ -7,13 +7,14 @@ import { Animated, Easing, Platform, Pressable, StyleSheet, Text, View } from 'r
 import Svg, { G, Path, Text as SvgText } from 'react-native-svg';
 
 import type { BuildingDetail, MapView, Point } from '../api';
+import { changesOn } from '../changes';
 import {
   boundsOf, chooseCamera, clipNear, depthOf, grow, moveCamera, pixelsPerMetre, project3d, ribbon, rotateAbout,
   signedArea, unproject3d, wallSegments, type Camera, type Point3,
 } from '../geometry';
 import { useMapGestures } from '../gestures';
 import { colours, spaceFill } from '../theme';
-import { HereMarker, TargetPin, useLoop } from './Markers';
+import { ChangeMarks, HereMarker, TargetPin, useLoop } from './Markers';
 
 export const TILT = (52 * Math.PI) / 180;
 const WALL_M = 1.1;
@@ -51,7 +52,12 @@ function grey(level: number): string {
 export function FloorScene({ detail, floorId, map, footprints, width, height, onTapFloor }: Props) {
   const spaces = useMemo(() => detail.spaces.filter((space) => space.floor_id === floorId), [detail, floorId]);
   const openings = useMemo(() => detail.openings.filter((opening) => opening.floor_id === floorId), [detail, floorId]);
-  const walls = useMemo(() => wallSegments(spaces.map((space) => space.polygon), openings), [spaces, openings]);
+  const changes = useMemo(() => changesOn(detail, map, floorId), [detail, map, floorId]);
+  const newDoors = map?.changes?.new_doors;
+  const walls = useMemo(() => {
+    const added = (newDoors ?? []).filter((door) => door.floor_id === floorId); // a new door cuts a gap too
+    return wallSegments(spaces.map((space) => space.polygon), [...openings, ...added]);
+  }, [spaces, openings, newDoors, floorId]);
   const pieces = useMemo(() => (map?.route?.pieces ?? []).filter((piece) => piece.floor_id === floorId), [map, floorId]);
   const here = map?.you_are_here?.floor_id === floorId ? map.you_are_here : null;
   const target = map?.target?.floor_id === floorId ? map.target : null;
@@ -82,7 +88,7 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
           onTapFloor(floorId, unproject3d(camera.current, [pageX - left, pageY - top])))
     : undefined;
   const gestures = useMapGestures(width, height, ({ k, tx, ty }) =>
-    setCam((current) => moveCamera(current, k, tx, ty, width, height)), tapped);
+    setCam((current) => moveCamera(current, k, tx, ty, width, height)), tapped, frame);
   const zoomBy = (k: number) => setCam((current) => moveCamera(current, k, 0, 0, width, height));
 
   // Turn a quarter about whatever is in the middle of the screen.
@@ -134,8 +140,10 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
     slabSides.sort((x, y) => y.depth - x.depth);
     const slabTops = footprints.map((ring) => flat(ring)).filter((d): d is string => !!d);
 
-    const tiles = spaces.map((space) => ({ id: space.id, d: flat(space.polygon), fill: spaceFill[space.type] ?? colours.room }))
-      .filter((tile) => tile.d);
+    const tiles = spaces.map((space) => ({
+      id: space.id, d: flat(space.polygon), closed: changes.closedSpaces.has(space.id),
+      fill: changes.closedSpaces.has(space.id) ? colours.closedFaint : spaceFill[space.type] ?? colours.room,
+    })).filter((tile) => tile.d);
 
     const routes = pieces.map((piece) => ({
       glow: flat(ribbon(piece.points, 1.1), 0.02),
@@ -172,7 +180,7 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
       return [{ id: space.id, x, y, text, size: Math.min(13, Math.max(8.5, ppm * 0.9)) }];
     });
     return { slabSides, slabTops, tiles, routes, wallFaces, labels };
-  }, [cam, footprints, spaces, pieces, walls, width, height]);
+  }, [cam, footprints, spaces, pieces, walls, width, height, changes]);
 
   // The route fades in; arrows flow along it.
   const flow = useLoop(900);
@@ -195,7 +203,10 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
           <G transform={`translate(${MARGIN_PX} ${MARGIN_PX})`}>
             {scene.slabSides.map((side, i) => <Path key={`slab-${i}`} d={side.d} fill="#E2E2E2" stroke="#D2D2D2" strokeWidth={0.6} />)}
             {scene.slabTops.map((d, i) => <Path key={`top-${i}`} d={d} fill={colours.background} stroke="#D6D6D6" strokeWidth={1} />)}
-            {scene.tiles.map((tile) => <Path key={tile.id} d={tile.d!} fill={tile.fill} />)}
+            {scene.tiles.map((tile) => (
+              <Path key={tile.id} d={tile.d!} fill={tile.fill} testID={tile.closed ? 'closed-space' : undefined}
+                    stroke={tile.closed ? colours.closed : undefined} strokeWidth={tile.closed ? 1.5 : undefined} />
+            ))}
             {scene.labels.map((label) => (
               <SvgText key={`label-${label.id}`} x={label.x} y={label.y + label.size / 3} fill={colours.label}
                        fontSize={label.size} fontFamily={LABEL_FONT} textAnchor="middle">
@@ -218,6 +229,8 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
               <Path key={`ghost-${i}`} d={route.line} stroke={colours.accent} strokeOpacity={0.35} strokeWidth={2.5}
                     strokeLinecap="round" strokeLinejoin="round" fill="none" />
             ))}
+            <ChangeMarks changes={changes} project={(p) => project3d(cam, p)} fontFamily={LABEL_FONT}
+                         visible={(p) => depthOf(cam, p) > cam.distance * 0.3} />
             {targetPx && (
               <TargetPin x={targetPx.at[0]} y={targetPx.at[1]} height={Math.min(48, Math.max(30, targetPx.ppm * 2.6))}
                          flatten={flatten} />

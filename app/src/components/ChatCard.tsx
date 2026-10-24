@@ -1,6 +1,7 @@
 /** The conversation at the top, under the logo (so the keyboard never covers it): the "Talk to Finni…" field
  * with an orange mic (src/useVoice.ts: tap once to talk, again to interrupt or stop), and under it a card with
- * the replies and the agent's question as tappable chips. The card folds away to give the map more room. */
+ * the replies and the agent's question as tappable chips. The card folds away to give the map more room.
+ * On a wide screen (side) it is a full-height panel beside the map instead, and the messages fill it. */
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { ScrollViewInstance } from 'react-native';
@@ -30,6 +31,8 @@ interface Props {
   onSend: (text: string) => void;
   onMic?: () => void;
   mic?: MicState;
+  side?: boolean; // a full-height panel beside the map (wide screens)
+  note?: string | null; // a short, quiet line under the messages, e.g. a new conversation was started
 }
 
 const MIC_HINT: Record<MicState, string> = {
@@ -39,7 +42,7 @@ const MIC_HINT: Record<MicState, string> = {
   speaking: 'Speaking… tap the mic to interrupt',
 };
 
-export function ChatCard({ messages, question, busy, onSend, onMic, mic = 'off' }: Props) {
+export function ChatCard({ messages, question, busy, onSend, onMic, mic = 'off', side = false, note }: Props) {
   const [text, setText] = useState('');
   const [open, setOpen] = useState(true);
   const scroll = useRef<ScrollViewInstance>(null);
@@ -56,8 +59,9 @@ export function ChatCard({ messages, question, busy, onSend, onMic, mic = 'off' 
   };
 
   const talking = messages.length > 0 || !!question || busy;
+  const shown = open || side;
   return (
-    <View style={styles.wrap}>
+    <View style={[styles.wrap, side && styles.wrapSide]}>
       <View style={styles.inputRow}>
         <TextInput
           testID="chat-input"
@@ -90,7 +94,8 @@ export function ChatCard({ messages, question, busy, onSend, onMic, mic = 'off' 
       {MIC_HINT[mic] ? <Text testID="mic-hint" style={styles.micHint}>{MIC_HINT[mic]}</Text> : null}
 
       {!talking && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.starters}>
+        <ScrollView horizontal={!side} showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={[styles.starters, side && styles.startersSide]}>
           {STARTERS.map((starter) => (
             <Pressable key={starter} testID={`starter-${starter}`} style={styles.starter} onPress={() => send(starter)}>
               <Text style={styles.starterText}>{starter}</Text>
@@ -100,20 +105,24 @@ export function ChatCard({ messages, question, busy, onSend, onMic, mic = 'off' 
       )}
 
       {talking && (
-        <View style={styles.card} testID="chat-card">
-          <Pressable testID="fold" accessibilityLabel={open ? 'Hide the conversation' : 'Show the conversation'}
-                     style={styles.fold} onPress={() => setOpen(!open)} hitSlop={8}>
-            <View style={styles.handle} />
-          </Pressable>
-          {open && (
+        <View style={[styles.card, side && styles.cardSide]} testID="chat-card">
+          {!side && (
+            <Pressable testID="fold" accessibilityLabel={open ? 'Hide the conversation' : 'Show the conversation'}
+                       style={styles.fold} onPress={() => setOpen(!open)} hitSlop={8}>
+              <View style={styles.handle} />
+            </Pressable>
+          )}
+          {shown && (
             <>
-              <ScrollView ref={scroll} style={styles.messages} contentContainerStyle={{ gap: 6 }}>
+              <ScrollView ref={scroll} testID="messages" style={side ? styles.messagesSide : styles.messages}
+                          contentContainerStyle={{ gap: 6 }}>
                 {messages.map((message, index) => (
                   <Text key={index} style={message.from === 'you' ? styles.you : styles.guide}>
                     {plain(message.text)}
                   </Text>
                 ))}
                 {busy && <Text style={styles.thinking}>Finni is looking…</Text>}
+                {!!note && <Text testID="note" style={styles.note}>{note}</Text>}
               </ScrollView>
               {question && (
                 <View testID="question">
@@ -131,7 +140,7 @@ export function ChatCard({ messages, question, busy, onSend, onMic, mic = 'off' 
               )}
             </>
           )}
-          {!open && messages.length > 0 && (
+          {!shown && messages.length > 0 && (
             <Text style={styles.folded} numberOfLines={1}>{plain(messages[messages.length - 1].text)}</Text>
           )}
         </View>
@@ -142,6 +151,7 @@ export function ChatCard({ messages, question, busy, onSend, onMic, mic = 'off' 
 
 const styles = StyleSheet.create({
   wrap: { paddingHorizontal: 16, gap: 10, paddingBottom: 8 },
+  wrapSide: { flex: 1, paddingBottom: 16 },
   inputRow: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: colours.background, borderRadius: 24,
     paddingLeft: 18, paddingRight: 4, borderWidth: 1, borderColor: '#ECECEC',
@@ -153,6 +163,7 @@ const styles = StyleSheet.create({
   micOn: { backgroundColor: colours.accent },
   micHint: { color: colours.accent, fontSize: 12, textAlign: 'center', marginTop: -4 },
   starters: { gap: 8 },
+  startersSide: { flexDirection: 'row', flexWrap: 'wrap' },
   starter: { backgroundColor: colours.chip, borderRadius: 16, paddingHorizontal: 12, paddingVertical: 7 },
   starterText: { color: colours.chipText, fontSize: 13 },
   card: {
@@ -160,13 +171,16 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: '#F0F0F0',
     shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 2,
   },
+  cardSide: { flex: 1, paddingTop: 12 },
   fold: { alignSelf: 'center', paddingVertical: 4 },
   handle: { width: 32, height: 4, borderRadius: 2, backgroundColor: colours.blockEdge },
   messages: { maxHeight: 120 },
+  messagesSide: { flex: 1 },
   you: { alignSelf: 'flex-end', backgroundColor: colours.chip, color: colours.text, paddingHorizontal: 12, paddingVertical: 7,
          borderRadius: 14, overflow: 'hidden', maxWidth: '85%' },
   guide: { alignSelf: 'flex-start', color: colours.text, maxWidth: '94%', lineHeight: 20 },
   thinking: { color: colours.muted, fontStyle: 'italic' },
+  note: { color: colours.muted, fontSize: 12, alignSelf: 'center', textAlign: 'center' },
   folded: { color: colours.muted },
   question: { color: colours.text, fontWeight: '600', marginBottom: 8 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },

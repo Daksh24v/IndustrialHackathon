@@ -15,10 +15,13 @@ export interface State {
   floorId: string | null;
   busy: boolean;
   error: string | null;
+  note: string | null; // a quiet line in the chat, e.g. a new conversation was started
 }
 
 export type Event =
+  | { type: 'switch' } // another building: start over
   | { type: 'loaded'; detail: BuildingDetail; outline: Outline; sessionId: string }
+  | { type: 'renewed'; sessionId: string; note: string } // the old conversation was lost; the messages stay
   | { type: 'send'; text: string }
   | { type: 'reply'; reply: ChatReply }
   | { type: 'arrived' }
@@ -29,15 +32,19 @@ export type Event =
 
 export const initial: State = {
   view: 'loading', detail: null, outline: null, sessionId: null, messages: [], question: null, map: null,
-  floorId: null, busy: false, error: null,
+  floorId: null, busy: false, error: null, note: null,
 };
 
 export function reduce(state: State, event: Event): State {
   switch (event.type) {
+    case 'switch':
+      return initial;
     case 'loaded':
       return { ...state, view: 'outside', detail: event.detail, outline: event.outline, sessionId: event.sessionId, error: null };
+    case 'renewed':
+      return { ...state, sessionId: event.sessionId, note: event.note };
     case 'send':
-      return { ...state, busy: true, error: null, question: null,
+      return { ...state, busy: true, error: null, note: null, question: null,
                messages: [...state.messages, { from: 'you', text: event.text }] };
     case 'reply': {
       const { reply, question, map } = event.reply;

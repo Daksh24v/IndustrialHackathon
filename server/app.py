@@ -3,7 +3,8 @@
   uv run --env-file .env uvicorn server.app:app --reload        # http://localhost:8000/docs
 
 Endpoints
-- GET  /buildings                         buildings this server knows
+- GET  /buildings                         buildings this server knows: id, name, source, split
+- POST /buildings/reload                  look for buildings again (one dropped into data/<split>/<id>/)
 - GET  /buildings/{id}                    everything needed to draw it (floors, spaces, doors, lifts, things)
 - GET  /buildings/{id}/outline            per floor: footprint, elevation, height (the 3D outside view)
 - POST /buildings/{id}/route              a route without the agent: length + lines per floor
@@ -18,8 +19,11 @@ Endpoints
                                           the hands-free demo page. Needs ELEVENLABS_API_KEY in .env.
 """
 
+import json
+import logging
 import threading
 import uuid
+from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
 
@@ -36,18 +40,36 @@ from shapely.ops import unary_union
 from navagent.agent import BUILDER, CHAT, BuildingAgent
 from navagent.builder import Draft
 from navagent.tools import Session
-from navcore.engine import Building, EngineError
+from navcore.engine import Building, Constraints, EngineError
 from navcore.plans import PlanError
 from navcore.resolve import AmbiguousSpace, NoSuchSpace
 from voice import app as voice_service
 
 DATA = Path(__file__).resolve().parent.parent / "data"
 MAX_SESSIONS = 200
+DEMO_BUILDING = os.environ.get("NAV_DEMO_BUILDING", "proc-factory-dev-003")
+log = logging.getLogger(__name__)
 
-app = FastAPI(title="Talk to your building", version="1.0")
+
+def warm_up() -> None:
+    """Build the demo building's route graph before anyone asks, so the first route in the demo is fast."""
+    try:
+        load(DEMO_BUILDING).graph(Constraints())
+    except Exception:  # a missing or broken demo building must not stop the server
+        log.exception("Couldn't warm up %s", DEMO_BUILDING)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    threading.Thread(target=warm_up, name="warm-up", daemon=True).start()
+    yield
+
+
+app = FastAPI(title="Talk to your building", version="1.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 _sessions: dict[str, BuildingAgent] = {}
+_turns: dict[str, threading.Lock] = {}  # one turn at a time per conversation, so histories never interleave
 _lock = threading.Lock()
 _client: anthropic.Anthropic | None = None
 
@@ -68,8 +90,17 @@ def building_paths() -> dict[str, Path]:
 def building_path(building_id: str) -> Path:
     path = building_paths().get(building_id)
     if path is None:
+        building_paths.cache_clear()  # maybe it was dropped in after start (the Sunday building)
+        path = building_paths().get(building_id)
+    if path is None:
         raise HTTPException(404, f"Unknown building '{building_id}'.")
     return path
+
+
+@lru_cache(maxsize=1024)
+def building_info(path: Path, modified: float) -> dict:
+    """The building.json's `building` object (name, source, ...); read once per file version."""
+    return json.loads((path / "building.json").read_text(encoding="utf-8"))["building"]
 
 
 @lru_cache(maxsize=32)
@@ -82,10 +113,24 @@ def load(building_id: str) -> Building:
 
 @app.get("/buildings")
 def list_buildings() -> list[dict]:
+    building_paths.cache_clear()  # a glob is cheap; a building dropped in shows up without a restart
     rows = []
     for building_id, path in building_paths().items():
-        rows.append({"id": building_id, "split": path.parent.name})
+        try:
+            info = building_info(path, (path / "building.json").stat().st_mtime)
+        except (OSError, ValueError, KeyError):
+            info = {}  # half-copied or broken: still listed, the detail call says what's wrong
+        rows.append({"id": building_id, "split": path.parent.name, "name": info.get("name") or building_id,
+                     "source": info.get("source") or path.parent.name})
     return rows
+
+
+@app.post("/buildings/reload")
+def reload_buildings() -> dict:
+    """Forget everything read so far and look for buildings again."""
+    forget_buildings()
+    building_info.cache_clear()
+    return {"buildings": len(building_paths())}
 
 
 @app.get("/buildings/{building_id}")
@@ -166,11 +211,19 @@ def start_session(request: SessionRequest) -> dict:
     agent = BuildingAgent(Session(Building.load(building_path(request.building_id))), client(), mode=CHAT)
     session_id = uuid.uuid4().hex
     with _lock:
-        if len(_sessions) >= MAX_SESSIONS:
-            _sessions.pop(next(iter(_sessions)))  # forget the oldest conversation
-        _sessions[session_id] = agent
+        remember(session_id, agent)
     return {"session_id": session_id, "building_id": request.building_id,
             "building_name": agent.session.building.info["name"]}
+
+
+def remember(session_id: str, agent: BuildingAgent) -> None:
+    """Keep a new conversation (call with _lock held)."""
+    if len(_sessions) >= MAX_SESSIONS:
+        oldest = next(iter(_sessions))  # forget the oldest conversation
+        _sessions.pop(oldest)
+        _turns.pop(oldest, None)
+    _sessions[session_id] = agent
+    _turns[session_id] = threading.Lock()
 
 
 def agent_for(session_id: str) -> BuildingAgent:
@@ -186,16 +239,25 @@ def chat(session_id: str, request: ChatRequest) -> dict:
     buttons and a voice front end can read out; the person's pick is sent back as the next `text`.
     `map` (if any) is what to draw: their position, the target and the route lines per floor."""
     agent = agent_for(session_id)
-    try:
-        reply = agent.ask(request.text, spoken=request.spoken)
-    except anthropic.APIStatusError as error:
-        raise HTTPException(502, f"Claude API error {error.status_code}") from error
-    except anthropic.APIConnectionError as error:
-        raise HTTPException(503, "Can't reach the Claude API") from error
-    draft = agent.session.draft
-    if draft is not None and draft.saved_to is not None:
-        forget_buildings()  # the agent saved it: make it visible to GET /buildings and new sessions
-    return {"reply": reply, "question": agent.session.pending_question, "map": agent.session.map_view}
+    with _lock:
+        turn = _turns.setdefault(session_id, threading.Lock())
+    with turn:  # a second message waits for the first answer
+        try:
+            reply = agent.ask(request.text, spoken=request.spoken)
+        except anthropic.APIStatusError as error:
+            raise HTTPException(502, f"Claude API error {error.status_code}") from error
+        except anthropic.APIConnectionError as error:
+            raise HTTPException(503, "Can't reach the Claude API") from error
+        except HTTPException:
+            raise
+        except Exception as error:
+            log.exception("Chat turn failed in session %s", session_id)
+            raise HTTPException(500, f"Finni hit an error answering that ({type(error).__name__}); "
+                                     "please try again.") from error
+        draft = agent.session.draft
+        if draft is not None and draft.saved_to is not None:
+            forget_buildings()  # the agent saved it: make it visible to GET /buildings and new sessions
+        return {"reply": reply, "question": agent.session.pending_question, "map": agent.session.map_view}
 
 
 # ---------- new buildings from floor plans (Level 4) ----------
@@ -233,9 +295,7 @@ def start_import(request: ImportRequest) -> dict:
     agent = BuildingAgent(session, client(), mode=BUILDER)
     session_id = uuid.uuid4().hex
     with _lock:
-        if len(_sessions) >= MAX_SESSIONS:
-            _sessions.pop(next(iter(_sessions)))
-        _sessions[session_id] = agent
+        remember(session_id, agent)
     return {"session_id": session_id, "building_id": building_id, "summary": draft.summary()}
 
 
@@ -297,6 +357,7 @@ def clear_position(session_id: str) -> dict:
 def end_session(session_id: str) -> dict:
     with _lock:
         _sessions.pop(session_id, None)
+        _turns.pop(session_id, None)
     return {"ended": True}
 
 

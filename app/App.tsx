@@ -1,16 +1,20 @@
 import { StatusBar } from 'expo-status-bar';
 import { Component, type ReactNode, useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { api, ApiError, pickBuilding, placeOf, type Point } from './src/api';
+import {
+  api, ApiError, buildingFromUrl, type BuildingRow, pickBuilding, placeOf, type Point, showBuildingInUrl,
+} from './src/api';
 import { BuildingBlocks } from './src/components/BuildingBlocks';
+import { BuildingPicker } from './src/components/BuildingPicker';
 import { ChatCard } from './src/components/ChatCard';
 import { FinniLogo } from './src/components/FinniLogo';
 import { FloorPlan } from './src/components/FloorPlan';
 import { FloorScene } from './src/components/FloorScene';
+import { chatTurn, RENEWED_NOTE } from './src/session';
 import { initial, nextStep, reduce } from './src/state';
-import { colours } from './src/theme';
+import { colours, isWide } from './src/theme';
 import { useVoice } from './src/useVoice';
 
 /** Shows an error on screen (with what went wrong) instead of a crashed app. */
@@ -49,19 +53,50 @@ function Guide() {
   const [state, dispatch] = useReducer(reduce, initial);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [threeD, setThreeD] = useState(true);
+  const [buildings, setBuildings] = useState<BuildingRow[]>([]);
+  const [buildingId, setBuildingId] = useState<string | null>(null);
   const insets = useSafeAreaInsets();
+  const wide = isWide(useWindowDimensions().width);
 
+  // Which building: ?building=<id> in the address (web), else EXPO_PUBLIC_BUILDING, else the first factory.
   useEffect(() => {
     (async () => {
       try {
-        const id = pickBuilding((await api.buildings()).map((row) => row.id));
+        const rows = await api.buildings();
+        setBuildings(rows);
+        const id = pickBuilding(rows.map((row) => row.id), buildingFromUrl());
         if (!id) throw new ApiError('The server has no buildings.', 0);
-        const [detail, outline, session] = await Promise.all([api.building(id), api.outline(id), api.startSession(id)]);
-        dispatch({ type: 'loaded', detail, outline, sessionId: session.session_id });
+        setBuildingId(id);
       } catch (error) {
         dispatch({ type: 'error', message: (error as Error).message });
       }
     })();
+  }, []);
+
+  // Open it with a new conversation; switching buildings starts over (and ends the old conversation).
+  const generation = useRef(0); // answers that arrive after a switch belong to the old building
+  const sessionRef = useRef<string | null>(null);
+  sessionRef.current = state.sessionId;
+  useEffect(() => {
+    if (!buildingId) return;
+    const mine = ++generation.current;
+    const previous = sessionRef.current;
+    if (previous) void api.endSession(previous).catch(() => {});
+    dispatch({ type: 'switch' });
+    (async () => {
+      try {
+        const [detail, outline, session] = await Promise.all([
+          api.building(buildingId), api.outline(buildingId), api.startSession(buildingId)]);
+        if (mine === generation.current) dispatch({ type: 'loaded', detail, outline, sessionId: session.session_id });
+      } catch (error) {
+        if (mine === generation.current) dispatch({ type: 'error', message: (error as Error).message });
+      }
+    })();
+  }, [buildingId]);
+
+  const pickOther = useCallback((id: string) => {
+    showBuildingInUrl(id);
+    setBuildingId(id);
   }, []);
 
   // Voice (../voice): the mic hands over what was said like typed text; answers are read out.
@@ -73,21 +108,27 @@ function Guide() {
   });
   const talking = voice.mic !== 'off'; // a spoken conversation: short answers, read out
 
+  // One turn. If the server lost the conversation (restarted) or the Claude API failed, a new conversation
+  // starts by itself and the question is asked again: the messages on screen stay.
+  const here = state.map?.you_are_here ?? null;
   const send = useCallback(
     async (text: string) => {
-      if (!state.sessionId) return;
+      if (!state.sessionId || !buildingId) return;
+      const mine = generation.current;
       dispatch({ type: 'send', text });
       voice.waiting();
       try {
-        const reply = await api.chat(state.sessionId, text, undefined, talking);
-        dispatch({ type: 'reply', reply });
-        void voice.say(reply);
+        const turn = await chatTurn({ sessionId: state.sessionId, buildingId, text, spoken: talking, here });
+        if (mine !== generation.current) return;
+        if (turn.renewed) dispatch({ type: 'renewed', sessionId: turn.sessionId, note: RENEWED_NOTE });
+        dispatch({ type: 'reply', reply: turn.reply });
+        void voice.say(turn.reply);
       } catch (error) {
         voice.stop();
-        dispatch({ type: 'error', message: (error as Error).message });
+        if (mine === generation.current) dispatch({ type: 'error', message: (error as Error).message });
       }
     },
-    [state.sessionId, voice, talking],
+    [state.sessionId, buildingId, voice, talking, here],
   );
   sendRef.current = send;
 
@@ -112,22 +153,27 @@ function Guide() {
   const stepFloor = floors.find((floor) => floor.id === step?.to_floor_id);
   const inside = state.view === 'floor';
   const bottom = Math.max(insets.bottom, 12);
+  const row = buildings.find((item) => item.id === buildingId);
+  const current = state.detail?.building ?? (row ? { id: row.id, name: row.name ?? row.id } : null);
 
   return (
-    <SafeAreaView style={styles.screen} edges={['top', 'left', 'right']}>
+    <SafeAreaView style={[styles.screen, wide && styles.wide]} edges={['top', 'left', 'right']}>
       <StatusBar style="dark" />
-      <View style={styles.header}>
-        {inside || state.view === 'flying' ? (
-          <Pressable testID="back" accessibilityLabel="Back to the building" onPress={() => dispatch({ type: 'back' })}
-                     style={styles.back} hitSlop={8}>
-            <Text style={styles.backText}>‹</Text>
-          </Pressable>
-        ) : null}
-        <FinniLogo />
+      <View style={wide ? styles.side : styles.top} testID={wide ? 'side-panel' : 'top-panel'}>
+        <View style={styles.header}>
+          {inside || state.view === 'flying' ? (
+            <Pressable testID="back" accessibilityLabel="Back to the building" onPress={() => dispatch({ type: 'back' })}
+                       style={styles.back} hitSlop={8}>
+              <Text style={styles.backText}>‹</Text>
+            </Pressable>
+          ) : null}
+          <FinniLogo />
+          <BuildingPicker buildings={buildings} current={current} onPick={pickOther} />
+        </View>
+        <ChatCard messages={state.messages} question={state.question} busy={state.busy} onSend={send}
+                  onMic={voice.toggle} mic={voice.mic} side={wide} note={state.note} />
+        {state.error ? <Text testID="error" style={styles.error}>{state.error}</Text> : null}
       </View>
-      <ChatCard messages={state.messages} question={state.question} busy={state.busy} onSend={send}
-                onMic={voice.toggle} mic={voice.mic} />
-      {state.error ? <Text testID="error" style={styles.error}>{state.error}</Text> : null}
 
       <View style={styles.map} onLayout={(e) => setSize(e.nativeEvent.layout)}>
         {state.view === 'loading' && !state.error ? <ActivityIndicator color={colours.accent} style={{ flex: 1 }} /> : null}
@@ -136,6 +182,7 @@ function Guide() {
             outline={state.outline}
             focusFloorId={state.view === 'flying' ? state.floorId : null}
             onArrived={() => dispatch({ type: 'arrived' })}
+            onPickFloor={(floorId) => dispatch({ type: 'floor', floorId })}
             width={size.width}
             height={size.height}
           />
@@ -194,7 +241,12 @@ function Guide() {
 const edge = { borderWidth: StyleSheet.hairlineWidth, borderColor: colours.blockEdge };
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colours.background },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 6, paddingBottom: 10, gap: 6 },
+  wide: { flexDirection: 'row' },
+  top: { zIndex: 2 }, // the building menu opens over the map
+  side: { width: 360, zIndex: 2, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: colours.blockEdge,
+          backgroundColor: colours.background },
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 6, paddingBottom: 10, gap: 6,
+            zIndex: 2 },
   back: { width: 28, height: 32, alignItems: 'center', justifyContent: 'center', marginLeft: -6 },
   backText: { fontSize: 32, color: colours.text, marginTop: -4 },
   title: { fontSize: 18, fontWeight: '700', color: colours.text },

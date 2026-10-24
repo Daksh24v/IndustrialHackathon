@@ -19,6 +19,10 @@ export const colours = {
   accentSoft: 'rgba(255, 122, 0, 0.35)',
   accentFaint: 'rgba(255, 122, 0, 0.12)',
   error: '#C62828',
+  closed: '#E53935', // building edits: closed doors, lifts and rooms
+  closedFaint: 'rgba(229, 57, 53, 0.16)',
+  added: '#2E9E44', // new doors
+  moved: '#2F6FED', // things moved to a new place
 } as const;
 
 export const spaceFill: Record<string, string> = {
@@ -29,3 +33,7 @@ export const spaceFill: Record<string, string> = {
   lift: colours.shaft,
   outdoor: colours.outdoor,
 };
+
+/** Screens at least this wide get the chat as a panel beside the map (desktop); narrower ones the phone layout. */
+export const WIDE_PX = 900;
+export const isWide = (width: number) => width >= WIDE_PX;

@@ -1,6 +1,9 @@
 """The HTTP backend, with a scripted fake Claude (no API calls)."""
 
 import math
+import shutil
+import threading
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -36,6 +39,31 @@ def test_buildings_list_and_detail(http):
     assert {"polygon", "area_m2", "anchor", "type", "name"} <= set(space)
     assert detail["openings"] and detail["assets"]
     assert http.get("/buildings/nope").status_code == 404
+
+
+def test_buildings_list_names_and_sources(http):
+    rows = {row["id"]: row for row in http.get("/buildings").json()}
+    assert rows[BUILDING] == {"id": BUILDING, "split": "dev", "name": "Fertigung Ost 27", "source": "procedural"}
+    assert all(row["name"] and row["source"] for row in rows.values())
+
+
+def test_a_building_dropped_in_shows_up_without_a_restart(http, monkeypatch, tmp_path):
+    from tests.conftest import DATA
+
+    monkeypatch.setattr(server, "DATA", tmp_path)
+    server.forget_buildings()
+    shutil.copytree(DATA / "dev" / BUILDING, tmp_path / "dev" / BUILDING)
+    try:
+        assert [row["id"] for row in http.get("/buildings").json()] == [BUILDING]
+        shutil.copytree(DATA / "dev" / BUILDING, tmp_path / "sunday" / "sunday-1")
+        assert http.get("/buildings/sunday-1").status_code == 200  # found on a miss
+        assert {row["id"]: row["split"] for row in http.get("/buildings").json()}["sunday-1"] == "sunday"
+        shutil.copytree(DATA / "dev" / BUILDING, tmp_path / "sunday" / "sunday-2")
+        assert http.post("/buildings/reload").json() == {"buildings": 3}
+        assert http.post("/sessions", json={"building_id": "sunday-2"}).status_code == 200
+    finally:
+        monkeypatch.undo()
+        server.forget_buildings()
 
 
 def vertical_cost(kind: str, rise_m: float) -> float:
@@ -136,6 +164,54 @@ def test_sessions_are_separate_and_can_end(http):
     assert http.post(f"/sessions/{first}/chat", json={"text": "hi"}).status_code == 404
     assert http.post("/sessions", json={"building_id": "nope"}).status_code == 404
     assert http.post(f"/sessions/{second}/chat", json={"text": ""}).status_code == 422
+
+
+def test_two_quick_messages_wait_for_each_other(http):
+    """A second message in the same conversation waits for the first answer: the history never interleaves."""
+    session_id = http.post("/sessions", json={"building_id": BUILDING}).json()["session_id"]
+    agent = server._sessions[session_id]
+    running, overlaps, order = [0], [], []
+
+    def slow_ask(text, spoken=False):
+        running[0] += 1
+        overlaps.append(running[0])
+        time.sleep(0.2)
+        order.append(text)
+        running[0] -= 1
+        return f"answer to {text}"
+
+    agent.ask = slow_ask
+    replies = {}
+    threads = [threading.Thread(target=lambda text=text: replies.setdefault(
+        text, server.chat(session_id, server.ChatRequest(text=text))["reply"])) for text in ("one", "two")]
+    for thread in threads:
+        thread.start()
+        time.sleep(0.05)
+    for thread in threads:
+        thread.join()
+    assert max(overlaps) == 1 and order == ["one", "two"]
+    assert replies == {"one": "answer to one", "two": "answer to two"}
+
+
+def test_a_crash_in_a_turn_is_a_clear_500(http):
+    session_id = http.post("/sessions", json={"building_id": BUILDING}).json()["session_id"]
+
+    def broken(text, spoken=False):
+        raise KeyError("floor")
+
+    server._sessions[session_id].ask = broken
+    response = http.post(f"/sessions/{session_id}/chat", json={"text": "hi"})
+    assert response.status_code == 500 and "KeyError" in response.json()["detail"]
+    server._sessions[session_id].ask = lambda text, spoken=False: "fine again"
+    assert http.post(f"/sessions/{session_id}/chat", json={"text": "hi"}).json()["reply"] == "fine again"
+
+
+def test_the_demo_building_is_warmed_up_at_start(http):
+    for _ in range(100):
+        if server.load(server.DEMO_BUILDING)._graphs:
+            break
+        time.sleep(0.05)
+    assert server.load(server.DEMO_BUILDING)._graphs
 
 
 def test_outline_has_one_footprint_set_per_floor(http):

@@ -333,3 +333,14 @@ export function moveTransform(t: Transform, k: number, tx: number, ty: number, w
   return { ...t, scale: t.scale * k, offsetX: width / 2 + k * (t.offsetX - width / 2) + tx,
            offsetY: height / 2 + k * (t.offsetY - height / 2) + ty };
 }
+
+/** Whether a point is inside a polygon (even-odd rule). */
+export function pointInPolygon([px, py]: Point, polygon: Point[]): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+    const [xi, yi] = polygon[i];
+    const [xj, yj] = polygon[j];
+    if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}

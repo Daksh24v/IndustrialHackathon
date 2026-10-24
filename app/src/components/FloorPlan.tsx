@@ -6,13 +6,14 @@ import { Animated, Easing, Pressable, Text, View } from 'react-native';
 import Svg, { G, Path, Text as SvgText } from 'react-native-svg';
 
 import type { BuildingDetail, MapView, Point } from '../api';
+import { changesOn } from '../changes';
 import {
   boundsOf, fit, grow, linePath, lineLength, moveTransform, polygonPath, toScreen, toWorld, type Transform,
 } from '../geometry';
 import { useMapGestures } from '../gestures';
 import { colours, spaceFill } from '../theme';
 import { LABEL_FONT, styles } from './FloorScene';
-import { HereMarker, TargetPin } from './Markers';
+import { ChangeMarks, HereMarker, TargetPin } from './Markers';
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 const FOCUS_MARGIN_M = 8;
@@ -37,6 +38,7 @@ export function FloorPlan({ detail, floorId, map, width, height, onTapFloor }: P
   );
   const here = map?.you_are_here?.floor_id === floorId ? map.you_are_here : null;
   const target = map?.target?.floor_id === floorId ? map.target : null;
+  const changes = useMemo(() => changesOn(detail, map, floorId), [detail, map, floorId]);
 
   // Fit to what matters: the route and the two places if there are any, else the whole floor.
   const fitted = useMemo(() => {
@@ -61,7 +63,7 @@ export function FloorPlan({ detail, floorId, map, width, height, onTapFloor }: P
           onTapFloor(floorId, toWorld(shown.current, [pageX - left, pageY - top])))
     : undefined;
   const gestures = useMapGestures(width, height, ({ k, tx, ty }) =>
-    setTransform((current) => moveTransform(current, k, tx, ty, width, height)), tapped);
+    setTransform((current) => moveTransform(current, k, tx, ty, width, height)), tapped, frame);
   const zoomBy = (k: number) => setTransform((current) => moveTransform(current, k, 0, 0, width, height));
 
   // The route draws itself in.
@@ -85,6 +87,10 @@ export function FloorPlan({ detail, floorId, map, width, height, onTapFloor }: P
             {spaces.map((space) => (
               <Path key={space.id} d={polygonPath(transform, space.polygon)} fill={spaceFill[space.type] ?? colours.room}
                     stroke={colours.wall} strokeWidth={wall} />
+            ))}
+            {spaces.filter((space) => changes.closedSpaces.has(space.id)).map((space) => (
+              <Path key={`closed-${space.id}`} testID="closed-space" d={polygonPath(transform, space.polygon)}
+                    fill={colours.closedFaint} stroke={colours.closed} strokeWidth={1.5} />
             ))}
             {spaces.map((space) => {
               const side = Math.sqrt(space.area_m2) * transform.scale;
@@ -115,6 +121,7 @@ export function FloorPlan({ detail, floorId, map, width, height, onTapFloor }: P
                 />
               </G>
             ))}
+            <ChangeMarks changes={changes} project={(p) => toScreen(transform, p)} fontFamily={LABEL_FONT} />
             {targetPx && <TargetPin x={targetPx[0]} y={targetPx[1]} height={34} />}
             {herePx && <HereMarker x={herePx[0]} y={herePx[1]} radius={8} />}
           </G>
