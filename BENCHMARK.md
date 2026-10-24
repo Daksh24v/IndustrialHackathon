@@ -37,11 +37,25 @@ checks the hold-out and is run only at checkpoints. The kit's `data/test` is a s
 
 ## Results
 
-| Check | Result |
-|---|---|
-| Offline: tools + code-written answer line on all build-set benchmark questions | all pass (`uv run pytest`) |
-| Offline: build-set warm-up routes, step-free, closures, tours | match the official lengths to the centimetre |
-| Live agent: build sample / hold-out / test submission | pending the paid runs |
+All live runs use the Claude agent (benchmark mode) with the engine's tools.
+
+| Run (date 2026-10-24) | Buildings | Correct |
+|---|---|---|
+| Smoke test, one question per kind | build | 9 / 9 |
+| Benchmark questions, 3 per kind | build | 24 / 24 |
+| Warm-up questions (where is, how many, routes, step-free, closures, tours) | build | 18 / 18 |
+| Both sets reworded by Claude (casual, terse, formal, roundabout) | build | 41 / 41 |
+| **Hold-out, run once, nothing tuned on it** | **hold-out** | **34 / 36 (94%)** |
+
+The two hold-out misses (`osm-way37850565-H03`, `osm-way52060470-H06`) name a room whose name exists more
+than once on its floor ("Büro" three times, "Genusswerk" twice), so the question doesn't say which one is
+meant. This was known before the split (see the Phase 1 notes); the hold-out questions themselves were not read.
+
+Offline checks (`uv run pytest`, free): tools + code-written answer lines on every build-set benchmark
+question; warm-up routes exact to the centimetre; an independent router; invariance under renaming,
+reordering, moving and rotating; stress buildings; every tool on every build and test building.
+
+Cost: about $0.03 per question (prompt caching on), $4.20 for all runs above.
 
 `submission/team_answers.csv` is from the earlier template-based version and will be replaced by the
 agent's run.
