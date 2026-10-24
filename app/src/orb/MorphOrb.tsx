@@ -1,4 +1,4 @@
-/** The Finni home screen (web): a dotted orb rests in the middle of a black screen, the "Ask Finni…" pill sits
+/** The FINNI screen (web): a dotted orb rests over the 3D building, the "Ask FINNI…" pill sits
  * at the bottom. On send the pill shrinks into a ball, flies up into the orb, the orb thinks (rotating labels)
  * until the answer is there, turns green, condenses and unfolds into the answer card (with the agent's
  * options as chips when it asks back). Timelines and the sphere live in motion.ts; this file plays them with
@@ -8,7 +8,7 @@ import React, { useEffect, useImperativeHandle, useLayoutEffect, useRef, useStat
 
 import type { MicState } from "../useVoice";
 import {
-  ABORT, abortable, ASSEMBLE, bez, BALL_SMALL, CANVAS, CARD_H, cardW, clamp01, COLORS, CONDENSE, DS, DU, DX, DY, DZ, E,
+  ABORT, abortable, type Area, currentArea, setArea, ASSEMBLE, bez, BALL_SMALL, CANVAS, CARD_H, cardW, clamp01, COLORS, CONDENSE, DS, DU, DX, DY, DZ, E,
   FADE, fmt, G_STEPS, A_STEPS, homeDy, INIT, launchTracks, N, ORB_D, ORB_R, pillW, R_CONDENSE, R_GREEN_OUT,
   R_IN, R_OUT, R_RESOLVE, rCardIn, RESOLVE, sampleAt, sleep, T, TAU, unfoldTracks,
   type Geo, type Sample, type Track,
@@ -17,10 +17,10 @@ import "./orb.css";
 
 /* ───────────────────────────── copy ───────────────────────────── */
 const COPY = {
-  placeholder: "Ask Finni…",
+  placeholder: "Ask FINNI…",
   labels: ["Thinking", "Searching the building", "Finding the way", "Composing"],
   done: "Done",
-  answerTitle: "Finni",
+  answerTitle: "FINNI",
   answerBody: "Sorry, I couldn't answer that. Try again?",
   reset: "New question",
   send: "Send",
@@ -52,6 +52,9 @@ export interface MorphOrbProps {
   micNotice?: string | null; // a friendly line about the mic ("I didn't hear anything…")
   onCancel?: () => void; // the person dropped this answer (New question, Escape): don't act on it any more
   lastAnswer?: OrbAnswer | null; // shown as the card when the orb opens mid-conversation
+  area?: Area; // where FINNI lives: the whole window, or a column / sheet beside the open map
+  docked?: boolean; // beside the map (a floor is open): a white panel behind FINNI
+  history?: { from: string; text: string }[]; // the conversation so far, behind "History" in the card
   handleRef?: React.Ref<OrbHandle>;
 }
 
@@ -241,6 +244,8 @@ interface Runtime {
   home(): void;
   /** Show an answer card straight away (coming back to the orb mid-conversation). */
   show(answer: OrbAnswer): void;
+  /** FINNI moved (centre ↔ beside the map) or the card's content changed: fit the pill or the card again. */
+  relayout(answered: boolean): void;
   busy(): boolean;
   destroy(): void;
 }
@@ -412,7 +417,7 @@ function createRuntime(env: Env): Runtime {
   /* ── the card's height: what the answer (and its chips) needs ── */
   const fitCard = async () => {
     await frames(2); // React has rendered the answer
-    geo.ch = Math.round(Math.min(window.innerHeight * 0.62, Math.max(CARD_H, env.measureCard())));
+    geo.ch = Math.round(Math.min(currentArea().h * 0.6, Math.max(CARD_H, env.measureCard())));
   };
 
   /* ── orchestrator ── */
@@ -595,6 +600,18 @@ function createRuntime(env: Env): Runtime {
       setNow("w", geo.pw);
       setNow("u", 0);
     },
+    relayout(answered) {
+      if (!busy) {
+        snapshot();
+        setNow("w", geo.pw);
+        setNow("u", 0);
+        return;
+      }
+      snapshot(); // mid-animation: the card it unfolds into takes the new size
+      if (!answered) return;
+      setNow("w", geo.cw);
+      void fitCard().then(() => setNow("h", geo.ch));
+    },
     show(answer) {
       if (busy) return;
       busy = true;
@@ -634,10 +651,18 @@ function createRuntime(env: Env): Runtime {
 
 /* ───────────────────────────── component ───────────────────────────── */
 const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
+
+/** CSS variables for where FINNI's parts sit (orb centre, pill, buttons): the area's place on the page. */
+function areaStyle(area?: Area): React.CSSProperties | undefined {
+  if (!area) return undefined;
+  return { "--ax": `${area.x}px`, "--ay": `${area.y}px`, "--aw": `${area.w}px`, "--ah": `${area.h}px` } as React.CSSProperties;
+}
 const touchFirst = () => typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches;
 
 export default function MorphOrb(props: MorphOrbProps) {
+  setArea(props.area ?? null); // the runtime reads it whenever it measures (before each question, on relayout)
   const [phase, setPhaseState] = useState<Phase>("idle");
+  const [showHistory, setShowHistory] = useState(false);
   const [value, setValue] = useState("");
   const [lbl, setLbl] = useState<{ cur: string; prev: string | null; n: number }>({ cur: COPY.labels[0], prev: null, n: 0 });
   const [answer, setAnswer] = useState<OrbAnswer | null>(null);
@@ -695,6 +720,12 @@ export default function MorphOrb(props: MorphOrbProps) {
   };
 
   useImperativeHandle(props.handleRef, () => ({ ask }), []);
+
+  // FINNI moved (centre ↔ beside the map): fit the pill or the open card to the new place.
+  const areaKey = props.area ? `${props.area.x},${props.area.y},${props.area.w},${props.area.h}` : "";
+  useEffect(() => {
+    rtRef.current?.relayout(phaseRef.current === "answered");
+  }, [areaKey]);
 
   useIsoLayoutEffect(() => {
     const root = rootRef.current, mover = moverRef.current, actor = actorRef.current, canvas = canvasRef.current;
@@ -831,18 +862,21 @@ export default function MorphOrb(props: MorphOrbProps) {
     );
 
   return (
-    <div className="mo-root" data-phase={phase} ref={rootRef} data-testid="orb-home">
+    <div className="mo-root" data-phase={phase} data-docked={props.docked ? "" : undefined} ref={rootRef}
+         data-testid="orb-home" style={areaStyle(props.area)}>
+      <div className="mo-panel" aria-hidden="true" />
       <div className="mo-bg" aria-hidden="true" />
       <div className="mo-halo" aria-hidden="true" />
       <canvas className="mo-rest" ref={restRef} aria-hidden="true" data-testid="resting-orb" />
 
-      <div className="mo-logo" aria-label="Finni">
+      <div className="mo-logo" aria-label="FINNI">
         <svg viewBox="0 0 32 32" aria-hidden="true">
           <path d="M16 30c-1-3-9-10-9-17a9 9 0 0 1 18 0c0 7-8 14-9 17z" fill="#FF7A00" />
           <circle cx="16" cy="13" r="3.6" fill="#FFFFFF" />
         </svg>
-        <span>finni</span>
+        <span>FINNI</span>
       </div>
+      <div className="mo-ask" aria-hidden="true" data-testid="ask-label">Ask FINNI</div>
       {props.onOpenMap && (
         <button type="button" className="mo-map-btn" data-testid="open-map" onClick={props.onOpenMap}>Map</button>
       )}
@@ -875,14 +909,14 @@ export default function MorphOrb(props: MorphOrbProps) {
               value={value}
               maxLength={200}
               placeholder={COPY.placeholder}
-              aria-label="Ask Finni"
+              aria-label="Ask FINNI"
               data-testid="orb-input"
               spellCheck={false}
               onChange={onChange}
               onKeyDown={onKeyDown}
             />
             {props.onMic && (
-              <button type="button" className="mo-mic" aria-label={mic === "off" ? "Speak to Finni" : "Stop"}
+              <button type="button" className="mo-mic" aria-label={mic === "off" ? "Speak to FINNI" : "Stop"}
                       data-on={mic !== "off" ? "" : undefined} data-testid="orb-mic" onClick={props.onMic}>
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <rect x="8.5" y="2.5" width="7" height="12" rx="3.5" fill="currentColor" />
@@ -906,7 +940,23 @@ export default function MorphOrb(props: MorphOrbProps) {
               <div className="mo-a-head">
                 <i className="mo-a-dot" aria-hidden="true" />
                 <span>{COPY.answerTitle}</span>
+                {(props.history?.length ?? 0) > 2 && (
+                  <button type="button" className="mo-history-btn" data-testid="orb-history-toggle"
+                          onClick={() => {
+                            setShowHistory((open) => !open);
+                            window.requestAnimationFrame(() => rtRef.current?.relayout(true));
+                          }}>
+                    {showHistory ? "Hide earlier" : "Earlier"}
+                  </button>
+                )}
               </div>
+              {showHistory && (
+                <div className="mo-history" data-testid="orb-history">
+                  {(props.history ?? []).slice(0, -1).map((message, i) => (
+                    <p key={i} className={message.from === "you" ? "mo-h-you" : "mo-h-finni"}>{message.text}</p>
+                  ))}
+                </div>
+              )}
               <p className="mo-a-body" ref={bodyRef}>
                 {words.map((w, i) => (
                   <React.Fragment key={i}>

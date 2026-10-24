@@ -5,9 +5,15 @@
 export const PILL_H = 60, BALL_SMALL = 60, ORB_D = 132, ORB_R = 66, CANVAS = 220;
 export const CARD_H = 108;
 export const FLY_D = 138;
-export const pillW = () => Math.min(560, window.innerWidth - 32);
-export const cardW = () => Math.min(440, window.innerWidth - 32);
-export const homeDy = () => window.innerHeight * 0.54 - 96; // pill centre is 96px above the viewport bottom; stage centre is at top:46%
+/** Where FINNI lives on the page: the whole window, or a column / bottom sheet beside the open map. */
+export interface Area { x: number; y: number; w: number; h: number }
+let area: Area | null = null;
+export const setArea = (next: Area | null) => { area = next; };
+export const currentArea = (): Area =>
+  area ?? { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight };
+export const pillW = () => Math.min(560, currentArea().w - 32);
+export const cardW = () => Math.min(440, currentArea().w - 32);
+export const homeDy = () => currentArea().h * 0.54 - 96; // pill centre is 96px above the area's bottom; stage centre is at 46%
 
 /* ───────────────────────── math + easing ───────────────────────── */
 export type Ease = (t: number) => number;

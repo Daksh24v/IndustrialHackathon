@@ -1,5 +1,7 @@
-/* The Finni orb screen. Sizes, positions and opacities of the moving parts come from CSS variables that
-   MorphOrb.tsx writes once per frame (--w, --h, --r, --oPill, --oBall, ...); everything else is here. */
+/* FINNI over the map. Sizes, positions and opacities of the moving parts come from CSS variables that
+   MorphOrb.tsx writes once per frame (--w, --h, --r, --oPill, --oBall, ...); where FINNI sits on the page
+   (the whole window, or a column / bottom sheet beside the open map) comes from --ax/--ay/--aw/--ah.
+   The layer is see-through: the building behind it stays visible and can be turned and clicked. */
 
 .mo-root {
   --bg: #ffffff;
@@ -10,27 +12,78 @@
   --muted: #8e8e93;
   --accent: #ff7a00;
   --green: #34d399;
+  --ax: 0px;
+  --ay: 0px;
+  --aw: 100vw;
+  --ah: 100vh;
+  --cx: calc(var(--ax) + var(--aw) / 2); /* the orb's centre */
+  --cy: calc(var(--ay) + var(--ah) * 0.46);
+  --move: 0.5s cubic-bezier(0.65, 0, 0.35, 1);
   position: fixed;
   inset: 0;
   overflow: hidden;
-  background: var(--bg);
+  background: transparent;
+  pointer-events: none; /* the map underneath gets the clicks, except on FINNI's own controls */
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   user-select: none;
 }
+.mo-root button,
+.mo-actor,
+.mo-notice,
+.mo-history { pointer-events: auto; }
+
+/* beside an open map: a white panel (column on laptops, bottom sheet on phones) behind FINNI */
+.mo-panel {
+  position: absolute;
+  left: var(--ax);
+  top: var(--ay);
+  width: var(--aw);
+  height: var(--ah);
+  background: #ffffff;
+  opacity: 0;
+  transition: opacity var(--move);
+}
+.mo-root[data-docked] .mo-panel { opacity: 1; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 10px 40px rgba(0, 0, 0, 0.08); }
+@media (max-width: 859px) {
+  .mo-root[data-docked] .mo-panel { border-radius: 22px 22px 0 0; }
+}
 
 .mo-bg {
   position: absolute;
   inset: 0;
-  background: radial-gradient(60% 50% at 50% 46%, rgba(255, 122, 0, 0.05), transparent 70%);
+  background: radial-gradient(40% 35% at var(--cx) var(--cy), rgba(255, 255, 255, 0.75), transparent 70%);
+  transition: opacity var(--move);
 }
+.mo-root[data-docked] .mo-bg { opacity: 0; }
+
+/* "Ask FINNI" above the orb */
+.mo-ask {
+  position: absolute;
+  left: var(--cx);
+  top: calc(var(--cy) - 165px);
+  transform: translateX(-50%);
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  white-space: nowrap;
+  padding: 4px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.82);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  opacity: var(--oRest, 1);
+  transition: left var(--move), top var(--move);
+}
+.mo-root[data-docked] .mo-ask { font-size: 17px; top: calc(var(--cy) - 140px); }
 
 /* soft light behind the orb while it works */
 .mo-halo {
   position: absolute;
-  left: 50%;
-  top: 46%;
+  left: var(--cx);
+  top: var(--cy);
   width: 560px;
   height: 560px;
   transform: translate(-50%, -50%);
@@ -42,8 +95,9 @@
 /* the orb that rests in the middle before anyone asks */
 .mo-rest {
   position: absolute;
-  left: 50%;
-  top: 46%;
+  left: var(--cx);
+  top: var(--cy);
+  transition: left var(--move), top var(--move);
   width: 260px;
   height: 260px;
   transform: translate(-50%, -50%) scale(calc(0.94 + 0.06 * var(--oRest, 1)));
@@ -88,8 +142,9 @@
 /* ── the moving actor: the pill, then the ball, the orb, the green disc, the card ── */
 .mo-mover {
   position: absolute;
-  left: 50%;
-  top: 46%;
+  left: var(--cx);
+  top: var(--cy);
+  transition: left var(--move), top var(--move);
   width: 0;
   height: 0;
   will-change: transform;
@@ -394,8 +449,8 @@
 /* ── status label under the orb ── */
 .mo-status {
   position: absolute;
-  left: 50%;
-  top: calc(46% + 96px);
+  left: var(--cx);
+  top: calc(var(--cy) + 96px);
   width: 320px;
   height: 22px;
   transform: translate(-50%, calc(var(--sTy, 6) * 1px));
@@ -440,9 +495,9 @@
 
 .mo-notice {
   position: absolute;
-  left: 50%;
-  top: 64px; /* below the building picker */
-  max-width: min(560px, calc(100vw - 140px));
+  left: var(--cx);
+  top: calc(var(--ay) + 64px); /* below the building picker */
+  max-width: min(560px, calc(var(--aw) - 40px));
   transform: translateX(-50%);
   padding: 8px 14px;
   border-radius: 12px;
@@ -453,8 +508,8 @@
 
 .mo-hint {
   position: absolute;
-  left: 50%;
-  bottom: 30px;
+  left: var(--cx);
+  top: calc(var(--ay) + var(--ah) - 48px);
   transform: translateX(-50%);
   font-size: 13px;
   color: var(--accent);
@@ -463,8 +518,8 @@
 
 .mo-bottom {
   position: absolute;
-  left: 50%;
-  bottom: 40px;
+  left: var(--cx);
+  top: calc(var(--ay) + var(--ah) - 84px);
   transform: translateX(-50%);
   display: flex;
   align-items: center;
@@ -475,7 +530,7 @@
   height: 48px;
   box-shadow: 0 6px 18px rgba(255, 122, 0, 0.35);
 }
-.mo-root:not([data-phase="idle"]) .mo-hint { bottom: 100px; }
+.mo-root:not([data-phase="idle"]) .mo-hint { top: calc(var(--ay) + var(--ah) - 118px); }
 
 .mo-reset {
   position: relative;
@@ -536,4 +591,91 @@
   .mo-mic[data-on],
   .mo-in,
   .mo-out { animation: none; }
+}
+
+/* the earlier conversation, behind "Earlier" in the card */
+.mo-history-btn {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.mo-history {
+  max-height: 150px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+  user-select: text;
+}
+.mo-history p { margin: 0; font-size: 13px; line-height: 1.4; }
+.mo-h-you { align-self: flex-end; background: var(--surface-2); padding: 4px 10px; border-radius: 12px; }
+.mo-h-finni { color: var(--muted); }
+
+/* the opening: "Find using FINNI" over the building, then it shrinks into "Ask FINNI" (Intro.tsx) */
+.mo-intro {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none; /* a click anywhere skips it (window listener); nothing underneath is blocked */
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+.mo-intro-google,
+.mo-intro-veil {
+  position: absolute;
+  inset: 0;
+  transition: opacity 0.8s ease;
+}
+.mo-intro-google { opacity: 0; }
+.mo-intro[data-google="on"] .mo-intro-google { opacity: 1; }
+.mo-intro-veil {
+  background: rgba(255, 255, 255, 0.86);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  animation: mo-intro-in 0.6s ease both;
+}
+.mo-intro[data-google="on"] .mo-intro-veil {
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.05), rgba(0, 0, 0, 0.35));
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.mo-intro-words {
+  position: absolute;
+  left: 50%;
+  top: 40%;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+  font-size: clamp(34px, 6.5vw, 64px);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: #111114;
+  animation: mo-intro-words 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  transition: top 0.8s cubic-bezier(0.65, 0, 0.35, 1), transform 0.8s cubic-bezier(0.65, 0, 0.35, 1),
+    opacity 0.5s ease 0.3s;
+}
+.mo-intro[data-google="on"] .mo-intro-words { color: #fff; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.45); }
+.mo-intro-name { color: #ff7a00; }
+.mo-intro[data-stage="leave"] .mo-intro-veil,
+.mo-intro[data-stage="leave"] .mo-intro-google { opacity: 0; }
+.mo-intro[data-stage="leave"] .mo-intro-words {
+  top: calc(46% - 147px); /* where "Ask FINNI" sits above the orb */
+  transform: translate(-50%, -50%) scale(0.38);
+  opacity: 0;
+}
+@keyframes mo-intro-in { from { opacity: 0; } }
+@keyframes mo-intro-words {
+  from { opacity: 0; transform: translate(-50%, -30%) scale(0.96); letter-spacing: 0.08em; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mo-intro-words,
+  .mo-intro-veil { animation: none; }
+  .mo-intro[data-stage="leave"] .mo-intro-words { top: 40%; transform: translate(-50%, -50%); }
 }

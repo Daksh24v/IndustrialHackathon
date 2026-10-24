@@ -1,20 +1,19 @@
 import { StatusBar } from 'expo-status-bar';
 import { Component, type ReactNode, useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
-  api, ApiError, buildingFromUrl, type BuildingRow, type ChatReply, pickBuilding, placeOf, type Point, type Question,
-  showBuildingInUrl,
+  api, ApiError, buildingFromUrl, type BuildingRow, pickBuilding, placeOf, type Point, showBuildingInUrl,
 } from './src/api';
 import { BuildingBlocks } from './src/components/BuildingBlocks';
 import { BuildingPicker } from './src/components/BuildingPicker';
-import { ChatCard, plain } from './src/components/ChatCard';
-import { FinniLogo } from './src/components/FinniLogo';
+import { plain } from './src/components/ChatCard';
 import { FloorPlan } from './src/components/FloorPlan';
 import { FloorScene } from './src/components/FloorScene';
-import { type Mode, ModeSwitch } from './src/components/ModeSwitch';
+import Intro from './src/orb/Intro';
 import MorphOrb, { type OrbAnswer, type OrbHandle } from './src/orb/MorphOrb';
+import type { Area } from './src/orb/motion';
 import { chatTurn, RENEWED_NOTE } from './src/session';
 import { initial, nextStep, reduce } from './src/state';
 import { colours, isWide } from './src/theme';
@@ -54,17 +53,13 @@ export default function App() {
 
 function Guide() {
   const [state, dispatch] = useReducer(reduce, initial);
-  const [size, setSize] = useState({ width: 0, height: 0 });
   const [threeD, setThreeD] = useState(true);
   const [buildings, setBuildings] = useState<BuildingRow[]>([]);
   const [buildingId, setBuildingId] = useState<string | null>(null);
-  const insets = useSafeAreaInsets();
-  const wide = isWide(useWindowDimensions().width);
-  // home: the orb (src/orb); map: the building and the route. An answer with a route brings the map in.
-  const [mode, setMode] = useState<Mode>('home');
   const [attempt, setAttempt] = useState(0); // "Retry" after the server couldn't be reached
-  const modeRef = useRef(mode);
-  modeRef.current = mode;
+  const insets = useSafeAreaInsets();
+  const window = useWindowDimensions();
+  const wide = isWide(window.width);
   const orb = useRef<OrbHandle>(null);
 
   // Which building: ?building=<id> in the address (web), else EXPO_PUBLIC_BUILDING, else the first factory.
@@ -108,118 +103,65 @@ function Guide() {
     setBuildingId(id);
   }, []);
 
-  // Voice (../voice): the mic hands over what was said like typed text; answers are read out.
-  const sendRef = useRef<(text: string) => boolean>(() => false);
+  // Voice (../voice): what was said goes to FINNI like typed text; answers are read out.
   const voice = useVoice({
     buildingId: state.detail?.building.id ?? null,
     onHeard: (text) => {
-      if (modeRef.current === 'home') {
-        if (!orb.current) return false;
-        orb.current.ask(text);
-        return true;
-      }
-      return sendRef.current(text);
+      if (!orb.current) return false;
+      orb.current.ask(text);
+      return true;
     },
     onError: (message) => dispatch({ type: 'error', message }),
   });
   const talking = voice.mic !== 'off'; // a spoken conversation: short answers, read out
 
   // One turn. If the server lost the conversation (restarted) or the Claude API failed, a new conversation
-  // starts by itself and the question is asked again: the messages on screen stay.
+  // starts by itself and the question is asked again (session.ts). An answer with a route flies the map in.
   const here = state.map?.you_are_here ?? null;
-  const send = useCallback(
-    async (text: string) => {
-      if (!state.sessionId || !buildingId) return;
-      const mine = generation.current;
-      dispatch({ type: 'send', text });
-      voice.waiting();
-      try {
-        const turn = await chatTurn({ sessionId: state.sessionId, buildingId, text, spoken: talking, here });
-        if (mine !== generation.current) {
-          voice.stop(); // another building now: don't leave the mic waiting for this answer
-          return;
-        }
-        if (turn.renewed) dispatch({ type: 'renewed', sessionId: turn.sessionId, note: RENEWED_NOTE });
-        dispatch({ type: 'reply', reply: turn.reply });
-        void voice.say(turn.reply);
-      } catch (error) {
-        voice.stop();
-        if (mine === generation.current) dispatch({ type: 'error', message: (error as Error).message });
-      }
-    },
-    [state.sessionId, buildingId, voice, talking, here],
-  );
-  // Heard on the map screen: taken only if there's a conversation to send it to.
-  sendRef.current = (text: string) => {
-    if (!state.sessionId || !buildingId) return false;
-    void send(text);
-    return true;
-  };
-
-  // The same turn, asked on the orb screen: the answer comes back for the orb's card.
   const buildingRef = useRef(buildingId);
   buildingRef.current = buildingId;
   const hereRef = useRef(here);
   hereRef.current = here;
   const talkingRef = useRef(talking);
   talkingRef.current = talking;
-  const lastReply = useRef<ChatReply | null>(null);
-  const asks = useRef(0); // each orb question gets a number: a dropped or older one is ignored when it lands
-  const mapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const cancelMapSwitch = useCallback(() => {
-    if (mapTimer.current) clearTimeout(mapTimer.current);
-    mapTimer.current = null;
-  }, []);
-  const dropOrbAnswer = useCallback(() => {
+  const asks = useRef(0); // each question gets a number: a dropped or older one is ignored when it lands
+  const dropAnswer = useCallback(() => {
     asks.current += 1; // whatever is in flight no longer counts
-    lastReply.current = null;
-    cancelMapSwitch();
     voice.stop();
-  }, [cancelMapSwitch, voice]);
-  const askFromOrb = useCallback(
+  }, [voice]);
+  const ask = useCallback(
     async (text: string): Promise<OrbAnswer> => {
-      const ask = ++asks.current;
-      lastReply.current = null;
-      cancelMapSwitch();
+      const mine = ++asks.current;
       const sessionId = await until(() => sessionRef.current, SESSION_WAIT_MS);
       const building = buildingRef.current;
       if (!sessionId || !building) {
         voice.stop();
         return { text: "I can't reach the building right now. Check that the server is running, then ask again." };
       }
-      const mine = generation.current;
+      const turnOf = generation.current;
       dispatch({ type: 'send', text });
       voice.waiting();
       try {
         const turn = await chatTurn({ sessionId, buildingId: building, text, spoken: talkingRef.current, here: hereRef.current });
-        if (mine !== generation.current) {
+        if (turnOf !== generation.current) {
           voice.stop();
           return { text: 'You switched buildings: ask me again.' };
         }
         if (turn.renewed) dispatch({ type: 'renewed', sessionId: turn.sessionId, note: RENEWED_NOTE });
-        dispatch({ type: 'reply', reply: turn.reply }); // the map screen keeps the conversation either way
-        if (ask !== asks.current) return { text: '' }; // dropped (New question / Escape) or a newer question
-        lastReply.current = turn.reply;
+        if (mine !== asks.current) return { text: '' }; // dropped (New question / Escape) or a newer question
+        dispatch({ type: 'reply', reply: turn.reply }); // an answer with a route flies the map to the floor
         void voice.say(turn.reply);
         const said = [plain(turn.reply.reply), turn.reply.question?.question].filter(Boolean).join(' ');
         return { text: said || 'Here it is on the map.', options: turn.reply.question?.options };
       } catch (error) {
         voice.stop();
-        return { text: (error as Error).message }; // shown in the orb's card (once, not also as a banner)
+        return { text: (error as Error).message }; // shown in the card (once, not also as a banner)
       }
     },
-    [voice, cancelMapSwitch],
+    [voice],
   );
-  const onOrbAnswered = useCallback(() => {
-    cancelMapSwitch();
-    if (lastReply.current?.map?.focus_floor_id) mapTimer.current = setTimeout(() => setMode('map'), MAP_AFTER_MS);
-  }, [cancelMapSwitch]);
-  useEffect(() => cancelMapSwitch, [cancelMapSwitch]);
-  useEffect(() => {
-    cancelMapSwitch(); // a building switch or a screen change never gets overridden by an old timer
-  }, [buildingId, mode, cancelMapSwitch]);
 
-  // Tap the map: "I'm here". The dot moves, and Finni starts routes there without asking.
+  // Tap the map: "I'm here". The dot moves, and FINNI starts routes there without asking.
   const tapHere = useCallback(
     async (floorId: string, point: Point) => {
       if (!state.sessionId || !state.detail) return;
@@ -239,108 +181,51 @@ function Guide() {
   const step = nextStep(state.map, state.floorId);
   const stepFloor = floors.find((floor) => floor.id === step?.to_floor_id);
   const inside = state.view === 'floor';
+  const open = inside || state.view === 'flying'; // a floor is open (or opening): FINNI moves beside the map
   const bottom = Math.max(insets.bottom, 12);
   const row = buildings.find((item) => item.id === buildingId);
   const current = state.detail?.building ?? (row ? { id: row.id, name: row.name ?? row.id } : null);
-
   const loadFailed = !!state.error && !state.detail;
   const retry = () => {
     dispatch({ type: 'error', message: '' });
     setAttempt((n) => n + 1);
   };
-  const switchTo = (next: Mode) => {
-    if (next === 'home') cancelMapSwitch();
-    setMode(next);
-  };
 
-  if (mode === 'home') {
-    return (
-      <FadeIn key="home" style={styles.home}>
-        <StatusBar style="dark" />
-        <MorphOrb handleRef={orb} onSubmit={askFromOrb} onAnswered={onOrbAnswered} onCancel={dropOrbAnswer}
-                  mic={voice.mic} micNotice={voice.notice} onMic={voice.toggle} lastAnswer={lastAnswer(state)}
-                  notice={state.error || undefined} />
-        <View style={styles.homePicker} pointerEvents="box-none">
-          <BuildingPicker buildings={buildings} current={current} onPick={pickOther} />
-        </View>
-        <View style={styles.homeSwitch} pointerEvents="box-none">
-          <ModeSwitch mode={mode} onChange={switchTo} mapReady={!!state.detail} />
-        </View>
-        {loadFailed && (
-          <Pressable testID="retry" onPress={retry} style={styles.homeRetry}>
-            <Text style={styles.stepText}>Retry</Text>
-          </Pressable>
-        )}
-      </FadeIn>
-    );
-  }
+  // One screen: the map fills it; FINNI sits over the building, or beside the map once a floor is open.
+  const { finni, map } = layout(window.width, window.height, open, wide);
 
   return (
-    <FadeIn key="map" style={styles.screen}>
-    <SafeAreaView style={[styles.screen, wide && styles.wide]} edges={['top', 'left', 'right']}>
+    <View style={styles.screen}>
       <StatusBar style="dark" />
-      <View style={wide ? styles.side : styles.top} testID={wide ? 'side-panel' : 'top-panel'}>
-        <View style={styles.header}>
-          {inside || state.view === 'flying' ? (
-            <Pressable testID="back" accessibilityLabel="Back to the building" onPress={() => dispatch({ type: 'back' })}
-                       style={styles.back} hitSlop={8}>
-              <Text style={styles.backText}>‹</Text>
-            </Pressable>
-          ) : null}
-          <Pressable testID="home" accessibilityLabel="Finni home" onPress={() => setMode('home')}>
-            <FinniLogo />
-          </Pressable>
-          <BuildingPicker buildings={buildings} current={current} onPick={pickOther} />
-          <View style={styles.headerSwitch}>
-            <ModeSwitch mode={mode} onChange={switchTo} mapReady={!!state.detail} />
-          </View>
-        </View>
-        {loadFailed && (
-          <Pressable testID="retry" onPress={retry} style={styles.retry}>
-            <Text style={styles.stepText}>Retry</Text>
-          </Pressable>
-        )}
-        <ChatCard messages={state.messages} question={state.question} busy={state.busy} onSend={send}
-                  onMic={voice.toggle} mic={voice.mic} side={wide} note={state.note} />
-        {state.error ? <Text testID="error" style={styles.error}>{state.error}</Text> : null}
-      </View>
-
-      <View style={styles.map} onLayout={(e) => setSize(e.nativeEvent.layout)}>
+      <View style={[styles.map, { left: map.x, top: map.y, width: map.w, height: map.h }]} testID="map-layer">
         {state.view === 'loading' && !state.error ? <ActivityIndicator color={colours.accent} style={{ flex: 1 }} /> : null}
-        {state.outline && size.width > 0 && (state.view === 'outside' || state.view === 'flying') ? (
+        {state.outline && (state.view === 'outside' || state.view === 'flying') ? (
           <BuildingBlocks
             outline={state.outline}
             focusFloorId={state.view === 'flying' ? state.floorId : null}
             onArrived={() => dispatch({ type: 'arrived' })}
             onPickFloor={(floorId) => dispatch({ type: 'floor', floorId })}
-            width={size.width}
-            height={size.height}
+            spin={state.view === 'outside'}
+            width={map.w}
+            height={map.h}
           />
         ) : null}
-        {state.detail && state.floorId && inside && size.width > 0 ? (
+        {state.detail && state.floorId && inside ? (
           threeD ? (
             <FloorScene detail={state.detail} floorId={state.floorId} map={state.map} footprints={footprints}
-                        width={size.width} height={size.height} onTapFloor={tapHere} />
+                        width={map.w} height={map.h} onTapFloor={tapHere} />
           ) : (
-            <FloorPlan detail={state.detail} floorId={state.floorId} map={state.map} width={size.width} height={size.height}
+            <FloorPlan detail={state.detail} floorId={state.floorId} map={state.map} width={map.w} height={map.h}
                        onTapFloor={tapHere} />
           )
         ) : null}
 
         {inside && (
           <View style={styles.topRow} pointerEvents="box-none">
-            <View style={styles.floors}>
-              {floors.length > 1 && [...floors].reverse().map((floor) => (
-                <Pressable key={floor.id} testID={`floor-${floor.level}`} onPress={() => dispatch({ type: 'floor', floorId: floor.id })}
-                           accessibilityRole="button" accessibilityLabel={floor.name}
-                           accessibilityState={{ selected: floor.id === state.floorId }}
-                           style={[styles.floorChip, floor.id === state.floorId && styles.floorChipActive]}>
-                  <Text style={[styles.floorText, floor.id === state.floorId && styles.floorTextActive]}>
-                    {floor.level === 0 ? 'G' : floor.level}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
+            <Pressable testID="building" accessibilityLabel="Back to the whole building" onPress={() => dispatch({ type: 'back' })}
+                       style={styles.buildingButton}>
+              <Text style={styles.buildingText}>‹ Building</Text>
+            </Pressable>
             {floorName ? <Text testID="floor-name" style={styles.floorName}>{floorName}</Text> : null}
             <View style={styles.toggle}>
               {(['3D', '2D'] as const).map((mode) => {
@@ -367,31 +252,37 @@ function Guide() {
           </View>
         ) : null}
       </View>
-    </SafeAreaView>
-    </FadeIn>
+
+      <MorphOrb handleRef={orb} onSubmit={ask} onCancel={dropAnswer} area={finni} docked={open}
+                mic={voice.mic} micNotice={voice.notice} onMic={voice.toggle} history={state.messages}
+                notice={state.error || state.note || undefined} />
+
+      <View style={[styles.picker, open && wide ? { left: map.x, width: map.w } : null]} pointerEvents="box-none">
+        <BuildingPicker buildings={buildings} current={current} onPick={pickOther} />
+      </View>
+      <Intro />
+      {loadFailed && (
+        <Pressable testID="retry" onPress={retry} style={styles.retry}>
+          <Text style={styles.stepText}>Retry</Text>
+        </Pressable>
+      )}
+    </View>
   );
 }
 
-/** What Finni said last (and the question it is waiting on): the orb shows it when you come back. */
-function lastAnswer(state: { messages: { from: string; text: string }[]; question: Question | null }): OrbAnswer | null {
-  const last = [...state.messages].reverse().find((message) => message.from === 'guide');
-  if (!last && !state.question) return null;
-  const text = [last ? plain(last.text) : '', state.question?.question ?? ''].filter(Boolean).join(' ');
-  return { text, options: state.question?.options };
-}
+const PANEL_PX = 400; // FINNI's column beside an open map (laptops)
+const SHEET_SHARE = 0.44; // FINNI's bottom sheet under an open map (phones)
+const SESSION_WAIT_MS = 8000; // a question asked while the building still loads waits this long
 
-/** Screens fade in instead of swapping hard. */
-function FadeIn({ children, style }: { children: ReactNode; style: object }) {
-  const opacity = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    Animated.timing(opacity, { toValue: 1, duration: FADE_MS, useNativeDriver: true }).start();
-  }, [opacity]);
-  return <Animated.View style={[style, { opacity }]}>{children}</Animated.View>;
+/** Where FINNI and the map go: FINNI over the whole building, or beside the open map (column / sheet). */
+export function layout(width: number, height: number, open: boolean, wide: boolean): { finni: Area; map: Area } {
+  if (!open) return { finni: { x: 0, y: 0, w: width, h: height }, map: { x: 0, y: 0, w: width, h: height } };
+  if (wide) {
+    return { finni: { x: 0, y: 0, w: PANEL_PX, h: height }, map: { x: PANEL_PX, y: 0, w: width - PANEL_PX, h: height } };
+  }
+  const sheet = Math.round(height * SHEET_SHARE);
+  return { finni: { x: 0, y: height - sheet, w: width, h: sheet }, map: { x: 0, y: 0, w: width, h: height - sheet } };
 }
-
-const MAP_AFTER_MS = 1300; // the orb's answer card stays this long before the map comes in
-const SESSION_WAIT_MS = 8000;
-const FADE_MS = 260; // an orb question asked while the building still loads waits this long
 
 /** The value once it's there (polled), or null after a while. */
 async function until<T>(get: () => T | null, timeoutMs = 20000): Promise<T | null> {
@@ -405,42 +296,25 @@ async function until<T>(get: () => T | null, timeoutMs = 20000): Promise<T | nul
 
 const edge = { borderWidth: StyleSheet.hairlineWidth, borderColor: colours.blockEdge };
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colours.background },
-  home: { flex: 1, backgroundColor: '#FFFFFF' },
-  homePicker: { position: 'absolute', top: 18, left: 0, right: 0, alignItems: 'center', zIndex: 3 },
-  homeSwitch: { position: 'absolute', top: 16, right: 16, zIndex: 4 },
-  homeRetry: { position: 'absolute', top: 110, alignSelf: 'center', backgroundColor: colours.accent, borderRadius: 20,
-               paddingHorizontal: 18, paddingVertical: 10, zIndex: 4 },
-  wide: { flexDirection: 'row' },
-  top: { zIndex: 2 }, // the building menu opens over the map
-  side: { width: 360, zIndex: 2, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: colours.blockEdge,
-          backgroundColor: colours.background },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 6, paddingBottom: 10, gap: 6,
-            zIndex: 2 },
-  headerSwitch: { marginLeft: 'auto' },
-  back: { width: 28, height: 32, alignItems: 'center', justifyContent: 'center', marginLeft: -6 },
-  backText: { fontSize: 32, color: colours.text, marginTop: -4 },
+  screen: { flex: 1, backgroundColor: colours.background, overflow: 'hidden' },
+  map: { position: 'absolute' },
+  picker: { position: 'absolute', top: 18, left: 0, right: 0, alignItems: 'center', zIndex: 3 },
   title: { fontSize: 18, fontWeight: '700', color: colours.text },
-  error: { marginHorizontal: 16, marginBottom: 6, color: colours.error },
-  map: { flex: 1 },
-  topRow: { position: 'absolute', left: 12, right: 12, top: 12, flexDirection: 'row', alignItems: 'flex-start',
+  topRow: { position: 'absolute', left: 12, right: 12, top: 60, flexDirection: 'row', alignItems: 'flex-start',
             justifyContent: 'space-between' },
-  floors: { gap: 6, minWidth: 36 },
-  floorChip: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center',
-               backgroundColor: colours.background, ...edge },
-  floorChipActive: { backgroundColor: colours.accent, borderColor: colours.accent },
-  floorText: { color: colours.text, fontWeight: '600' },
-  floorTextActive: { color: '#FFFFFF' },
+  buildingButton: { height: 34, paddingHorizontal: 14, borderRadius: 17, justifyContent: 'center',
+                    backgroundColor: colours.background, ...edge },
+  buildingText: { color: colours.text, fontWeight: '700', fontSize: 13 },
   floorName: { marginTop: 8, color: colours.muted, fontSize: 13, fontWeight: '600', backgroundColor: 'rgba(255,255,255,0.85)',
                paddingHorizontal: 10, paddingVertical: 3, borderRadius: 10, overflow: 'hidden' },
-  toggle: { flexDirection: 'row', backgroundColor: colours.chip, borderRadius: 18, padding: 3 },
+  toggle: { flexDirection: 'row', backgroundColor: colours.chip, borderRadius: 18, padding: 3, marginRight: 48 },
   toggleItem: { paddingHorizontal: 12, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
   toggleActive: { backgroundColor: colours.background, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 3,
                   shadowOffset: { width: 0, height: 1 }, elevation: 1 },
   toggleText: { color: colours.muted, fontWeight: '700', fontSize: 13 },
   toggleTextActive: { color: colours.accent },
-  retry: { alignSelf: 'flex-start', backgroundColor: colours.accent, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10,
-           marginHorizontal: 16, marginBottom: 8 },
+  retry: { position: 'absolute', top: 110, alignSelf: 'center', backgroundColor: colours.accent, borderRadius: 20,
+           paddingHorizontal: 18, paddingVertical: 10, zIndex: 4 },
   step: { position: 'absolute', alignSelf: 'center', backgroundColor: colours.accent, borderRadius: 20,
           paddingHorizontal: 16, paddingVertical: 10 },
   stepText: { color: '#FFFFFF', fontWeight: '600' },
