@@ -109,3 +109,21 @@ def test_sessions_are_separate_and_can_end(http):
     assert http.post(f"/sessions/{first}/chat", json={"text": "hi"}).status_code == 404
     assert http.post("/sessions", json={"building_id": "nope"}).status_code == 404
     assert http.post(f"/sessions/{second}/chat", json={"text": ""}).status_code == 422
+
+
+def test_outline_has_one_footprint_set_per_floor(http):
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+
+    from navcore.engine import Building
+    from tests.conftest import DATA
+
+    body = http.get(f"/buildings/{BUILDING}/outline").json()
+    truth = Building.load(DATA / "dev" / BUILDING)
+    assert [floor["level"] for floor in body["floors"]] == sorted(f["level"] for f in truth.floors.values())
+    for floor in body["floors"]:
+        area = sum(Polygon(points).area for points in floor["footprints"])
+        union = unary_union([truth.polygons[s["id"]] for s in truth.spaces_on(floor["id"])]).area
+        assert area == pytest.approx(union, rel=0.02)
+        assert floor["height_m"] > 0
+    assert http.get("/buildings/nope/outline").status_code == 404

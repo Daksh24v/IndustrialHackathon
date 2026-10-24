@@ -5,6 +5,7 @@
 Endpoints
 - GET  /buildings                         buildings this server knows
 - GET  /buildings/{id}                    everything needed to draw it (floors, spaces, doors, lifts, things)
+- GET  /buildings/{id}/outline            per floor: footprint, elevation, height (the 3D outside view)
 - POST /buildings/{id}/route              a route without the agent: length + lines per floor
 - POST /sessions                          start a conversation with the agent about one building
 - POST /sessions/{id}/chat                one turn: {reply, question, map}
@@ -22,6 +23,7 @@ import anthropic
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from shapely.ops import unary_union
 
 from navagent.agent import BUILDER, CHAT, BuildingAgent
 from navagent.builder import Draft
@@ -95,6 +97,25 @@ def get_building(building_id: str) -> dict:
             for asset in building.data["assets"]
         ],
     }
+
+
+@app.get("/buildings/{building_id}/outline")
+def outline(building_id: str) -> dict:
+    """Per floor: its footprint (outer outlines of all spaces merged), elevation and height, for the 3D
+    outside view. Polygons are lists of [x, y] in metres; a floor can have several parts."""
+    building = load(building_id)
+    floors = []
+    for floor in sorted(building.data["floors"], key=lambda item: item["level"]):
+        merged = unary_union([building.polygons[space["id"]].buffer(0.05) for space in building.spaces_on(floor["id"])])
+        merged = merged.buffer(-0.05).simplify(0.05)
+        parts = list(getattr(merged, "geoms", [merged]))
+        floors.append({
+            "id": floor["id"], "level": floor["level"], "name": floor["name"],
+            "elevation_m": floor["elevation_m"], "height_m": floor.get("height_m", 3.5),
+            "footprints": [[[round(x, 3), round(y, 3)] for x, y in part.exterior.coords[:-1]]
+                           for part in parts if not part.is_empty and part.area > 0.5],
+        })
+    return {"building": building.info, "floors": floors}
 
 
 class RouteRequest(BaseModel):
