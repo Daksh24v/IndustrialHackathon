@@ -127,6 +127,26 @@ class Session:
             "assets": assets[:MAX_RESULTS],
         }
 
+    def count_assets(self, asset_type: str, floor: str | None = None) -> dict:
+        """How many things of exactly one type there are (optionally on one floor), and where."""
+        building = self.building
+        wanted = find_type(asset_type, asset_types(building))
+        floor_id = find_floor(building, floor) if floor else None
+        found = [
+            asset
+            for asset in building.assets.values()
+            if asset["type"] == wanted and (floor_id is None or asset["floor_id"] == floor_id)
+        ]
+        rooms: dict[str, int] = {}
+        for asset in found:
+            rooms[building.label(asset["space_id"])] = rooms.get(building.label(asset["space_id"]), 0) + 1
+        return {
+            "asset_type": wanted,
+            "floor": building.floor_name(floor_id) if floor_id else "all floors",
+            "count": len(found),
+            "by_room": dict(sorted(rooms.items(), key=lambda item: -item[1])[:MAX_RESULTS]),
+        }
+
     def largest_room(self, floor: str, room_type: str) -> dict:
         """The largest space of one room type on a floor, with the runner-up for comparison."""
         building = self.building
@@ -366,7 +386,12 @@ class Session:
         return {"shown_to_user": True, "instruction": "End your turn now; the reply arrives as the next message."}
 
     def submit_answer(
-        self, answer_type: str, value: float | None = None, room: str | None = None, include_area: bool = False
+        self,
+        answer_type: str,
+        value: float | None = None,
+        room: str | None = None,
+        include_area: bool = False,
+        text: str | None = None,
     ) -> dict:
         """Record the final benchmark answer; answer_line() turns it into the scored 'Answer:' line."""
         building = self.building
@@ -379,8 +404,12 @@ class Session:
                 raise EngineError("A room answer needs the room (preferably its space id).")
             space_id = find_space(building, room)
             self.submitted = {"type": "room", "space_id": space_id, "include_area": include_area}
+        elif answer_type == "text":
+            if not text or not text.strip():
+                raise EngineError("A text answer needs the text.")
+            self.submitted = {"type": "text", "text": " ".join(text.split())}
         else:
-            raise EngineError("answer_type must be 'number' or 'room'.")
+            raise EngineError("answer_type must be 'number', 'room' or 'text'.")
         return {"recorded": self.submitted, "answer_line": self.answer_line()}
 
     def answer_line(self) -> str | None:
@@ -388,6 +417,8 @@ class Session:
         answer = self.submitted
         if answer is None:
             return None
+        if answer["type"] == "text":
+            return f"Answer: {answer['text']}"
         if answer["type"] == "number":
             value = answer["value"]
             text = str(int(value)) if float(value).is_integer() else f"{value:.2f}"

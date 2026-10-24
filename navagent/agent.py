@@ -60,9 +60,15 @@ The app draws the route on the map, so don't write step-by-step lists unless ask
 BENCHMARK_RULES = """
 Answering a scored question:
 - Nobody can answer questions back, so never ask. Choose the most plausible reading and say which.
-- Finish by calling submit_answer exactly once: answer_type "number" with the single number the question \
-asks for (copied from a tool result), or answer_type "room" with the room's space id (include_area=true \
-when the question also asks how big it is). Then stop."""
+- Finish by calling submit_answer exactly once, then stop:
+  - answer_type "number": the single number the question asks for, copied from a tool result \
+(a count, a distance in metres, an area in m²);
+  - answer_type "room": the room's space id (include_area=true when it also asks how big the room is);
+  - answer_type "text": only when the question asks for neither, e.g. "no step-free route exists".
+- When the question gives no answer format: for "where is X" submit the room that holds it; for \
+"how many X" the count; for a route ("how do I get from A to B", tours, with closures or step-free) write \
+the rooms of the route in order in your reply and submit the total length in metres; if no route exists, \
+submit text saying so."""
 
 PROMPT = "{rules}\n\nBuilding overview:\n{overview}"
 
@@ -90,6 +96,16 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
             floor: Only this floor, e.g. "Ground floor", "Floor 2", "Basement 1". Omit for all floors.
         """
         return session.search(query, floor)
+
+    @tool
+    def count_assets(asset_type: str, floor: str | None = None) -> dict:
+        """Exactly how many things of one type there are, optionally on one floor, and in which rooms.
+
+        Args:
+            asset_type: e.g. "chair", "toilet", "fire extinguisher", "cnc mill".
+            floor: Only this floor, e.g. "Floor 2". Omit for the whole building.
+        """
+        return session.count_assets(asset_type, floor)
 
     @tool
     def largest_room(floor: str, room_type: str) -> dict:
@@ -238,6 +254,7 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
 
     tools = [
         search_building,
+        count_assets,
         largest_room,
         list_rooms,
         room_details,
@@ -293,17 +310,23 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
 
         @tool
         def submit_answer(
-            answer_type: str, value: float | None = None, room: str | None = None, include_area: bool = False
+            answer_type: str,
+            value: float | None = None,
+            room: str | None = None,
+            include_area: bool = False,
+            text: str | None = None,
         ) -> dict:
             """Submit the final answer, exactly once, as the last step.
 
             Args:
-                answer_type: "number" for a count, distance or area; "room" when the answer is a room.
+                answer_type: "number" for a count, distance or area; "room" when the answer is a room;
+                    "text" only when the answer is neither (e.g. no route exists).
                 value: The number (for answer_type "number"), copied from a tool result.
                 room: The room's space id (for answer_type "room").
                 include_area: True when the question also asks how big the room is in m².
+                text: The short answer (for answer_type "text").
             """
-            return session.submit_answer(answer_type, value, room, include_area)
+            return session.submit_answer(answer_type, value, room, include_area, text)
 
         tools.append(submit_answer)
     return tools

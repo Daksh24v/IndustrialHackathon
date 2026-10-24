@@ -18,6 +18,7 @@ LOG_DIRECTORY = Path("agent_output") / "logs"
 DOUBLE_CHECK_ENVIRONMENT_VARIABLE = "NAVAGENT_DOUBLE_CHECK"
 
 _client: anthropic.Anthropic | None = None
+USAGE: Counter = Counter()  # tokens of every agent run in this process, for cost reports
 
 
 def client() -> anthropic.Anthropic:
@@ -36,7 +37,11 @@ def run_once(building_directory: Path, question_text: str, log_name: str | None)
     # A fresh Building per run: nothing one question does can leak into the next.
     session = Session(Building.load(building_directory))
     log_path = LOG_DIRECTORY / f"{log_name}.json" if log_name else None
-    return BuildingAgent(session, client(), mode=BENCHMARK, log_path=log_path).answer_benchmark(question_text)
+    agent = BuildingAgent(session, client(), mode=BENCHMARK, log_path=log_path)
+    try:
+        return agent.answer_benchmark(question_text)
+    finally:
+        USAGE.update(agent.usage)
 
 
 def answer(
