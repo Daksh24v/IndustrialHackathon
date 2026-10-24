@@ -44,3 +44,16 @@ describe('position (for the AR camera)', () => {
     expect(JSON.parse(seen!.body)).toEqual({ space: 'Quality lab 0.21' });
   });
 });
+
+describe('spoken turns', () => {
+  it('tells the backend when a turn was said into the mic', async () => {
+    const bodies: string[] = [];
+    const fetcher = (async (_url: string, init: RequestInit) => {
+      bodies.push(String(init.body));
+      return { ok: true, status: 200, statusText: 'OK', json: async () => ({ reply: 'Kitchen 2.04, 40 m.', question: null, map: null }) };
+    }) as unknown as typeof fetch;
+    await api.chat('s1', 'coffee?', fetcher);
+    await api.chat('s1', 'coffee?', fetcher, true);
+    expect(bodies.map((body) => JSON.parse(body).spoken)).toEqual([false, true]);
+  });
+});

@@ -168,3 +168,13 @@ def test_position_from_the_phone_is_used_without_asking(http):
     assert body["map"]["you_are_here"]["label"] == "Quality lab 0.21 (Ground floor)"  # the map shows it too
     assert http.post(f"/sessions/{session}/position", json={"space": "Nowhere 9.99"}).status_code == 422
     assert http.post("/sessions/nope/position", json={"space": "0.21"}).status_code == 404
+
+
+def test_voice_is_served_by_the_backend(http):
+    """One server for the app: /voice lives here, and voice reaches the agent in-process."""
+    from voice import app as voice_service
+
+    assert http.get("/voice").status_code == 200
+    assert "/voice/transcribe" in http.get("/openapi.json").json()["paths"]
+    buildings = voice_service.call_backend("GET", "/buildings")
+    assert any(row["id"] == BUILDING for row in buildings)

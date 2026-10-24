@@ -32,6 +32,8 @@ BENCHMARK = "benchmark"
 BUILDER = "builder"
 MAX_READINGS = 10  # a name shared by more spaces than this is reported, not expanded
 POSITION_PREFIX = "[Position from the phone: the person is in "
+SPOKEN_NOTE = "\n\n[Spoken turn: the answer is read out.]"
+SPOKEN_EFFORT = "low"  # the agent is most of a spoken turn's wait
 
 COMMON_RULES = """You are the indoor guide for one building, like Google Maps but inside.
 
@@ -65,6 +67,9 @@ from your tools (floors, rooms, things that exist). Examples: which floor they'r
 has several and "nearest" depends on it; where they are on that floor; which of several same-named rooms.
 - After ask_user, end your turn with no further text; the reply comes as the next message.
 - Remember what they told you (floor, position, step-free, closures) for the rest of the conversation.
+- A message ending with "[Spoken turn: ...]" was said out loud and your answer is read out: answer in one \
+short sentence with the key fact (where, which floor, how far), no lists, markdown or offers; the map shows \
+the rest. Asking back with ask_user works as usual (the options are read out).
 - A message starting with "[Position from the phone: ...]" tells you where the person is right now (the \
 phone worked it out): use it as their position and don't ask where they are.
 - If a tool returns several readings for a same-named room and they give different answers, ask which \
@@ -662,12 +667,15 @@ class BuildingAgent:
             "cache_creation_input_tokens": 0,
         }
 
-    def ask(self, user_text: str) -> str:
-        """One user turn. Returns the agent's text; see session.pending_question / session.submitted."""
+    def ask(self, user_text: str, spoken: bool = False) -> str:
+        """One user turn. Returns the agent's text; see session.pending_question / session.submitted.
+        spoken: the turn was said and the answer is read out (short, and at lower effort, so it's quick)."""
         self.session.pending_question = None
         self.session.map_view = None
         if self.session.here:  # the phone knows where the person is: say so, so the agent doesn't ask
             user_text = f"{POSITION_PREFIX}{self.session.building.label(self.session.here)}]\n{user_text}"
+        if spoken:
+            user_text += SPOKEN_NOTE
         self.messages.append({"role": "user", "content": user_text})
         runner = self.client.beta.messages.tool_runner(
             model=MODEL,
@@ -676,7 +684,7 @@ class BuildingAgent:
             system=self.system,
             tools=self.tools,
             messages=list(self.messages),
-            output_config={"effort": EFFORT[self.mode]},
+            output_config={"effort": SPOKEN_EFFORT if spoken else EFFORT[self.mode]},
             betas=[FALLBACK_BETA],
             fallbacks="default",
         )

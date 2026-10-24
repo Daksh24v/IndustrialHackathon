@@ -1,6 +1,6 @@
 /** The conversation at the top, under the logo (so the keyboard never covers it): the "Talk to Finni…" field
- * with an orange mic (voice comes from the voice branch), and under it a card with the replies and the
- * agent's question as tappable chips. The card folds away to give the map more room. */
+ * with an orange mic (src/useVoice.ts: tap once to talk, again to interrupt or stop), and under it a card with
+ * the replies and the agent's question as tappable chips. The card folds away to give the map more room. */
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { ScrollViewInstance } from 'react-native';
@@ -8,6 +8,7 @@ import Svg, { Path } from 'react-native-svg';
 
 import type { Question } from '../api';
 import { colours } from '../theme';
+import type { MicState } from '../useVoice';
 import { MicIcon } from './MicIcon';
 
 export interface Message {
@@ -23,9 +24,17 @@ interface Props {
   busy: boolean;
   onSend: (text: string) => void;
   onMic?: () => void;
+  mic?: MicState;
 }
 
-export function ChatCard({ messages, question, busy, onSend, onMic }: Props) {
+const MIC_HINT: Record<MicState, string> = {
+  off: '',
+  listening: 'Listening… pause when you are done',
+  thinking: '',
+  speaking: 'Speaking… tap the mic to interrupt',
+};
+
+export function ChatCard({ messages, question, busy, onSend, onMic, mic = 'off' }: Props) {
   const [text, setText] = useState('');
   const [open, setOpen] = useState(true);
   const scroll = useRef<ScrollViewInstance>(null);
@@ -56,7 +65,7 @@ export function ChatCard({ messages, question, busy, onSend, onMic }: Props) {
           returnKeyType="send"
           editable={!busy}
         />
-        {busy ? (
+        {busy || mic === 'thinking' ? (
           <ActivityIndicator color={colours.accent} style={styles.round} />
         ) : text.trim() ? (
           <Pressable testID="send" accessibilityLabel="Send" style={[styles.round, styles.send]} onPress={() => send(text)}>
@@ -66,11 +75,14 @@ export function ChatCard({ messages, question, busy, onSend, onMic }: Props) {
             </Svg>
           </Pressable>
         ) : (
-          <Pressable testID="mic" accessibilityLabel="Speak to Finni" style={styles.round} onPress={onMic}>
-            <MicIcon />
+          <Pressable testID="mic" accessibilityLabel={mic === 'off' ? 'Speak to Finni' : 'Stop'}
+                     accessibilityState={{ selected: mic !== 'off' }}
+                     style={[styles.round, mic !== 'off' && styles.micOn]} onPress={onMic}>
+            <MicIcon colour={mic === 'off' ? colours.accent : '#FFFFFF'} />
           </Pressable>
         )}
       </View>
+      {MIC_HINT[mic] ? <Text testID="mic-hint" style={styles.micHint}>{MIC_HINT[mic]}</Text> : null}
 
       {!talking && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.starters}>
@@ -133,6 +145,8 @@ const styles = StyleSheet.create({
   input: { flex: 1, paddingVertical: 12, fontSize: 16, color: colours.text },
   round: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
   send: { backgroundColor: colours.accent },
+  micOn: { backgroundColor: colours.accent },
+  micHint: { color: colours.accent, fontSize: 12, textAlign: 'center', marginTop: -4 },
   starters: { gap: 8 },
   starter: { backgroundColor: colours.chip, borderRadius: 16, paddingHorizontal: 12, paddingVertical: 7 },
   starterText: { color: colours.chipText, fontSize: 13 },

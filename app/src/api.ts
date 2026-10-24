@@ -133,8 +133,9 @@ export const api = {
       { method: 'POST', body: JSON.stringify({ building_id: buildingId }) },
       fetcher,
     ),
-  chat: (sessionId: string, text: string, fetcher?: typeof fetch) =>
-    call<ChatReply>(`/sessions/${sessionId}/chat`, { method: 'POST', body: JSON.stringify({ text }) }, fetcher),
+  /** One turn. spoken: said into the mic and read out, so Finni answers in one short sentence (and faster). */
+  chat: (sessionId: string, text: string, fetcher?: typeof fetch, spoken = false) =>
+    call<ChatReply>(`/sessions/${sessionId}/chat`, { method: 'POST', body: JSON.stringify({ text, spoken }) }, fetcher),
   /** Where the person is (the AR camera will call this): from then on Finni doesn't ask. */
   setPosition: (sessionId: string, space: string, fetcher?: typeof fetch) =>
     call<{ space_id: string; label: string; floor_id: string }>(

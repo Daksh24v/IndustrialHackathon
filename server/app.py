@@ -13,6 +13,8 @@ Endpoints
 - DELETE /sessions/{id}                   end it
 - POST /imports                           set up a new building from floor plans: a builder conversation
 - POST /imports/{session_id}/save         save it (the agent can also save when the person confirms)
+- /voice/...                              speech in and out with ElevenLabs (voice/README.md); GET /voice is
+                                          the hands-free demo page. Needs ELEVENLABS_API_KEY in .env.
 """
 
 import threading
@@ -20,9 +22,13 @@ import uuid
 from functools import lru_cache
 from pathlib import Path
 
+import os
+
 import anthropic
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 from shapely.ops import unary_union
 
@@ -31,6 +37,7 @@ from navagent.builder import Draft
 from navagent.tools import Session
 from navcore.engine import Building, EngineError
 from navcore.plans import PlanError
+from voice import app as voice_service
 
 DATA = Path(__file__).resolve().parent.parent / "data"
 MAX_SESSIONS = 200
@@ -149,6 +156,7 @@ class SessionRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     text: str = Field(min_length=1, description="what the person said or typed, or the option they picked")
+    spoken: bool = Field(False, description="said out loud and the answer is read out: one short sentence, faster")
 
 
 @app.post("/sessions")
@@ -177,7 +185,7 @@ def chat(session_id: str, request: ChatRequest) -> dict:
     `map` (if any) is what to draw: their position, the target and the route lines per floor."""
     agent = agent_for(session_id)
     try:
-        reply = agent.ask(request.text)
+        reply = agent.ask(request.text, spoken=request.spoken)
     except anthropic.APIStatusError as error:
         raise HTTPException(502, f"Claude API error {error.status_code}") from error
     except anthropic.APIConnectionError as error:
@@ -262,3 +270,26 @@ def end_session(session_id: str) -> dict:
     with _lock:
         _sessions.pop(session_id, None)
     return {"ended": True}
+
+
+# ---------- voice ----------
+
+# The voice endpoints live here too, so the app needs one server and one URL. Voice talks to the agent through
+# this API; unless NAV_BACKEND_URL points elsewhere, it calls this app in-process instead of over the network.
+app.include_router(voice_service.router)
+if "NAV_BACKEND_URL" not in os.environ:
+    _in_process: TestClient | None = None
+
+    def _voice_backend() -> TestClient:
+        global _in_process
+        if _in_process is None:
+            _in_process = TestClient(app, raise_server_exceptions=False)
+        return _in_process
+
+    voice_service.backend = _voice_backend
+
+
+@app.get("/voice", include_in_schema=False)
+def voice_page() -> FileResponse:
+    """The hands-free demo page (microphone in, speaker out)."""
+    return FileResponse(voice_service.PAGE)

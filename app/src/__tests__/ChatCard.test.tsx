@@ -60,3 +60,22 @@ describe('ChatCard', () => {
     expect(screen.getByTestId('question')).toBeTruthy();
   });
 });
+
+describe('ChatCard microphone', () => {
+  it('starts voice and shows what Finni is doing', async () => {
+    const onMic = jest.fn();
+    const view = await render(<ChatCard messages={[]} question={null} busy={false} onSend={jest.fn()} onMic={onMic} />);
+    expect(screen.queryByTestId('mic-hint')).toBeNull();
+    await fireEvent.press(screen.getByTestId('mic'));
+    expect(onMic).toHaveBeenCalled();
+    await view.rerender(<ChatCard messages={[]} question={null} busy={false} onSend={jest.fn()} onMic={onMic}
+                                  mic="listening" />);
+    expect(screen.getByText('Listening… pause when you are done')).toBeTruthy();
+    await view.rerender(<ChatCard messages={[]} question={null} busy={false} onSend={jest.fn()} onMic={onMic}
+                                  mic="speaking" />);
+    expect(screen.getByText('Speaking… tap the mic to interrupt')).toBeTruthy();
+    await view.rerender(<ChatCard messages={[]} question={null} busy={false} onSend={jest.fn()} onMic={onMic}
+                                  mic="thinking" />);
+    expect(screen.queryByTestId('mic')).toBeNull(); // a spinner while it works
+  });
+});

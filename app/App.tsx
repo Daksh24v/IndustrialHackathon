@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import { Component, type ReactNode, useCallback, useEffect, useReducer, useState } from 'react';
+import { Component, type ReactNode, useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -11,6 +11,7 @@ import { FloorPlan } from './src/components/FloorPlan';
 import { FloorScene } from './src/components/FloorScene';
 import { initial, nextStep, reduce } from './src/state';
 import { colours } from './src/theme';
+import { useVoice } from './src/useVoice';
 
 /** Shows an error on screen (with what went wrong) instead of a crashed app. */
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -63,18 +64,32 @@ function Guide() {
     })();
   }, []);
 
+  // Voice (../voice): the mic hands over what was said like typed text; answers are read out.
+  const sendRef = useRef<(text: string) => void>(() => {});
+  const voice = useVoice({
+    buildingId: state.detail?.building.id ?? null,
+    onHeard: (text) => sendRef.current(text),
+    onError: (message) => dispatch({ type: 'error', message }),
+  });
+  const talking = voice.mic !== 'off'; // a spoken conversation: short answers, read out
+
   const send = useCallback(
     async (text: string) => {
       if (!state.sessionId) return;
       dispatch({ type: 'send', text });
+      voice.waiting();
       try {
-        dispatch({ type: 'reply', reply: await api.chat(state.sessionId, text) });
+        const reply = await api.chat(state.sessionId, text, undefined, talking);
+        dispatch({ type: 'reply', reply });
+        void voice.say(reply);
       } catch (error) {
+        voice.stop();
         dispatch({ type: 'error', message: (error as Error).message });
       }
     },
-    [state.sessionId],
+    [state.sessionId, voice, talking],
   );
+  sendRef.current = send;
 
   const floors = [...(state.detail?.floors ?? [])].sort((a, b) => a.level - b.level);
   const floorName = floors.find((floor) => floor.id === state.floorId)?.name;
@@ -96,7 +111,8 @@ function Guide() {
         ) : null}
         <FinniLogo />
       </View>
-      <ChatCard messages={state.messages} question={state.question} busy={state.busy} onSend={send} />
+      <ChatCard messages={state.messages} question={state.question} busy={state.busy} onSend={send}
+                onMic={voice.toggle} mic={voice.mic} />
       {state.error ? <Text testID="error" style={styles.error}>{state.error}</Text> : null}
 
       <View style={styles.map} onLayout={(e) => setSize(e.nativeEvent.layout)}>

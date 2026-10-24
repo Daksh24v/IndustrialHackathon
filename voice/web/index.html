@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Talk to your building</title>
+<style>
+  :root { --bg: #f6f5f2; --card: #fff; --ink: #1d1d1b; --muted: #6b6a66; --accent: #e5532d; --line: #e2e0da;
+          --calm: #2f7d5b; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151514; --card: #201f1d; --ink: #f1efe9; --muted: #a29f97; --accent: #ff6a43; --line: #34322e;
+            --calm: #4fbf8d; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.45 system-ui, -apple-system, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: 15px; }
+  .row { display: flex; gap: 8px; }
+  input { flex: 1; min-width: 0; font: inherit; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+          background: var(--card); color: var(--ink); }
+  button { font: inherit; border: 0; border-radius: 10px; padding: 10px 16px; cursor: pointer; }
+  .secondary { background: var(--card); color: var(--ink); border: 1px solid var(--line); }
+  #orb { display: grid; place-items: center; width: 168px; height: 168px; margin: 28px auto 10px; border-radius: 50%;
+         background: var(--accent); color: #fff; font-size: 19px; font-weight: 600; text-align: center;
+         box-shadow: 0 6px 24px rgb(229 83 45 / .35); transition: transform .08s, background .2s; user-select: none; }
+  #orb[data-state="idle"] { cursor: pointer; }
+  #orb[data-state="listening"] { background: var(--calm); box-shadow: 0 6px 24px rgb(47 125 91 / .35); }
+  #orb[data-state="thinking"] { animation: breathe 1.4s ease-in-out infinite; }
+  #orb[data-state="speaking"] { animation: breathe .7s ease-in-out infinite; }
+  @keyframes breathe { 50% { transform: scale(1.05); } }
+  #end { display: none; margin: 0 auto 8px; }
+  #status { text-align: center; color: var(--muted); min-height: 1.5em; margin-bottom: 18px; font-size: 15px; }
+  #log { display: flex; flex-direction: column; gap: 10px; }
+  .msg { padding: 10px 14px; border-radius: 14px; max-width: 88%; }
+  .you { align-self: flex-end; background: var(--accent); color: #fff; }
+  .bot { align-self: flex-start; background: var(--card); border: 1px solid var(--line); }
+  .note { font-size: 13px; color: var(--muted); margin-top: 4px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .chips button { background: var(--bg); color: var(--ink); border: 1px solid var(--line); padding: 6px 12px; }
+  #type { margin-top: 22px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Talk to your building</h1>
+  <p class="sub">Press Start once, then just talk. Pause and it answers; talk over it to interrupt.
+    Headphones work best.</p>
+
+  <div class="row" id="setup">
+    <input id="building" value="proc-factory-dev-003" aria-label="Building id">
+  </div>
+
+  <div id="orb" data-state="idle" role="button" tabindex="0">Start</div>
+  <div style="text-align:center"><button class="secondary" id="end">End conversation</button></div>
+  <div id="status"></div>
+  <div id="log"></div>
+
+  <form class="row" id="type">
+    <input id="text" placeholder="…or type it" aria-label="Type a message" disabled>
+    <button class="secondary" disabled>Send</button>
+  </form>
+</main>
+
+<script>
+// ---- tuning ----
+const END_SILENCE_MS = 800;      // this much quiet after speech ends the turn
+const MAX_TURN_MS = 15000;       // never record longer
+const MIN_SPEECH_MS = 250;       // shorter blips are ignored
+const PREROLL_MS = 350;          // keep this much before speech starts, so the first word isn't cut
+const BARGE_IN_MS = 220;         // speech this long while it talks interrupts it
+const FILLER_AFTER_MS = 1200;    // say "One moment." if the answer takes longer than this
+const TARGET_RATE = 16000;       // what we send to speech-to-text
+
+const $ = (id) => document.getElementById(id);
+const orb = $("orb");
+const player = new Audio();
+player.preservesPitch = true;
+
+let convo = null;  // {sessionId, stream, context, ...} while a conversation runs
+
+function setState(state, label) {
+  orb.dataset.state = state;
+  orb.textContent = label;
+  if (convo) convo.state = state;
+}
+function status(text) { $("status").textContent = text; }
+
+function add(cls, text, extra) {
+  const div = document.createElement("div");
+  div.className = "msg " + cls;
+  div.textContent = text;
+  if (extra) div.append(extra);
+  $("log").append(div);
+  div.scrollIntoView({ behavior: "smooth", block: "end" });
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, options);
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.detail || response.statusText);
+  return body;
+}
+const json = (body) => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+// ---- conversation ----
+
+async function start() {
+  if (convo) return;
+  setState("thinking", "Starting…");
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    const session = await api("/voice/sessions", json({ building_id: $("building").value.trim() }));
+    const context = new AudioContext();
+    const source = context.createMediaStreamSource(stream);
+    const processor = context.createScriptProcessor(2048, 1, 1);
+    source.connect(processor);
+    processor.connect(context.destination);  // outputs silence; needed for the callback to run
+    convo = { sessionId: session.session_id, stream, context, processor, state: "listening", noise: 0.01,
+              preroll: [], recording: null, voicedMs: 0, filler: null, turn: 0 };
+    processor.onaudioprocess = (event) => {
+      event.outputBuffer.getChannelData(0).fill(0);
+      onFrame(new Float32Array(event.inputBuffer.getChannelData(0)), context.sampleRate);
+    };
+    api("/voice/speak", json({ text: "One moment." })).then((clip) => { if (convo) convo.filler = clip; }).catch(() => {});
+    $("log").innerHTML = "";
+    add("bot", `Connected to ${session.building_name}. Ask me where anything is.`);
+    $("end").style.display = "inline-block";
+    $("setup").style.display = "none";
+    $("text").disabled = false; $("type").querySelector("button").disabled = false;
+    listen();
+  } catch (error) {
+    stop();
+    status("Couldn't start: " + error.message);
+  }
+}
+
+function stop() {
+  if (convo) {
+    convo.processor.disconnect();
+    convo.context.close();
+    convo.stream.getTracks().forEach((track) => track.stop());
+    fetch(`/voice/sessions/${convo.sessionId}`, { method: "DELETE" }).catch(() => {});
+  }
+  convo = null;
+  player.pause();
+  setState("idle", "Start");
+  $("end").style.display = "none";
+  $("setup").style.display = "flex";
+  $("text").disabled = true; $("type").querySelector("button").disabled = true;
+  status("Conversation ended.");
+}
+
+function listen() {
+  if (!convo) return;
+  convo.recording = null;
+  convo.voicedMs = 0;
+  setState("listening", "Listening");
+  status("Go ahead, I'm listening.");
+}
+
+// ---- the microphone, frame by frame (about 43 ms each) ----
+
+function onFrame(samples, rate) {
+  if (!convo) return;
+  const ms = (samples.length / rate) * 1000;
+  let sum = 0;
+  for (const value of samples) sum += value * value;
+  const level = Math.sqrt(sum / samples.length);
+  const c = convo;
+
+  if (c.state === "recording") {
+    c.recording.frames.push(samples);
+    c.recording.ms += ms;
+    if (level > Math.max(0.008, c.noise * 2.2)) { c.recording.quietMs = 0; c.recording.speechMs += ms; }
+    else c.recording.quietMs += ms;
+    if (c.recording.quietMs >= END_SILENCE_MS || c.recording.ms >= MAX_TURN_MS) finishTurn(rate);
+    return;
+  }
+
+  c.preroll.push(samples);
+  while (c.preroll.length * ms > PREROLL_MS) c.preroll.shift();
+
+  if (c.state === "listening") {
+    const loud = level > Math.max(0.015, c.noise * 3);
+    if (!loud) c.noise = 0.95 * c.noise + 0.05 * level;  // learn the room's background noise
+    c.voicedMs = loud ? c.voicedMs + ms : 0;
+    if (c.voicedMs >= 2 * ms) beginRecording();
+  } else if (c.state === "speaking") {
+    // its own voice can leak into the mic, so interrupting needs clearly louder, longer speech
+    const loud = level > Math.max(0.05, c.noise * 6);
+    c.voicedMs = loud ? c.voicedMs + ms : 0;
+    if (c.voicedMs >= BARGE_IN_MS) { player.pause(); beginRecording(); }
+  }
+}
+
+function beginRecording() {
+  const c = convo;
+  c.recording = { frames: [...c.preroll], ms: 0, quietMs: 0, speechMs: c.voicedMs };
+  c.preroll = [];
+  setState("recording", "Hearing you…");
+  status("");
+}
+
+async function finishTurn(rate) {
+  const c = convo;
+  const { frames, speechMs } = c.recording;
+  if (speechMs < MIN_SPEECH_MS) return listen();
+  const turn = ++c.turn;
+  setState("thinking", "Thinking…");
+  const wav = encodeWav(frames, rate);
+  const fillerTimer = fillerLater(turn);
+  try {
+    const answer = await api(`/voice/sessions/${c.sessionId}/turn`,
+                             { method: "POST", headers: { "content-type": "audio/wav" }, body: wav });
+    clearTimeout(fillerTimer);
+    if (!convo || convo.turn !== turn) return;  // ended or interrupted meanwhile
+    show(answer);
+  } catch (error) {
+    clearTimeout(fillerTimer);
+    if (convo && convo.turn === turn) { status("Something went wrong: " + error.message); listen(); }
+  }
+}
+
+async function sendText(text) {
+  if (!convo || !text.trim()) return;
+  const turn = ++convo.turn;
+  player.pause();
+  setState("thinking", "Thinking…");
+  const fillerTimer = fillerLater(turn);
+  try {
+    const answer = await api(`/voice/sessions/${convo.sessionId}/say`, json({ text }));
+    clearTimeout(fillerTimer);
+    if (convo && convo.turn === turn) show(answer);
+  } catch (error) {
+    clearTimeout(fillerTimer);
+    if (convo && convo.turn === turn) { status("Something went wrong: " + error.message); listen(); }
+  }
+}
+
+/** "One moment." if this turn's answer takes a while (for spoken, typed and tapped turns alike). */
+function fillerLater(turn) {
+  return setTimeout(() => {
+    if (convo && convo.turn === turn && convo.state === "thinking" && convo.filler) play(convo.filler, false);
+  }, FILLER_AFTER_MS);
+}
+
+function show(answer) {
+  if (answer.heard) add("you", answer.heard);
+  let extra = null;
+  if (answer.sent && answer.sent !== answer.heard) {
+    extra = document.createElement("div"); extra.className = "note"; extra.textContent = `(picked: ${answer.sent})`;
+  }
+  if (answer.question) {
+    const chips = document.createElement("div"); chips.className = "chips";
+    for (const option of answer.question.options) {
+      const chip = document.createElement("button");
+      chip.textContent = option.label;
+      chip.onclick = () => sendText(option.label);
+      chips.append(chip);
+    }
+    extra = extra ? (extra.append(chips), extra) : chips;
+  }
+  add("bot", answer.spoken, extra);
+  const t = answer.timings_ms || {};
+  status(Object.entries(t).map(([step, ms]) => `${step} ${(ms / 1000).toFixed(1)}s`).join(" · "));
+  if (answer.audio_base64) play(answer, true);
+  else { if (answer.audio_error) status("No audio: " + answer.audio_error); listen(); }
+}
+
+function play(clip, isAnswer) {
+  if (!convo) return;
+  player.src = "data:audio/mpeg;base64," + clip.audio_base64;
+  player.playbackRate = clip.playback_rate || 1;
+  player.onended = isAnswer ? () => { if (convo && convo.state === "speaking") listen(); } : null;
+  player.play();
+  if (isAnswer) { convo.voicedMs = 0; setState("speaking", "Speaking"); }
+}
+
+// ---- 16 kHz mono WAV for speech to text ----
+
+function encodeWav(frames, rate) {
+  const total = frames.reduce((n, f) => n + f.length, 0);
+  const input = new Float32Array(total);
+  let offset = 0;
+  for (const f of frames) { input.set(f, offset); offset += f.length; }
+  const ratio = rate / TARGET_RATE;
+  const length = Math.floor(total / ratio);
+  const view = new DataView(new ArrayBuffer(44 + length * 2));
+  const text = (at, s) => { for (let i = 0; i < s.length; i++) view.setUint8(at + i, s.charCodeAt(i)); };
+  text(0, "RIFF"); view.setUint32(4, 36 + length * 2, true); text(8, "WAVE"); text(12, "fmt ");
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, TARGET_RATE, true); view.setUint32(28, TARGET_RATE * 2, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true); text(36, "data"); view.setUint32(40, length * 2, true);
+  for (let i = 0; i < length; i++) {
+    const from = Math.floor(i * ratio), to = Math.min(total, Math.floor((i + 1) * ratio));
+    let sum = 0;
+    for (let j = from; j < to; j++) sum += input[j];
+    const sample = Math.max(-1, Math.min(1, sum / Math.max(1, to - from)));
+    view.setInt16(44 + i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+  }
+  return new Blob([view], { type: "audio/wav" });
+}
+
+// ---- controls ----
+
+orb.onclick = () => { if (!convo) start(); else if (convo.state === "speaking") { player.pause(); listen(); } };
+$("end").onclick = stop;
+$("type").onsubmit = (event) => { event.preventDefault(); sendText($("text").value); $("text").value = ""; };
+document.addEventListener("keydown", (event) => {
+  if (event.code !== "Space" || document.activeElement.tagName === "INPUT") return;
+  event.preventDefault();
+  orb.click();   // space: start, or cut it off while it talks
+});
+</script>
+</body>
+</html>
