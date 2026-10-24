@@ -13,6 +13,7 @@ Endpoints
 - DELETE /sessions/{id}                   end it
 - POST /imports                           set up a new building from floor plans: a builder conversation
 - POST /imports/{session_id}/save         save it (the agent can also save when the person confirms)
+- /                                       the Finni website (app/dist, built with `npm run build` in app/)
 - /voice/...                              speech in and out with ElevenLabs (voice/README.md); GET /voice is
                                           the hands-free demo page. Needs ELEVENLABS_API_KEY in .env.
 """
@@ -28,6 +29,7 @@ import anthropic
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 from shapely.ops import unary_union
@@ -40,6 +42,7 @@ from navcore.plans import PlanError
 from voice import app as voice_service
 
 DATA = Path(__file__).resolve().parent.parent / "data"
+WEB = Path(__file__).resolve().parent.parent / "app" / "dist"  # the built website
 MAX_SESSIONS = 200
 
 app = FastAPI(title="Talk to your building", version="1.0")
@@ -293,3 +296,10 @@ if "NAV_BACKEND_URL" not in os.environ:
 def voice_page() -> FileResponse:
     """The hands-free demo page (microphone in, speaker out)."""
     return FileResponse(voice_service.PAGE)
+
+
+# ---------- the website ----------
+
+# Last, so every API path above wins: everything else is the built Finni site (one address for site and API).
+if (WEB / "index.html").exists():
+    app.mount("/", StaticFiles(directory=WEB, html=True), name="web")

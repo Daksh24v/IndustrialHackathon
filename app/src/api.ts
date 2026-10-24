@@ -99,7 +99,16 @@ export class ApiError extends Error {
   }
 }
 
-export const API_URL = (process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8000').replace(/\/$/, '');
+/** The backend. EXPO_PUBLIC_API_URL when set at build time (e.g. a separately hosted backend); otherwise the
+ * site's own address when the backend serves the site, or localhost:8000 while developing (npm run web). */
+export function defaultApiUrl(location: { origin: string; port: string } | undefined): string {
+  if (location && location.origin.startsWith('http') && location.port !== '8081') return location.origin;
+  return 'http://localhost:8000';
+}
+
+export const API_URL = (
+  process.env.EXPO_PUBLIC_API_URL ?? defaultApiUrl(typeof window !== 'undefined' ? window.location : undefined)
+).replace(/\/$/, '');
 
 async function call<T>(path: string, init?: RequestInit, fetcher: typeof fetch = fetch): Promise<T> {
   let response: Response;

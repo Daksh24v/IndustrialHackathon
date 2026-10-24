@@ -57,3 +57,17 @@ describe('spoken turns', () => {
     expect(bodies.map((body) => JSON.parse(body).spoken)).toEqual([false, true]);
   });
 });
+
+describe('where the backend is', () => {
+  const { defaultApiUrl } = require('../api');
+
+  it('is the site itself when the backend serves the site', () => {
+    expect(defaultApiUrl({ origin: 'https://finni.example.com', port: '' })).toBe('https://finni.example.com');
+    expect(defaultApiUrl({ origin: 'http://192.168.1.5:8000', port: '8000' })).toBe('http://192.168.1.5:8000');
+  });
+
+  it('is localhost:8000 while developing, and off the web', () => {
+    expect(defaultApiUrl({ origin: 'http://localhost:8081', port: '8081' })).toBe('http://localhost:8000');
+    expect(defaultApiUrl(undefined)).toBe('http://localhost:8000');
+  });
+});

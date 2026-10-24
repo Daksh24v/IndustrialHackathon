@@ -25,6 +25,7 @@ interface Props {
   onSend: (text: string) => void;
   onMic?: () => void;
   mic?: MicState;
+  tall?: boolean; // in a sidebar (laptops): the conversation fills the height
 }
 
 const MIC_HINT: Record<MicState, string> = {
@@ -34,7 +35,7 @@ const MIC_HINT: Record<MicState, string> = {
   speaking: 'Speaking… tap the mic to interrupt',
 };
 
-export function ChatCard({ messages, question, busy, onSend, onMic, mic = 'off' }: Props) {
+export function ChatCard({ messages, question, busy, onSend, onMic, mic = 'off', tall = false }: Props) {
   const [text, setText] = useState('');
   const [open, setOpen] = useState(true);
   const scroll = useRef<ScrollViewInstance>(null);
@@ -52,7 +53,7 @@ export function ChatCard({ messages, question, busy, onSend, onMic, mic = 'off' 
 
   const talking = messages.length > 0 || !!question || busy;
   return (
-    <View style={styles.wrap}>
+    <View style={[styles.wrap, tall && styles.fill]}>
       <View style={styles.inputRow}>
         <TextInput
           testID="chat-input"
@@ -85,7 +86,8 @@ export function ChatCard({ messages, question, busy, onSend, onMic, mic = 'off' 
       {MIC_HINT[mic] ? <Text testID="mic-hint" style={styles.micHint}>{MIC_HINT[mic]}</Text> : null}
 
       {!talking && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.starters}>
+        <ScrollView horizontal={!tall} showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={[styles.starters, tall && styles.startersTall]}>
           {STARTERS.map((starter) => (
             <Pressable key={starter} testID={`starter-${starter}`} style={styles.starter} onPress={() => send(starter)}>
               <Text style={styles.starterText}>{starter}</Text>
@@ -95,14 +97,14 @@ export function ChatCard({ messages, question, busy, onSend, onMic, mic = 'off' 
       )}
 
       {talking && (
-        <View style={styles.card} testID="chat-card">
+        <View style={[styles.card, tall && open && styles.fill]} testID="chat-card">
           <Pressable testID="fold" accessibilityLabel={open ? 'Hide the conversation' : 'Show the conversation'}
                      style={styles.fold} onPress={() => setOpen(!open)} hitSlop={8}>
             <View style={styles.handle} />
           </Pressable>
           {open && (
             <>
-              <ScrollView ref={scroll} style={styles.messages} contentContainerStyle={{ gap: 6 }}>
+              <ScrollView ref={scroll} style={tall ? styles.fill : styles.messages} contentContainerStyle={{ gap: 6 }}>
                 {messages.map((message, index) => (
                   <Text key={index} style={message.from === 'you' ? styles.you : styles.guide}>
                     {message.text}
@@ -137,6 +139,7 @@ export function ChatCard({ messages, question, busy, onSend, onMic, mic = 'off' 
 
 const styles = StyleSheet.create({
   wrap: { paddingHorizontal: 16, gap: 10, paddingBottom: 8 },
+  fill: { flex: 1 },
   inputRow: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: colours.background, borderRadius: 24,
     paddingLeft: 18, paddingRight: 4, borderWidth: 1, borderColor: '#ECECEC',
@@ -148,6 +151,7 @@ const styles = StyleSheet.create({
   micOn: { backgroundColor: colours.accent },
   micHint: { color: colours.accent, fontSize: 12, textAlign: 'center', marginTop: -4 },
   starters: { gap: 8 },
+  startersTall: { flexDirection: 'row', flexWrap: 'wrap' },
   starter: { backgroundColor: colours.chip, borderRadius: 16, paddingHorizontal: 12, paddingVertical: 7 },
   starterText: { color: colours.chipText, fontSize: 13 },
   card: {

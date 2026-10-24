@@ -1,6 +1,6 @@
 import { StatusBar } from 'expo-status-bar';
 import { Component, type ReactNode, useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { api, ApiError, pickBuilding } from './src/api';
@@ -50,6 +50,9 @@ function Guide() {
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [threeD, setThreeD] = useState(true);
   const insets = useSafeAreaInsets();
+  const window = useWindowDimensions();
+  // A laptop (or a tablet held sideways): the conversation on the left, the map beside it. Phones: one column.
+  const wide = window.width >= WIDE_MIN_PX && window.width > window.height;
 
   useEffect(() => {
     (async () => {
@@ -100,20 +103,22 @@ function Guide() {
   const bottom = Math.max(insets.bottom, 12);
 
   return (
-    <SafeAreaView style={styles.screen} edges={['top', 'left', 'right']}>
+    <SafeAreaView style={[styles.screen, wide && styles.row]} edges={['top', 'left', 'right']}>
       <StatusBar style="dark" />
-      <View style={styles.header}>
-        {inside || state.view === 'flying' ? (
-          <Pressable testID="back" accessibilityLabel="Back to the building" onPress={() => dispatch({ type: 'back' })}
-                     style={styles.back} hitSlop={8}>
-            <Text style={styles.backText}>‹</Text>
-          </Pressable>
-        ) : null}
-        <FinniLogo />
+      <View style={wide ? styles.sidebar : null} testID={wide ? 'sidebar' : undefined}>
+        <View style={styles.header}>
+          {inside || state.view === 'flying' ? (
+            <Pressable testID="back" accessibilityLabel="Back to the building" onPress={() => dispatch({ type: 'back' })}
+                       style={styles.back} hitSlop={8}>
+              <Text style={styles.backText}>‹</Text>
+            </Pressable>
+          ) : null}
+          <FinniLogo />
+        </View>
+        <ChatCard messages={state.messages} question={state.question} busy={state.busy} onSend={send}
+                  onMic={voice.toggle} mic={voice.mic} tall={wide} />
+        {state.error ? <Text testID="error" style={styles.error}>{state.error}</Text> : null}
       </View>
-      <ChatCard messages={state.messages} question={state.question} busy={state.busy} onSend={send}
-                onMic={voice.toggle} mic={voice.mic} />
-      {state.error ? <Text testID="error" style={styles.error}>{state.error}</Text> : null}
 
       <View style={styles.map} onLayout={(e) => setSize(e.nativeEvent.layout)}>
         {state.view === 'loading' && !state.error ? <ActivityIndicator color={colours.accent} style={{ flex: 1 }} /> : null}
@@ -176,9 +181,15 @@ function Guide() {
   );
 }
 
+const WIDE_MIN_PX = 860;
+const SIDEBAR_PX = 400;
+
 const edge = { borderWidth: StyleSheet.hairlineWidth, borderColor: colours.blockEdge };
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colours.background },
+  row: { flexDirection: 'row' },
+  sidebar: { width: SIDEBAR_PX, paddingTop: 12, paddingBottom: 16, borderRightWidth: StyleSheet.hairlineWidth,
+             borderRightColor: colours.blockEdge },
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 6, paddingBottom: 10, gap: 6 },
   back: { width: 28, height: 32, alignItems: 'center', justifyContent: 'center', marginLeft: -6 },
   backText: { fontSize: 32, color: colours.text, marginTop: -4 },

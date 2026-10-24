@@ -65,7 +65,7 @@ export function FloorPlan({ detail, floorId, map, width, height }: Props) {
 
   return (
     <View style={[styles.frame, { width, height }]} testID="floor-plan">
-      <Animated.View {...gestures.panHandlers} style={[{ width, height }, gestures.style]}>
+      <Animated.View ref={gestures.ref} {...gestures.panHandlers} style={[{ width, height }, gestures.style]}>
         <Svg width={width + 2 * MARGIN_PX} height={height + 2 * MARGIN_PX} style={{ position: 'absolute', left: -MARGIN_PX, top: -MARGIN_PX }}>
           <G transform={`translate(${MARGIN_PX} ${MARGIN_PX})`}>
             {spaces.map((space) => (

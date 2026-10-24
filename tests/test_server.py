@@ -178,3 +178,13 @@ def test_voice_is_served_by_the_backend(http):
     assert "/voice/transcribe" in http.get("/openapi.json").json()["paths"]
     buildings = voice_service.call_backend("GET", "/buildings")
     assert any(row["id"] == BUILDING for row in buildings)
+
+
+def test_the_backend_serves_the_website_and_the_api_still_wins(http):
+    from server.app import WEB
+
+    if not (WEB / "index.html").exists():
+        pytest.skip("the website isn't built (npm run build in app/)")
+    page = http.get("/")
+    assert page.status_code == 200 and "<html" in page.text.lower()
+    assert http.get("/buildings").headers["content-type"].startswith("application/json")

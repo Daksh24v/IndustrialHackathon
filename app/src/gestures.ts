@@ -1,7 +1,8 @@
-/** Drag with one finger, pinch with two: the drawing follows the fingers (a cheap transform), and when they
- * let go the scene redraws itself sharp at the new place and size (onCommit). */
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Animated, PanResponder } from 'react-native';
+/** Drag with one finger (or the mouse), pinch with two: the drawing follows the fingers (a cheap transform), and
+ * when they let go the scene redraws itself sharp at the new place and size (onCommit). In a browser the
+ * mouse wheel or a trackpad pinch zooms about the pointer. */
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Animated, PanResponder, Platform } from 'react-native';
 
 export interface Move {
   k: number; // zoom about the screen centre
@@ -11,6 +12,12 @@ export interface Move {
 
 const MIN_ZOOM = 0.4;
 const MAX_ZOOM = 6;
+const WHEEL_ZOOM = 0.0025; // per pixel of wheel movement
+
+/** The move for zooming by k while the point (x, y) on screen stays where it is. */
+export function zoomAt(k: number, x: number, y: number, width: number, height: number): Move {
+  return { k, tx: (1 - k) * (x - width / 2), ty: (1 - k) * (y - height / 2) };
+}
 
 export function useMapGestures(width: number, height: number, onCommit: (move: Move) => void) {
   const translate = useRef(new Animated.ValueXY()).current;
@@ -77,7 +84,36 @@ export function useMapGestures(width: number, height: number, onCommit: (move: M
     zoom.setValue(1);
   }, [settled, translate, zoom]);
 
+  // Browser: the wheel (and a trackpad pinch, which arrives as a wheel with ctrlKey) zooms about the pointer.
+  const wheelCleanup = useRef<(() => void) | null>(null);
+  const ref = useCallback((node: unknown) => {
+    wheelCleanup.current?.();
+    wheelCleanup.current = null;
+    const element = node as HTMLElement | null;
+    if (Platform.OS !== 'web' || !element || typeof element.addEventListener !== 'function') return;
+    let pending = 0;
+    let frame: number | null = null;
+    let at = { x: 0, y: 0 };
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const box = element.getBoundingClientRect();
+      at = { x: event.clientX - box.left, y: event.clientY - box.top };
+      pending += event.deltaY * (event.ctrlKey ? 4 : 1);
+      if (frame === null) {
+        frame = requestAnimationFrame(() => {
+          const k = Math.min(1.6, Math.max(1 / 1.6, Math.exp(-pending * WHEEL_ZOOM)));
+          pending = 0;
+          frame = null;
+          commit.current(zoomAt(k, at.x, at.y, size.current.width, size.current.height));
+        });
+      }
+    };
+    element.addEventListener('wheel', onWheel, { passive: false });
+    wheelCleanup.current = () => element.removeEventListener('wheel', onWheel);
+  }, []);
+
   return {
+    ref,
     panHandlers: responder.panHandlers,
     style: { transform: [{ translateX: translate.x }, { translateY: translate.y }, { scale: zoom }] },
   };

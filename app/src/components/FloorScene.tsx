@@ -178,7 +178,7 @@ export function FloorScene({ detail, floorId, map, footprints, width, height }: 
 
   return (
     <Animated.View style={[styles.frame, { width, height, opacity: appear }]} testID="floor-scene">
-      <Animated.View {...gestures.panHandlers} style={[{ width, height }, gestures.style]}>
+      <Animated.View ref={gestures.ref} {...gestures.panHandlers} style={[{ width, height }, gestures.style]}>
         <Svg width={width + 2 * MARGIN_PX} height={height + 2 * MARGIN_PX} style={{ position: 'absolute', left: -MARGIN_PX, top: -MARGIN_PX }}>
           <G transform={`translate(${MARGIN_PX} ${MARGIN_PX})`}>
             {scene.slabSides.map((side, i) => <Path key={`slab-${i}`} d={side.d} fill="#E2E2E2" stroke="#D2D2D2" strokeWidth={0.6} />)}
