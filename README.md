@@ -1,3 +1,9 @@
+> **Our project.** Phase 1 (the engine and the benchmark agent) is in `navcore/` and `navagent/`; see
+> [BENCHMARK.md](BENCHMARK.md) for the one-command run and the results. Tests: `uv run pytest`
+> (add `--train` to also check the 200 train buildings). Chat with a building:
+> `uv run --env-file .env python -m navagent data/dev/proc-factory-dev-003`.
+> The challenge brief from the student kit follows unchanged.
+
 # Talk to Your Building: Agent-First Indoor Navigation
 
 **Industrial Agents Hackathon 2026**, in cooperation with UVC Partners and Anthropic. This is the student kit for Track 01.
