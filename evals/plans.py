@@ -51,12 +51,32 @@ def shifted(building: dict, dx: float, dy: float) -> dict:
 def compare(truth: Building, imported: dict) -> dict:
     """Scores for one building: counts and matches, plus answer checks."""
     result: Counter = Counter()
-    lowest = min(truth.floors.values(), key=lambda f: f["level"])
-    imported_lowest = next(f["id"] for f in imported["floors"] if f["level"] == lowest["level"])
-    tx, ty = bounds_min(truth.data, lowest["id"])
-    ix, iy = bounds_min(imported, imported_lowest)
-    imported = shifted(imported, tx - ix, ty - iy)
-    floor_map = {f["id"]: next(t["id"] for t in truth.floors.values() if t["level"] == f["level"]) for f in imported["floors"]}
+    floor_map = {f["id"]: next(t["id"] for t in truth.floors.values() if t["level"] == f["level"])
+                 for f in imported["floors"]}
+    # Floor alignment, where the dataset's floors share one frame (not Swiss Dwellings, whose floors are
+    # partly centred per floor): each floor's offset from where the ground floor's placement puts it.
+    ground = min(truth.floors.values(), key=lambda f: (abs(f["level"]), f["level"]))
+    imported_floor = {t: i for i, t in floor_map.items()}
+    gx, gy = (a - b for a, b in zip(bounds_min(truth.data, ground["id"]),
+                                     bounds_min(imported, imported_floor[ground["id"]])))
+    if truth.info["source"] != "swiss_dwellings":
+        for floor in truth.floors.values():
+            if floor["id"] == ground["id"]:
+                continue
+            fx, fy = (a - b for a, b in zip(bounds_min(truth.data, floor["id"]),
+                                             bounds_min(imported, imported_floor[floor["id"]])))
+            result["floors_to_align"] += 1
+            result["floors_aligned"] += math.dist((fx, fy), (gx, gy)) <= 0.1
+    # Geometry is compared floor by floor, each floor placed on its true position.
+    for floor in truth.floors.values():
+        tx, ty = bounds_min(truth.data, floor["id"])
+        ix, iy = bounds_min(imported, imported_floor[floor["id"]])
+        for space in imported["spaces"]:
+            if space["floor_id"] == imported_floor[floor["id"]]:
+                space["polygon"] = [[x + tx - ix, y + ty - iy] for x, y in space["polygon"]]
+        for opening in imported["openings"]:
+            if opening["floor_id"] == imported_floor[floor["id"]]:
+                opening["position"] = [opening["position"][0] + tx - ix, opening["position"][1] + ty - iy]
 
     mapping: dict[str, str] = {}  # true space id -> imported space id
     for floor in truth.floors.values():
@@ -117,7 +137,7 @@ def compare(truth: Building, imported: dict) -> dict:
         result["walls"] += 1
         want = {mapping.get(n) for n in truth.wall_neighbours(space_id)}
         result["walls_right"] += want == set(rebuilt.wall_neighbours(mapping[space_id]))
-        for direction in ("above", "below"):
+        for direction in ("above", "below") if truth.info["source"] != "swiss_dwellings" else ():
             truth_other = truth.stacked_room(space_id, direction)
             if truth_other is None:
                 continue
@@ -144,7 +164,8 @@ def run(buildings: list[str], verbose: bool) -> Counter:
         total.update(scores)
         ok = all(scores[f"{key}_right" if key in ("routes", "walls", "stacked") else f"{key}_found"
                         if key in ("doors", "connectors") else "spaces_matched"] == scores[key]
-                 for key in ("spaces", "doors", "connectors", "routes", "walls", "stacked"))
+                 for key in ("spaces", "doors", "connectors", "routes", "walls", "stacked")) and \
+            scores["floors_aligned"] == scores["floors_to_align"]
         perfect += ok
         if verbose or not ok:
             print(f"{'OK ' if ok else '-- '} {building_id:24s} " + " ".join(
@@ -166,6 +187,7 @@ def report(total: Counter) -> None:
     print(f"doors found: {share('doors_found', 'doors')}  (imported {total['imported_doors']})")
     print(f"stairs/lifts linked right: {share('connectors_found', 'connectors')}  "
           f"(imported {total['imported_connectors']})")
+    print(f"floors lined up (within 0.1 m; not Swiss): {share('floors_aligned', 'floors_to_align')}")
     print(f"route lengths right: {share('routes_right', 'routes')}")
     print(f"shared walls right: {share('walls_right', 'walls')}")
     print(f"room above/below right: {share('stacked_right', 'stacked')}")

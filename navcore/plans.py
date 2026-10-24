@@ -37,7 +37,7 @@ SPACE_COLOURS = {  # fill colour -> (space type, room type default)
 MARKERS = {"#8b4513": "door", "#9e9e9e": "opening", "#d32f2f": "entrance"}
 DEFAULT_DOOR_WIDTH_M = 0.9
 DEFAULT_FLOOR_HEIGHT_M = 3.5
-WALL_SNAP_M = 0.6  # a door marker sits on the wall between the two spaces it joins
+DOOR_REACH_M = 3.0  # a door marker joins the two nearest spaces within this distance
 TYPE_WORDS = {"generic_room": "Room", "corridor": "Corridor", "lobby": "Hall", "stairwell": "Stairwell",
               "lift": "Lift", "balcony": "Balcony"}
 
@@ -54,6 +54,15 @@ GLYPH_OFFSET = re.compile(r'<use xlink:href="#[^"]+"(?: transform="translate\((-
 
 class PlanError(ValueError):
     """A plan that can't be read; the message says why."""
+
+
+class AmbiguousAlignment(Exception):
+    """Several places fit a floor onto the one next to it equally well (e.g. one stair, many shafts below)."""
+
+    def __init__(self, best: tuple[float, float], choices: int) -> None:
+        super().__init__(f"{choices} equally good ways to line the floor up")
+        self.best = best
+        self.choices = choices
 
 
 @dataclass
@@ -181,6 +190,7 @@ def stacked_share(lower_band, upper_walls: MultiLineString, shift: tuple[float, 
 
 
 REFINE_RADIUS_M = 1.0  # walls may only fine-tune a shaft-based alignment this far
+WALLS_STACK_SHARE = 0.5  # ... and only when at least this share of the wall length then stacks
 
 
 def shaft_overlap(lower_shafts: list, upper_shafts: list, shift: tuple[float, float]) -> float:
@@ -207,6 +217,7 @@ def refine(score, start: tuple[float, float], radius: float | None) -> tuple[flo
 
 
 def alignment(lower: FloorPlan, upper: FloorPlan, lower_offset: tuple[float, float]) -> tuple[float, float] | None:
+    # "lower" is the floor already in place and "upper" the one being moved; it works in either direction.
     """The shift that puts upper on top of lower. Stair and lift shafts continue through the floors, so they
     decide (the shift that stacks the most shaft area on matching shafts); the walls then fine-tune it within
     REFINE_RADIUS_M (shafts can be drawn slightly differently per floor). Without shafts in common, the walls
@@ -229,21 +240,32 @@ def alignment(lower: FloorPlan, upper: FloorPlan, lower_offset: tuple[float, flo
             # among shifts that stack (almost) as much shaft area as the best, take the one with most walls
             good = [shift for value, shift in overlaps if value >= 0.9 * top]
             start = max(good, key=wall_score)
-            return refine(wall_score, start, REFINE_RADIUS_M)[1]
+            refined_score, refined = refine(wall_score, start, REFINE_RADIUS_M)
+            # walls only fine-tune when they really stack; some buildings' floors have different layouts
+            chosen = refined if refined_score >= WALLS_STACK_SHARE else start
+            others = [shift for shift in good if math.dist(shift, start) > REFINE_RADIUS_M]
+            if others and refined_score < WALLS_STACK_SHARE:
+                raise AmbiguousAlignment(chosen, len(others) + 1)
+            return chosen
+    # No stairs or lifts drawn in common: centre the floors on each other (how plans without them, such as
+    # the Swiss Dwellings ones, are laid out), unless that stacks clearly fewer walls than another fit.
     lx0, ly0, lx1, ly1 = lower_walls.bounds
     ux0, uy0, ux1, uy1 = upper_walls.bounds
-    starts = [(lx0 - ux0, ly0 - uy0), (lx1 - ux1, ly1 - uy1), (lx0 - ux0, ly1 - uy1), (lx1 - ux1, ly0 - uy0),
-              ((lx0 + lx1 - ux0 - ux1) / 2, (ly0 + ly1 - uy0 - uy1) / 2)]
-    best_score, best = max(refine(wall_score, start, None) for start in starts)
+    centred = ((lx0 + lx1 - ux0 - ux1) / 2, (ly0 + ly1 - uy0 - uy1) / 2)
+    corners = [(lx0 - ux0, ly0 - uy0), (lx1 - ux1, ly1 - uy1), (lx0 - ux0, ly1 - uy1), (lx1 - ux1, ly0 - uy0)]
+    best_score, best = max(refine(wall_score, start, None) for start in [centred, *corners])
+    if wall_score(centred) >= best_score - 0.1:
+        return centred
     return best if best_score >= MIN_STACKED_SHARE else None
 
 
 def door_spaces(position: list[float], spaces: list[dict], floor_id: str) -> list[str]:
-    """The (up to) two spaces a marker on a wall joins: the nearest outlines within WALL_SNAP_M."""
+    """The (up to) two spaces a door marker joins: the two nearest outlines. Markers normally sit on the wall
+    between them, but mapped doors (OSM) can be a few metres off, so anything within DOOR_REACH_M counts."""
     point = Point(position)
     near = sorted((Polygon(space["polygon"]).exterior.distance(point), space["id"]) for space in spaces
                   if space["floor_id"] == floor_id)
-    return [space_id for distance, space_id in near if distance <= WALL_SNAP_M][:2]
+    return [space_id for distance, space_id in near if distance <= DOOR_REACH_M][:2]
 
 
 def assemble(
@@ -261,19 +283,27 @@ def assemble(
     if len(set(levels)) != len(levels):
         raise PlanError("Two plans have the same floor level.")
     heights = floor_heights_m or {}
-    # Line the floors up: the lowest floor stays put; each next floor is moved onto the one below it.
+    # Line the floors up: the ground floor (or the floor nearest to it) stays put; going up and down from it,
+    # each floor is moved onto its already placed neighbour. A badly drawn basement then can't drag every
+    # floor above it out of place.
     shifts: dict[int, tuple[float, float]] = dict(offsets or {})
-    for index, (level, plan) in enumerate(plans):
+    reference = min(range(len(levels)), key=lambda i: (abs(levels[i]), levels[i]))
+    shifts.setdefault(levels[reference], (0.0, 0.0))
+    order = [(i, i - 1) for i in range(reference + 1, len(levels))] + [(i, i + 1) for i in range(reference - 1, -1, -1)]
+    for index, neighbour in order:
+        level = levels[index]
         if level in shifts:
             continue
-        if index == 0:
-            shifts[level] = (0.0, 0.0)
-            continue
-        found = alignment(plans[index - 1][1], plan, shifts[levels[index - 1]])
+        try:
+            found = alignment(plans[neighbour][1], plans[index][1], shifts[levels[neighbour]])
+        except AmbiguousAlignment as unsure:
+            found = unsure.best
+            notes.append(f"Floor {level} fits onto floor {levels[neighbour]} in {unsure.choices} places (its stairs "
+                         f"or lifts match several below). Show the person the floors stacked and ask if it's right.")
         if found is None:
-            shifts[level] = shifts[levels[index - 1]]
-            notes.append(f"Floor {level}'s walls don't line up with the floor below; it is placed at the same "
-                         f"origin. Ask how the two floors line up.")
+            shifts[level] = shifts[levels[neighbour]]
+            notes.append(f"Floor {level}'s walls and shafts don't line up with floor {levels[neighbour]}; it is "
+                         f"placed at the same origin. Ask how the two floors line up.")
         else:
             shifts[level] = found
 
