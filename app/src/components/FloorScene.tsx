@@ -23,6 +23,13 @@ const FOCUS_MARGIN_M = 4;
 const MIN_LABEL_PX = 38;
 const MARGIN_PX = 120; // drawn beyond the edges, so dragging doesn't show blank space
 const TURN_MS = 450;
+const DRAG_TURN = 0.006; // radians per pixel of a turning drag
+
+/** An angle in (-π, π]: the shortest way back to north. */
+export function wrapAngle(angle: number): number {
+  const turned = ((angle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+  return turned > Math.PI ? turned - 2 * Math.PI : turned;
+}
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 export const LABEL_FONT = Platform.select({ web: 'Helvetica, Arial, sans-serif', android: 'sans-serif', default: 'Helvetica' });
@@ -79,6 +86,8 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
 
   const frame = useRef<ComponentRef<typeof View>>(null);
   const camera = useRef(cam);
+  const size = useRef({ width, height });
+  size.current = { width, height };
   useLayoutEffect(() => {
     camera.current = cam;
   }, [cam]);
@@ -96,18 +105,69 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
   useEffect(() => () => {
     if (turning.current !== null) cancelAnimationFrame(turning.current);
   }, []);
-  const turn = () => {
+  const turnBy = (angle: number) => {
     if (turning.current !== null) return;
-    const start = cam;
+    const start = camera.current;
     const pivot = unproject3d(start, [width / 2, height / 2]);
     const began = Date.now();
     const step = () => {
       const t = Math.min(1, (Date.now() - began) / TURN_MS);
-      setCam(rotateAbout(start, pivot, (Math.PI / 2) * Easing.inOut(Easing.cubic)(t)));
+      setCam(rotateAbout(start, pivot, angle * Easing.inOut(Easing.cubic)(t)));
       turning.current = t < 1 ? requestAnimationFrame(step) : null;
     };
     turning.current = requestAnimationFrame(step);
   };
+  const turn = () => turnBy(Math.PI / 2);
+  const north = () => turnBy(-wrapAngle(camera.current.yaw)); // the compass: north up again
+
+  // Turn it all the way round like a map app: right-drag, Shift/Alt+drag (mouse) or a two-finger twist.
+  useEffect(() => {
+    const node = frame.current as unknown as HTMLElement | null;
+    if (!node || typeof node.addEventListener !== 'function') return;
+    let drag: { x: number; start: Camera; pivot: Point; id: number } | null = null;
+    const pivotOf = (cam: Camera) => unproject3d(cam, [size.current.width / 2, size.current.height / 2]);
+    const onDown = (event: PointerEvent) => {
+      if (event.pointerType !== 'mouse' || !(event.button === 2 || event.shiftKey || event.altKey)) return;
+      event.preventDefault(); // no pan (and no "I'm here") while turning
+      drag = { x: event.clientX, start: camera.current, pivot: pivotOf(camera.current), id: event.pointerId };
+      node.setPointerCapture?.(event.pointerId);
+    };
+    const onMove = (event: PointerEvent) => {
+      if (!drag || event.pointerId !== drag.id) return;
+      setCam(rotateAbout(drag.start, drag.pivot, (event.clientX - drag.x) * DRAG_TURN));
+    };
+    const onUp = (event: PointerEvent) => {
+      if (drag && event.pointerId === drag.id) drag = null;
+    };
+    const noMenu = (event: MouseEvent) => event.preventDefault();
+    let twist: { angle: number; start: Camera; pivot: Point } | null = null;
+    const touchAngle = (event: TouchEvent) => {
+      const [a, b] = [event.touches[0], event.touches[1]];
+      return Math.atan2(b.clientY - a.clientY, b.clientX - a.clientX);
+    };
+    const onTouch = (event: TouchEvent) => {
+      if (event.touches.length !== 2) {
+        twist = null;
+        return;
+      }
+      if (!twist) twist = { angle: touchAngle(event), start: camera.current, pivot: pivotOf(camera.current) };
+      else setCam(rotateAbout(twist.start, twist.pivot, twist.angle - touchAngle(event)));
+    };
+    node.addEventListener('pointerdown', onDown);
+    node.addEventListener('pointermove', onMove);
+    node.addEventListener('pointerup', onUp);
+    node.addEventListener('contextmenu', noMenu);
+    node.addEventListener('touchmove', onTouch, { passive: true });
+    node.addEventListener('touchend', onTouch);
+    return () => {
+      node.removeEventListener('pointerdown', onDown);
+      node.removeEventListener('pointermove', onMove);
+      node.removeEventListener('pointerup', onUp);
+      node.removeEventListener('contextmenu', noMenu);
+      node.removeEventListener('touchmove', onTouch);
+      node.removeEventListener('touchend', onTouch);
+    };
+  }, []);
 
   const scene = useMemo(() => {
     const onScreen = (points: Point[]) => {
@@ -251,6 +311,13 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
         </Pressable>
         <Pressable testID="turn" accessibilityLabel="Turn the view" style={styles.button} onPress={turn}>
           <Text style={[styles.buttonText, { fontSize: 18 }]}>⟳</Text>
+        </Pressable>
+        <Pressable testID="compass" accessibilityLabel="North up" style={styles.button} onPress={north}>
+          <Svg width={22} height={22} viewBox="-11 -11 22 22"
+               style={{ transform: [{ rotate: `${(-cam.yaw * 180) / Math.PI}deg` }] }}>
+            <Path d="M0 -9 L4 0 L-4 0 Z" fill={colours.accent} />
+            <Path d="M0 9 L4 0 L-4 0 Z" fill={colours.blockEdge} />
+          </Svg>
         </Pressable>
       </View>
     </Animated.View>
