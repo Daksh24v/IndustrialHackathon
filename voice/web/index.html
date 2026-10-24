@@ -211,8 +211,7 @@ async function finishTurn(rate) {
   const turn = ++c.turn;
   setState("thinking", "Thinking…");
   const wav = encodeWav(frames, rate);
-  const fillerTimer = setTimeout(() => { if (convo && convo.turn === turn && c.filler) play(c.filler, false); },
-                                 FILLER_AFTER_MS);
+  const fillerTimer = fillerLater(turn);
   try {
     const answer = await api(`/voice/sessions/${c.sessionId}/turn`,
                              { method: "POST", headers: { "content-type": "audio/wav" }, body: wav });
@@ -230,12 +229,22 @@ async function sendText(text) {
   const turn = ++convo.turn;
   player.pause();
   setState("thinking", "Thinking…");
+  const fillerTimer = fillerLater(turn);
   try {
     const answer = await api(`/voice/sessions/${convo.sessionId}/say`, json({ text }));
+    clearTimeout(fillerTimer);
     if (convo && convo.turn === turn) show(answer);
   } catch (error) {
+    clearTimeout(fillerTimer);
     if (convo && convo.turn === turn) { status("Something went wrong: " + error.message); listen(); }
   }
+}
+
+/** "One moment." if this turn's answer takes a while (for spoken, typed and tapped turns alike). */
+function fillerLater(turn) {
+  return setTimeout(() => {
+    if (convo && convo.turn === turn && convo.state === "thinking" && convo.filler) play(convo.filler, false);
+  }, FILLER_AFTER_MS);
 }
 
 function show(answer) {
