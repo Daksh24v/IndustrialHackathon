@@ -243,12 +243,12 @@ export const DU = Float32Array.from(DOT_LIST, (d) => d.u);
 export const DS = Float32Array.from(DOT_LIST, (d) => d.seed);
 
 export const G_STEPS = 24, A_STEPS = 48;
-/** Dot colours: white to green (the "done" sweep), each at 49 alpha steps. */
+/** Dot colours: Finni orange to green (the "done" sweep), each at 49 alpha steps. */
 export const COLORS: string[] = (() => {
   const out: string[] = [];
   for (let gi = 0; gi <= G_STEPS; gi++) {
     const g = gi / G_STEPS;
-    const r = Math.round(lerp(235, 52, g)), gg = Math.round(lerp(235, 211, g)), b = Math.round(lerp(235, 153, g));
+    const r = Math.round(lerp(255, 52, g)), gg = Math.round(lerp(122, 211, g)), b = Math.round(lerp(0, 153, g));
     for (let ai = 0; ai <= A_STEPS; ai++) out.push(`rgba(${r},${gg},${b},${(ai / A_STEPS).toFixed(3)})`);
   }
   return out;

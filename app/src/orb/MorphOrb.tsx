@@ -156,7 +156,7 @@ function createOrb(canvas: HTMLCanvasElement, getSpeed: () => number, isReduced:
       }
 
       const g = clamp01((P.sweep * 1.4 - u) / 0.4);
-      let a = 0.1 + 0.035 * Math.sin(DS[n] + time * 1.6) * (1 - g) + 0.32 * depth * depth + 0.75 * l * (1 - g) + g * (0.55 + 0.4 * depth) + 2 * g * (1 - g);
+      let a = 0.22 + 0.035 * Math.sin(DS[n] + time * 1.6) * (1 - g) + 0.36 * depth * depth + 0.75 * l * (1 - g) + g * (0.55 + 0.4 * depth) + 2 * g * (1 - g);
       a = Math.max(a, P.floor * (0.7 + 0.3 * depth));
       if (a > 1) a = 1;
       a *= eo * P.alpha;
@@ -792,7 +792,7 @@ export default function MorphOrb(props: MorphOrbProps) {
       <div className="mo-logo" aria-label="Finni">
         <svg viewBox="0 0 32 32" aria-hidden="true">
           <path d="M16 30c-1-3-9-10-9-17a9 9 0 0 1 18 0c0 7-8 14-9 17z" fill="#FF7A00" />
-          <circle cx="16" cy="13" r="3.6" fill="#000" />
+          <circle cx="16" cy="13" r="3.6" fill="#FFFFFF" />
         </svg>
         <span>finni</span>
       </div>

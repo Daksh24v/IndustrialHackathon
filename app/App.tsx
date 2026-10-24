@@ -202,7 +202,7 @@ function Guide() {
   if (mode === 'home') {
     return (
       <View style={styles.home}>
-        <StatusBar style="light" />
+        <StatusBar style="dark" />
         <MorphOrb handleRef={orb} onSubmit={askFromOrb} onAnswered={onOrbAnswered} mic={voice.mic} onMic={voice.toggle}
                   onOpenMap={state.map ? () => setMode('map') : undefined} notice={state.error ?? undefined} />
         <View style={styles.homePicker} pointerEvents="box-none">
@@ -311,7 +311,7 @@ async function until<T>(get: () => T | null, timeoutMs = 20000): Promise<T | nul
 const edge = { borderWidth: StyleSheet.hairlineWidth, borderColor: colours.blockEdge };
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colours.background },
-  home: { flex: 1, backgroundColor: '#000000' },
+  home: { flex: 1, backgroundColor: '#FFFFFF' },
   homePicker: { position: 'absolute', top: 18, left: 0, right: 0, alignItems: 'center', zIndex: 3 },
   wide: { flexDirection: 'row' },
   top: { zIndex: 2 }, // the building menu opens over the map

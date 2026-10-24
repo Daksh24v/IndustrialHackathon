@@ -64,7 +64,8 @@ describe('dotted sphere', () => {
   it('puts every dot on the unit sphere, ring by ring', () => {
     expect(N).toBeGreaterThan(RINGS * 4);
     for (let n = 0; n < N; n++) expect(Math.hypot(DX[n], DY[n], DZ[n])).toBeCloseTo(1, 5);
-    expect(COLORS[0]).toBe('rgba(235,235,235,0.000)');
+    expect(COLORS[0]).toBe('rgba(255,122,0,0.000)'); // Finni orange
+    expect(COLORS[COLORS.length - 1]).toBe('rgba(52,211,153,1.000)'); // green when done
   });
 });
 
