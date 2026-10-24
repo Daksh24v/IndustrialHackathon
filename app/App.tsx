@@ -1,11 +1,14 @@
 import { StatusBar } from 'expo-status-bar';
 import { Component, type ReactNode, useCallback, useEffect, useReducer, useState } from 'react';
-import { ActivityIndicator, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { api, ApiError, pickBuilding } from './src/api';
 import { BuildingBlocks } from './src/components/BuildingBlocks';
-import { ChatSheet } from './src/components/ChatSheet';
+import { ChatCard } from './src/components/ChatCard';
+import { FinniLogo } from './src/components/FinniLogo';
 import { FloorPlan } from './src/components/FloorPlan';
+import { FloorScene } from './src/components/FloorScene';
 import { initial, nextStep, reduce } from './src/state';
 import { colours } from './src/theme';
 
@@ -23,7 +26,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
       <SafeAreaView style={[styles.screen, { padding: 24, gap: 12 }]}>
         <Text style={styles.title}>Something went wrong</Text>
         <Text testID="crash" style={{ color: colours.error }}>{String(this.state.error.message)}</Text>
-        <Pressable onPress={() => this.setState({ error: null })} style={styles.step}>
+        <Pressable onPress={() => this.setState({ error: null })} style={styles.retry}>
           <Text style={styles.stepText}>Try again</Text>
         </Pressable>
       </SafeAreaView>
@@ -33,15 +36,19 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 
 export default function App() {
   return (
-    <ErrorBoundary>
-      <Guide />
-    </ErrorBoundary>
+    <SafeAreaProvider>
+      <ErrorBoundary>
+        <Guide />
+      </ErrorBoundary>
+    </SafeAreaProvider>
   );
 }
 
 function Guide() {
   const [state, dispatch] = useReducer(reduce, initial);
   const [size, setSize] = useState({ width: 0, height: 0 });
+  const [threeD, setThreeD] = useState(true);
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     (async () => {
@@ -71,23 +78,25 @@ function Guide() {
 
   const floors = [...(state.detail?.floors ?? [])].sort((a, b) => a.level - b.level);
   const floorName = floors.find((floor) => floor.id === state.floorId)?.name;
+  const footprints = state.outline?.floors.find((floor) => floor.id === state.floorId)?.footprints ?? [];
   const step = nextStep(state.map, state.floorId);
   const stepFloor = floors.find((floor) => floor.id === step?.to_floor_id);
+  const inside = state.view === 'floor';
+  const bottom = Math.max(insets.bottom, 12);
 
   return (
-    <SafeAreaView style={styles.screen}>
+    <SafeAreaView style={styles.screen} edges={['top', 'left', 'right']}>
       <StatusBar style="dark" />
       <View style={styles.header}>
-        {state.view === 'floor' || state.view === 'flying' ? (
-          <Pressable testID="back" onPress={() => dispatch({ type: 'back' })} style={styles.back}>
+        {inside || state.view === 'flying' ? (
+          <Pressable testID="back" accessibilityLabel="Back to the building" onPress={() => dispatch({ type: 'back' })}
+                     style={styles.back} hitSlop={8}>
             <Text style={styles.backText}>‹</Text>
           </Pressable>
         ) : null}
-        <View style={{ flex: 1 }}>
-          <Text style={styles.title} numberOfLines={1}>{state.detail?.building.name ?? 'Talk to your building'}</Text>
-          {floorName && state.view === 'floor' ? <Text style={styles.subtitle}>{floorName}</Text> : null}
-        </View>
+        <FinniLogo />
       </View>
+      <ChatCard messages={state.messages} question={state.question} busy={state.busy} onSend={send} />
       {state.error ? <Text testID="error" style={styles.error}>{state.error}</Text> : null}
 
       <View style={styles.map} onLayout={(e) => setSize(e.nativeEvent.layout)}>
@@ -101,56 +110,86 @@ function Guide() {
             height={size.height}
           />
         ) : null}
-        {state.detail && state.floorId && state.view === 'floor' && size.width > 0 ? (
-          <FloorPlan detail={state.detail} floorId={state.floorId} map={state.map} width={size.width} height={size.height} />
+        {state.detail && state.floorId && inside && size.width > 0 ? (
+          threeD ? (
+            <FloorScene detail={state.detail} floorId={state.floorId} map={state.map} footprints={footprints}
+                        width={size.width} height={size.height} />
+          ) : (
+            <FloorPlan detail={state.detail} floorId={state.floorId} map={state.map} width={size.width} height={size.height} />
+          )
         ) : null}
 
-        {state.view === 'floor' && floors.length > 1 ? (
-          <View style={styles.floors}>
-            {[...floors].reverse().map((floor) => (
-              <Pressable key={floor.id} testID={`floor-${floor.level}`} onPress={() => dispatch({ type: 'floor', floorId: floor.id })}
-                         style={[styles.floorChip, floor.id === state.floorId && styles.floorChipActive]}>
-                <Text style={[styles.floorText, floor.id === state.floorId && styles.floorTextActive]}>
-                  {floor.level === 0 ? 'G' : floor.level}
-                </Text>
-              </Pressable>
-            ))}
+        {inside && (
+          <View style={styles.topRow} pointerEvents="box-none">
+            <View style={styles.floors}>
+              {floors.length > 1 && [...floors].reverse().map((floor) => (
+                <Pressable key={floor.id} testID={`floor-${floor.level}`} onPress={() => dispatch({ type: 'floor', floorId: floor.id })}
+                           style={[styles.floorChip, floor.id === state.floorId && styles.floorChipActive]}>
+                  <Text style={[styles.floorText, floor.id === state.floorId && styles.floorTextActive]}>
+                    {floor.level === 0 ? 'G' : floor.level}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            {floorName ? <Text testID="floor-name" style={styles.floorName}>{floorName}</Text> : null}
+            <View style={styles.toggle}>
+              {(['3D', '2D'] as const).map((mode) => {
+                const active = (mode === '3D') === threeD;
+                return (
+                  <Pressable key={mode} testID={`view-${mode}`} onPress={() => setThreeD(mode === '3D')}
+                             style={[styles.toggleItem, active && styles.toggleActive]}>
+                    <Text style={[styles.toggleText, active && styles.toggleTextActive]}>{mode}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
           </View>
-        ) : null}
-        {state.view === 'floor' && step && stepFloor ? (
-          <Pressable testID="next-step" style={styles.step} onPress={() => dispatch({ type: 'floor', floorId: stepFloor.id })}>
+        )}
+        {inside && step && stepFloor ? (
+          <Pressable testID="next-step" style={[styles.step, { bottom }]} onPress={() => dispatch({ type: 'floor', floorId: stepFloor.id })}>
             <Text style={styles.stepText}>Take {step.name ?? step.kind} to {stepFloor.name} ›</Text>
           </Pressable>
         ) : null}
-        {state.map?.route && state.view === 'floor' ? (
-          <View style={styles.distance}><Text style={styles.distanceText}>{Math.round(state.map.route.length_m)} m</Text></View>
+        {state.map?.route && inside ? (
+          <View style={[styles.distance, { bottom: bottom + (step && stepFloor ? 52 : 0) }]}>
+            <Text style={styles.distanceText}>{Math.round(state.map.route.length_m)} m</Text>
+          </View>
         ) : null}
       </View>
-
-      <ChatSheet messages={state.messages} question={state.question} busy={state.busy} onSend={send} />
     </SafeAreaView>
   );
 }
 
+const edge = { borderWidth: StyleSheet.hairlineWidth, borderColor: colours.blockEdge };
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colours.background },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 6, gap: 8 },
-  back: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
-  backText: { fontSize: 30, color: colours.text, marginTop: -4 },
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 6, paddingBottom: 10, gap: 6 },
+  back: { width: 28, height: 32, alignItems: 'center', justifyContent: 'center', marginLeft: -6 },
+  backText: { fontSize: 32, color: colours.text, marginTop: -4 },
   title: { fontSize: 18, fontWeight: '700', color: colours.text },
-  subtitle: { fontSize: 13, color: colours.muted },
   error: { marginHorizontal: 16, marginBottom: 6, color: colours.error },
   map: { flex: 1 },
-  floors: { position: 'absolute', left: 12, top: 12, gap: 6 },
+  topRow: { position: 'absolute', left: 12, right: 12, top: 12, flexDirection: 'row', alignItems: 'flex-start',
+            justifyContent: 'space-between' },
+  floors: { gap: 6, minWidth: 36 },
   floorChip: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center',
-               backgroundColor: colours.background, borderWidth: StyleSheet.hairlineWidth, borderColor: colours.blockEdge },
+               backgroundColor: colours.background, ...edge },
   floorChipActive: { backgroundColor: colours.accent, borderColor: colours.accent },
   floorText: { color: colours.text, fontWeight: '600' },
   floorTextActive: { color: '#FFFFFF' },
-  step: { position: 'absolute', alignSelf: 'center', bottom: 16, backgroundColor: colours.accent, borderRadius: 20,
+  floorName: { marginTop: 8, color: colours.muted, fontSize: 13, fontWeight: '600', backgroundColor: 'rgba(255,255,255,0.85)',
+               paddingHorizontal: 10, paddingVertical: 3, borderRadius: 10, overflow: 'hidden' },
+  toggle: { flexDirection: 'row', backgroundColor: colours.chip, borderRadius: 18, padding: 3 },
+  toggleItem: { paddingHorizontal: 12, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  toggleActive: { backgroundColor: colours.background, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 3,
+                  shadowOffset: { width: 0, height: 1 }, elevation: 1 },
+  toggleText: { color: colours.muted, fontWeight: '700', fontSize: 13 },
+  toggleTextActive: { color: colours.accent },
+  retry: { alignSelf: 'flex-start', backgroundColor: colours.accent, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10 },
+  step: { position: 'absolute', alignSelf: 'center', backgroundColor: colours.accent, borderRadius: 20,
           paddingHorizontal: 16, paddingVertical: 10 },
   stepText: { color: '#FFFFFF', fontWeight: '600' },
-  distance: { position: 'absolute', right: 12, bottom: 68, backgroundColor: colours.background, borderRadius: 14,
-              paddingHorizontal: 10, paddingVertical: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: colours.blockEdge },
+  distance: { position: 'absolute', right: 12, backgroundColor: colours.background, borderRadius: 14,
+              paddingHorizontal: 10, paddingVertical: 6, ...edge },
   distanceText: { color: colours.accent, fontWeight: '700' },
 });

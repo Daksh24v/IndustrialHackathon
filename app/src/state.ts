@@ -1,6 +1,6 @@
 /** The screen's state machine: the building from outside → (the agent shows something) fly in → one floor. */
 import type { BuildingDetail, ChatReply, MapView, Outline, Question, RoutePiece } from './api';
-import type { Message } from './components/ChatSheet';
+import type { Message } from './components/ChatCard';
 
 export type View = 'loading' | 'outside' | 'flying' | 'floor';
 

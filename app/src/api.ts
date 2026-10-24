@@ -135,6 +135,13 @@ export const api = {
     ),
   chat: (sessionId: string, text: string, fetcher?: typeof fetch) =>
     call<ChatReply>(`/sessions/${sessionId}/chat`, { method: 'POST', body: JSON.stringify({ text }) }, fetcher),
+  /** Where the person is (the AR camera will call this): from then on Finni doesn't ask. */
+  setPosition: (sessionId: string, space: string, fetcher?: typeof fetch) =>
+    call<{ space_id: string; label: string; floor_id: string }>(
+      `/sessions/${sessionId}/position`,
+      { method: 'POST', body: JSON.stringify({ space }) },
+      fetcher,
+    ),
 };
 
 /** The building to open: EXPO_PUBLIC_BUILDING if set, else the first factory, else the first building. */

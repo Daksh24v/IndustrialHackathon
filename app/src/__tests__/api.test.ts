@@ -30,3 +30,17 @@ describe('api', () => {
     expect(pickBuilding(['osm-1'], 'missing')).toBe('osm-1');
   });
 });
+
+describe('position (for the AR camera)', () => {
+  it('posts where the person is', async () => {
+    let seen: { url: string; body: string } | null = null;
+    const fetcher = (async (url: string, init: RequestInit) => {
+      seen = { url, body: String(init.body) };
+      return { ok: true, status: 200, statusText: 'OK', json: async () => ({ space_id: 'S1', label: 'Lab', floor_id: 'F0' }) };
+    }) as unknown as typeof fetch;
+    const placed = await api.setPosition('s1', 'Quality lab 0.21', fetcher);
+    expect(placed.floor_id).toBe('F0');
+    expect(seen!.url).toMatch(/\/sessions\/s1\/position$/);
+    expect(JSON.parse(seen!.body)).toEqual({ space: 'Quality lab 0.21' });
+  });
+});
