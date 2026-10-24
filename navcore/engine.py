@@ -232,11 +232,29 @@ class Building:
             hops=hops,
         )
 
-    def polyline(self, route: Route) -> list[dict]:
+    def polyline(self, route: Route, through_anchors: bool = True) -> list[dict]:
         """The route as lines to draw, one piece per floor: space anchor -> door -> space anchor ...
         A lift or stair hop ends one piece and starts the next on the other floor; going outside (between
-        two entrances) also breaks the line. Each piece says which connector or entrance leads onward."""
+        two entrances) also breaks the line. Each piece says which connector or entrance leads onward.
+        through_anchors=True is the route model exactly (its length is the route length, minus connector
+        costs); False is for maps: a room you only walk through is crossed door to door, without the detour
+        to its anchor point (the anchor of a long corridor can be far off the way)."""
+        pieces = self._polyline(route)
+        if through_anchors:
+            for piece in pieces:
+                piece.pop("kinds")
+            return pieces
+        for piece in pieces:
+            kinds, points = piece.pop("kinds"), piece["points"]
+            piece["points"] = [point for index, (kind, point) in enumerate(zip(kinds, points))
+                               if kind == "door" or index in (0, len(points) - 1)]
+        return pieces
+
+    def _polyline(self, route: Route) -> list[dict]:
         pieces: list[dict] = []
+
+        def kind_of(node: str) -> str:
+            return "door" if node.startswith(DOOR_PREFIX) else "space"
 
         def point(node: str) -> tuple[str, list[float]] | None:
             if node == OUTSIDE:
@@ -248,7 +266,7 @@ class Building:
             return self.spaces[node]["floor_id"], list(self.anchor(node))
 
         start = point(route.nodes[0])
-        pieces.append({"floor_id": start[0], "points": [start[1]], "then": None})
+        pieces.append({"floor_id": start[0], "points": [start[1]], "kinds": ["space"], "then": None})
         for previous, current, via in route.hops:
             here = point(current)
             if here is None:  # stepped outside; the next point starts a new piece
@@ -260,9 +278,10 @@ class Building:
                 if via in self.connectors:
                     last["then"] = {"kind": self.connectors[via]["kind"], "via": via,
                                     "name": self.connectors[via]["name"], "to_floor_id": floor_id}
-                pieces.append({"floor_id": floor_id, "points": [xy], "then": None})
+                pieces.append({"floor_id": floor_id, "points": [xy], "kinds": [kind_of(current)], "then": None})
             else:
                 last["points"].append(xy)
+                last["kinds"].append(kind_of(current))
         return pieces
 
     def tour(self, stops: list[str], constraints: Constraints = Constraints()) -> list[Route]:

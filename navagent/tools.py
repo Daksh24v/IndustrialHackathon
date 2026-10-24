@@ -596,7 +596,7 @@ class Session:
         if show_last_route:
             if not self.last_route:
                 raise EngineError("No route computed yet: call find_route first.")
-            pieces = [piece for leg in self.last_route for piece in building.polyline(leg)]
+            pieces = [piece for leg in self.last_route for piece in building.polyline(leg, through_anchors=False)]
             view["route"] = {"length_m": rounded(sum(leg.length_m for leg in self.last_route)), "pieces": pieces}
         if floor:
             view["focus_floor_id"] = find_floor(building, floor)
