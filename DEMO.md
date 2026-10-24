@@ -7,8 +7,10 @@ uv run --env-file .env uvicorn server.app:app --port 8000
 cd app && npx expo start --web          # opens http://localhost:8081
 ```
 
-Open the website on the factory (default building). Turn the sound on for Finni's voice. Every step below was
-run on the website on 2026-10-24.
+Open the website on the factory (default building). Turn the sound on for Finni's voice. Steps 2–4 were run on
+the website on 2026-10-24 (step 1 then asked two questions; it now asks one, checked against the agent but not
+yet on the website). Steps 5–8 are covered by the live agent tests (`tests/test_live.py --live`) but not yet
+clicked through on the website: rehearse them there before the demo.
 
 | # | You do | What they see | What it shows off |
 |---|---|---|---|
