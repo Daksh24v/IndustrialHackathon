@@ -4,7 +4,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, useWindowDimensions, Vi
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
-  api, ApiError, buildingFromUrl, type BuildingRow, pickBuilding, placeOf, type Point, showBuildingInUrl,
+  api, ApiError, buildingFromUrl, type BuildingRow, type ChatReply, pickBuilding, placeOf, type Point, showBuildingInUrl,
 } from './src/api';
 import { BuildingBlocks } from './src/components/BuildingBlocks';
 import { BuildingPicker } from './src/components/BuildingPicker';
@@ -12,6 +12,7 @@ import { ChatCard } from './src/components/ChatCard';
 import { FinniLogo } from './src/components/FinniLogo';
 import { FloorPlan } from './src/components/FloorPlan';
 import { FloorScene } from './src/components/FloorScene';
+import MorphOrb, { type OrbAnswer, type OrbHandle } from './src/orb/MorphOrb';
 import { chatTurn, RENEWED_NOTE } from './src/session';
 import { initial, nextStep, reduce } from './src/state';
 import { colours, isWide } from './src/theme';
@@ -57,6 +58,11 @@ function Guide() {
   const [buildingId, setBuildingId] = useState<string | null>(null);
   const insets = useSafeAreaInsets();
   const wide = isWide(useWindowDimensions().width);
+  // home: the orb (src/orb); map: the building and the route. An answer with a route brings the map in.
+  const [mode, setMode] = useState<'home' | 'map'>('home');
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const orb = useRef<OrbHandle>(null);
 
   // Which building: ?building=<id> in the address (web), else EXPO_PUBLIC_BUILDING, else the first factory.
   useEffect(() => {
@@ -103,7 +109,7 @@ function Guide() {
   const sendRef = useRef<(text: string) => void>(() => {});
   const voice = useVoice({
     buildingId: state.detail?.building.id ?? null,
-    onHeard: (text) => sendRef.current(text),
+    onHeard: (text) => (modeRef.current === 'home' ? orb.current?.ask(text) : sendRef.current(text)),
     onError: (message) => dispatch({ type: 'error', message }),
   });
   const talking = voice.mic !== 'off'; // a spoken conversation: short answers, read out
@@ -132,6 +138,43 @@ function Guide() {
   );
   sendRef.current = send;
 
+  // The same turn, asked on the orb screen: the answer comes back for the orb's card.
+  const buildingRef = useRef(buildingId);
+  buildingRef.current = buildingId;
+  const hereRef = useRef(here);
+  hereRef.current = here;
+  const talkingRef = useRef(talking);
+  talkingRef.current = talking;
+  const lastReply = useRef<ChatReply | null>(null);
+  const askFromOrb = useCallback(
+    async (text: string): Promise<OrbAnswer> => {
+      const sessionId = await until(() => sessionRef.current);
+      const building = buildingRef.current;
+      if (!sessionId || !building) return { text: "I can't reach the building right now. Try again in a moment." };
+      const mine = generation.current;
+      dispatch({ type: 'send', text });
+      voice.waiting();
+      try {
+        const turn = await chatTurn({ sessionId, buildingId: building, text, spoken: talkingRef.current, here: hereRef.current });
+        if (mine !== generation.current) return { text: 'You switched buildings: ask me again.' };
+        if (turn.renewed) dispatch({ type: 'renewed', sessionId: turn.sessionId, note: RENEWED_NOTE });
+        dispatch({ type: 'reply', reply: turn.reply });
+        lastReply.current = turn.reply;
+        void voice.say(turn.reply);
+        const said = [turn.reply.reply, turn.reply.question?.question].filter(Boolean).join('\n\n');
+        return { text: said || 'Here it is on the map.', options: turn.reply.question?.options };
+      } catch (error) {
+        voice.stop();
+        if (mine === generation.current) dispatch({ type: 'error', message: (error as Error).message });
+        return { text: (error as Error).message };
+      }
+    },
+    [voice],
+  );
+  const onOrbAnswered = useCallback(() => {
+    if (lastReply.current?.map?.focus_floor_id) setTimeout(() => setMode('map'), MAP_AFTER_MS);
+  }, []);
+
   // Tap the map: "I'm here". The dot moves, and Finni starts routes there without asking.
   const tapHere = useCallback(
     async (floorId: string, point: Point) => {
@@ -156,6 +199,19 @@ function Guide() {
   const row = buildings.find((item) => item.id === buildingId);
   const current = state.detail?.building ?? (row ? { id: row.id, name: row.name ?? row.id } : null);
 
+  if (mode === 'home') {
+    return (
+      <View style={styles.home}>
+        <StatusBar style="light" />
+        <MorphOrb handleRef={orb} onSubmit={askFromOrb} onAnswered={onOrbAnswered} mic={voice.mic} onMic={voice.toggle}
+                  onOpenMap={state.map ? () => setMode('map') : undefined} notice={state.error ?? undefined} />
+        <View style={styles.homePicker} pointerEvents="box-none">
+          <BuildingPicker buildings={buildings} current={current} onPick={pickOther} />
+        </View>
+      </View>
+    );
+  }
+
   return (
     <SafeAreaView style={[styles.screen, wide && styles.wide]} edges={['top', 'left', 'right']}>
       <StatusBar style="dark" />
@@ -167,7 +223,9 @@ function Guide() {
               <Text style={styles.backText}>‹</Text>
             </Pressable>
           ) : null}
-          <FinniLogo />
+          <Pressable testID="home" accessibilityLabel="Finni home" onPress={() => setMode('home')}>
+            <FinniLogo />
+          </Pressable>
           <BuildingPicker buildings={buildings} current={current} onPick={pickOther} />
         </View>
         <ChatCard messages={state.messages} question={state.question} busy={state.busy} onSend={send}
@@ -238,9 +296,23 @@ function Guide() {
   );
 }
 
+const MAP_AFTER_MS = 1300; // the orb's answer card stays this long before the map comes in
+
+/** The value once it's there (polled), or null after a while. */
+async function until<T>(get: () => T | null, timeoutMs = 20000): Promise<T | null> {
+  for (let waited = 0; waited < timeoutMs; waited += 100) {
+    const value = get();
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return get();
+}
+
 const edge = { borderWidth: StyleSheet.hairlineWidth, borderColor: colours.blockEdge };
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colours.background },
+  home: { flex: 1, backgroundColor: '#000000' },
+  homePicker: { position: 'absolute', top: 18, left: 0, right: 0, alignItems: 'center', zIndex: 3 },
   wide: { flexDirection: 'row' },
   top: { zIndex: 2 }, // the building menu opens over the map
   side: { width: 360, zIndex: 2, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: colours.blockEdge,

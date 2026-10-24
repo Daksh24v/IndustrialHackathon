@@ -33,6 +33,7 @@ import anthropic
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 from shapely.ops import unary_union
@@ -382,3 +383,12 @@ if "NAV_BACKEND_URL" not in os.environ:
 def voice_page() -> FileResponse:
     """The hands-free demo page (microphone in, speaker out)."""
     return FileResponse(voice_service.PAGE)
+
+
+# ---------- the website ----------
+
+# Last, so every API path above wins: everything else is the built Finni site (`npm run build` in app/), so site
+# and API share one address. Without a build the API works as before.
+WEB = Path(__file__).resolve().parent.parent / "app" / "dist"
+if (WEB / "index.html").exists():
+    app.mount("/", StaticFiles(directory=WEB, html=True), name="web")

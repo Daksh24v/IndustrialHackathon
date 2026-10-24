@@ -28,7 +28,8 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "test": "jest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "expo export --platform web --output-dir dist"
   },
   "private": true,
   "jest": {

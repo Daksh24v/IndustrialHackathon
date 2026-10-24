@@ -7,6 +7,14 @@ uv run --env-file .env uvicorn server.app:app --port 8000
 cd app && npx expo start --web          # opens http://localhost:8081
 ```
 
+Or build once and use one address: `cd app && npm run build`, then open http://localhost:8000 (the backend serves
+the site).
+
+**Home is the orb:** the website opens on a black screen with the orb and the "Ask Finni…" pill. Step 1 is asked
+there; Finni's options appear as chips in the orb's card, and when the answer has a route the map screen takes
+over. The rest of the steps run in the map screen as below (the Finni logo goes back to the orb, the orb's "Map"
+button opens the map again).
+
 Open the website on the factory (default building; on a laptop-wide window the chat sits left of the map, and the building picker at the top switches buildings, e.g. to the Sunday building). Turn the sound on for Finni's voice. Every step below was
 run on the website on 2026-10-24 (steps 1–7 in one conversation, step 8 in a fresh one at desktop width), with the replies shown (Finni's wording
 varies a little between runs; the landmark options can too, so pick any one on the ground floor).

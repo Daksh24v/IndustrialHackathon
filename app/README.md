@@ -2,10 +2,15 @@
 
 Expo (React Native) app for phones and the web. It talks to the backend in `../server` (see `../server/README.md`).
 
-What it does: a clean white start screen with the Finni logo and a "Talk to Finni…" field at the top (the
-keyboard can't cover it), an orange mic and a few example questions. Below,
-the building you're in, seen from outside as white blocks. Ask where to go ("Where's the coffee machine?");
-Finni asks back with options when it needs to (which floor, where you are); then the view flies into that floor:
+Home: **the orb** (`src/orb/MorphOrb.tsx`, styles `src/orb/orb.css`, timelines `src/orb/motion.ts`). A black
+screen with a dotted orb resting in the middle, the "Ask Finni…" pill (with the orange mic) at the bottom and
+the building picker at the top. Send a question: the pill shrinks into a ball, flies into the orb, the orb
+thinks ("Searching the building…"), turns green and unfolds into the answer card; when Finni asks back, the
+options are chips in the card. When an answer has a route, the map screen takes over (below); the Finni logo
+there goes back to the orb, and the orb's "Map" button opens the map again. Same conversation throughout.
+
+The map screen: the building you're in, seen from outside as white blocks; Finni asks back with options when it
+needs to (which floor, where you are); then the view flies into that floor:
 a tilted 3D view with low walls and door gaps, an orange band for the route with arrows flowing along it, a
 pin on the target and an orange disc with a spreading ring where you are. Drag to move, pinch or +/− to zoom,
 ⟳ to turn; the 2D/3D switch shows the flat plan instead. Routes over several floors show "Take Lift 1 to
@@ -32,6 +37,10 @@ uv run --env-file .env uvicorn server.app:app --host 0.0.0.0 --port 8000
 npm install
 EXPO_PUBLIC_API_URL=http://<your-laptop-ip>:8000 npx expo start
 ```
+
+- **One address (website):** `npm run build` (in this folder) puts the site in `dist/`; the backend then serves it
+  at http://localhost:8000 too (site and API on one address, for hosting and a QR code). The site talks to its
+  own address unless `EXPO_PUBLIC_API_URL` is set at build time.
 
 - **Voice:** tap the mic once and talk. It stops listening when you pause, Finni answers in one short sentence
   out loud and listens again; tap while it talks to interrupt, or before you speak to stop. Typed and tapped
