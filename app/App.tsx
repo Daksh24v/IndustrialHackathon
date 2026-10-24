@@ -106,10 +106,17 @@ function Guide() {
   }, []);
 
   // Voice (../voice): the mic hands over what was said like typed text; answers are read out.
-  const sendRef = useRef<(text: string) => void>(() => {});
+  const sendRef = useRef<(text: string) => boolean>(() => false);
   const voice = useVoice({
     buildingId: state.detail?.building.id ?? null,
-    onHeard: (text) => (modeRef.current === 'home' ? orb.current?.ask(text) : sendRef.current(text)),
+    onHeard: (text) => {
+      if (modeRef.current === 'home') {
+        if (!orb.current) return false;
+        orb.current.ask(text);
+        return true;
+      }
+      return sendRef.current(text);
+    },
     onError: (message) => dispatch({ type: 'error', message }),
   });
   const talking = voice.mic !== 'off'; // a spoken conversation: short answers, read out
@@ -125,7 +132,10 @@ function Guide() {
       voice.waiting();
       try {
         const turn = await chatTurn({ sessionId: state.sessionId, buildingId, text, spoken: talking, here });
-        if (mine !== generation.current) return;
+        if (mine !== generation.current) {
+          voice.stop(); // another building now: don't leave the mic waiting for this answer
+          return;
+        }
         if (turn.renewed) dispatch({ type: 'renewed', sessionId: turn.sessionId, note: RENEWED_NOTE });
         dispatch({ type: 'reply', reply: turn.reply });
         void voice.say(turn.reply);
@@ -136,7 +146,12 @@ function Guide() {
     },
     [state.sessionId, buildingId, voice, talking, here],
   );
-  sendRef.current = send;
+  // Heard on the map screen: taken only if there's a conversation to send it to.
+  sendRef.current = (text: string) => {
+    if (!state.sessionId || !buildingId) return false;
+    void send(text);
+    return true;
+  };
 
   // The same turn, asked on the orb screen: the answer comes back for the orb's card.
   const buildingRef = useRef(buildingId);
@@ -146,34 +161,60 @@ function Guide() {
   const talkingRef = useRef(talking);
   talkingRef.current = talking;
   const lastReply = useRef<ChatReply | null>(null);
+  const asks = useRef(0); // each orb question gets a number: a dropped or older one is ignored when it lands
+  const mapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelMapSwitch = useCallback(() => {
+    if (mapTimer.current) clearTimeout(mapTimer.current);
+    mapTimer.current = null;
+  }, []);
+  const dropOrbAnswer = useCallback(() => {
+    asks.current += 1; // whatever is in flight no longer counts
+    lastReply.current = null;
+    cancelMapSwitch();
+    voice.stop();
+  }, [cancelMapSwitch, voice]);
   const askFromOrb = useCallback(
     async (text: string): Promise<OrbAnswer> => {
-      const sessionId = await until(() => sessionRef.current);
+      const ask = ++asks.current;
+      lastReply.current = null;
+      cancelMapSwitch();
+      const sessionId = await until(() => sessionRef.current, SESSION_WAIT_MS);
       const building = buildingRef.current;
-      if (!sessionId || !building) return { text: "I can't reach the building right now. Try again in a moment." };
+      if (!sessionId || !building) {
+        voice.stop();
+        return { text: "I can't reach the building right now. Check that the server is running, then ask again." };
+      }
       const mine = generation.current;
       dispatch({ type: 'send', text });
       voice.waiting();
       try {
         const turn = await chatTurn({ sessionId, buildingId: building, text, spoken: talkingRef.current, here: hereRef.current });
-        if (mine !== generation.current) return { text: 'You switched buildings: ask me again.' };
+        if (mine !== generation.current) {
+          voice.stop();
+          return { text: 'You switched buildings: ask me again.' };
+        }
         if (turn.renewed) dispatch({ type: 'renewed', sessionId: turn.sessionId, note: RENEWED_NOTE });
-        dispatch({ type: 'reply', reply: turn.reply });
+        dispatch({ type: 'reply', reply: turn.reply }); // the map screen keeps the conversation either way
+        if (ask !== asks.current) return { text: '' }; // dropped (New question / Escape) or a newer question
         lastReply.current = turn.reply;
         void voice.say(turn.reply);
         const said = [turn.reply.reply, turn.reply.question?.question].filter(Boolean).join('\n\n');
         return { text: said || 'Here it is on the map.', options: turn.reply.question?.options };
       } catch (error) {
         voice.stop();
-        if (mine === generation.current) dispatch({ type: 'error', message: (error as Error).message });
-        return { text: (error as Error).message };
+        return { text: (error as Error).message }; // shown in the orb's card (once, not also as a banner)
       }
     },
-    [voice],
+    [voice, cancelMapSwitch],
   );
   const onOrbAnswered = useCallback(() => {
-    if (lastReply.current?.map?.focus_floor_id) setTimeout(() => setMode('map'), MAP_AFTER_MS);
-  }, []);
+    cancelMapSwitch();
+    if (lastReply.current?.map?.focus_floor_id) mapTimer.current = setTimeout(() => setMode('map'), MAP_AFTER_MS);
+  }, [cancelMapSwitch]);
+  useEffect(() => cancelMapSwitch, [cancelMapSwitch]);
+  useEffect(() => {
+    cancelMapSwitch(); // a building switch or a screen change never gets overridden by an old timer
+  }, [buildingId, mode, cancelMapSwitch]);
 
   // Tap the map: "I'm here". The dot moves, and Finni starts routes there without asking.
   const tapHere = useCallback(
@@ -203,7 +244,8 @@ function Guide() {
     return (
       <View style={styles.home}>
         <StatusBar style="dark" />
-        <MorphOrb handleRef={orb} onSubmit={askFromOrb} onAnswered={onOrbAnswered} mic={voice.mic} onMic={voice.toggle}
+        <MorphOrb handleRef={orb} onSubmit={askFromOrb} onAnswered={onOrbAnswered} onCancel={dropOrbAnswer}
+                  mic={voice.mic} micNotice={voice.notice} onMic={voice.toggle}
                   onOpenMap={state.map ? () => setMode('map') : undefined} notice={state.error ?? undefined} />
         <View style={styles.homePicker} pointerEvents="box-none">
           <BuildingPicker buildings={buildings} current={current} onPick={pickOther} />
@@ -297,6 +339,7 @@ function Guide() {
 }
 
 const MAP_AFTER_MS = 1300; // the orb's answer card stays this long before the map comes in
+const SESSION_WAIT_MS = 8000; // an orb question asked while the building still loads waits this long
 
 /** The value once it's there (polled), or null after a while. */
 async function until<T>(get: () => T | null, timeoutMs = 20000): Promise<T | null> {

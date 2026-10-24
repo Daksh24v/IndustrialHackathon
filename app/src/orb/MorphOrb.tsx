@@ -26,6 +26,7 @@ const COPY = {
   send: "Send",
 };
 const REST_ALPHA = 0.9; // the resting orb, before anyone asks
+const NEXT_AFTER_MS = 900; // a question asked while Finni was busy goes after this glimpse of the answer
 
 type Phase = "idle" | "launch" | "assemble" | "think" | "resolve" | "condense" | "unfold" | "answered" | "reset";
 
@@ -48,6 +49,8 @@ export interface MorphOrbProps {
   onMic?: () => void;
   onOpenMap?: () => void; // shows a "Map" button when there's a route to go back to
   notice?: string; // something went wrong (e.g. the server can't be reached)
+  micNotice?: string | null; // a friendly line about the mic ("I didn't hear anything…")
+  onCancel?: () => void; // the person dropped this answer (New question, Escape): don't act on it any more
   handleRef?: React.Ref<OrbHandle>;
 }
 
@@ -600,6 +603,7 @@ function createRuntime(env: Env): Runtime {
 
 /* ───────────────────────────── component ───────────────────────────── */
 const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
+const touchFirst = () => typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches;
 
 export default function MorphOrb(props: MorphOrbProps) {
   const [phase, setPhaseState] = useState<Phase>("idle");
@@ -632,7 +636,7 @@ export default function MorphOrb(props: MorphOrbProps) {
   const reducedRef = useRef(false);
   const rtRef = useRef<Runtime | null>(null);
   const lastTextRef = useRef("");
-  const nextRef = useRef<string | null>(null); // asked while an answer is showing: goes after the reset
+  const nextRef = useRef<string | null>(null); // asked while busy or while an answer shows: goes next
   const timers = useRef<{ typing?: number; shake?: number; flash?: number }>({});
 
   const makeCfg = (): RunCfg => ({
@@ -648,13 +652,14 @@ export default function MorphOrb(props: MorphOrbProps) {
     rt.start(text, makeCfg());
   };
 
+  /** Ask now if the orb is free; otherwise it goes next (after the current answer has shown), never lost. */
   const ask = (text: string) => {
     const clean = text.trim();
     if (!clean) return;
     if (phaseRef.current === "idle") launch(clean);
-    else if (phaseRef.current === "answered") {
+    else {
       nextRef.current = clean;
-      rtRef.current?.reset();
+      if (phaseRef.current === "answered") rtRef.current?.reset();
     }
   };
 
@@ -689,17 +694,24 @@ export default function MorphOrb(props: MorphOrbProps) {
           const next = nextRef.current;
           nextRef.current = null;
           if (next) launch(next);
-          else inputRef.current?.focus({ preventScroll: true });
+          else if (!touchFirst()) inputRef.current?.focus({ preventScroll: true });
         },
         focusAnswer: () => { answerRef.current?.focus({ preventScroll: true }); },
-        answered: (a) => propsRef.current.onAnswered?.(a),
+        answered: (a) => {
+          propsRef.current.onAnswered?.(a);
+          if (nextRef.current) window.setTimeout(() => rtRef.current?.reset(), NEXT_AFTER_MS); // asked meanwhile
+        },
       },
     });
     rtRef.current = rt;
 
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && phaseRef.current !== "idle" && phaseRef.current !== "reset") {
+      const target = e.target as HTMLElement | null;
+      const typingElsewhere = !!target && target !== inputRef.current && /^(INPUT|TEXTAREA)$/.test(target.tagName);
+      if (e.key === "Escape" && !typingElsewhere && phaseRef.current !== "idle" && phaseRef.current !== "reset") {
         e.preventDefault();
+        nextRef.current = null;
+        propsRef.current.onCancel?.();
         rt.escape();
       }
     };
@@ -708,7 +720,7 @@ export default function MorphOrb(props: MorphOrbProps) {
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("resize", onResize);
-    inputRef.current?.focus({ preventScroll: true });
+    if (!touchFirst()) inputRef.current?.focus({ preventScroll: true }); // phones: no keyboard popping up
 
     return () => {
       window.removeEventListener("keydown", onKey);
@@ -758,7 +770,9 @@ export default function MorphOrb(props: MorphOrbProps) {
   };
 
   const onReset = () => {
-    if (phaseRef.current === "answered") rtRef.current?.reset();
+    if (phaseRef.current !== "answered") return;
+    propsRef.current.onCancel?.();
+    rtRef.current?.reset();
   };
 
   const replay = () => {
@@ -891,8 +905,22 @@ export default function MorphOrb(props: MorphOrbProps) {
       </div>
 
       {props.notice && <div className="mo-notice" role="alert" data-testid="error">{props.notice}</div>}
-      {MIC_HINT[mic] && <div className="mo-hint" data-testid="orb-mic-hint">{MIC_HINT[mic]}</div>}
-      <button type="button" className="mo-reset" onClick={onReset} data-testid="orb-reset">{COPY.reset}</button>
+      {(MIC_HINT[mic] || props.micNotice) && (
+        <div className="mo-hint" data-testid="orb-mic-hint">{MIC_HINT[mic] || props.micNotice}</div>
+      )}
+      <div className="mo-bottom">
+        {props.onMic && mic !== "off" && phase !== "idle" && (
+          <button type="button" className="mo-mic mo-mic-float" data-on="" aria-label="Stop talking"
+                  data-testid="orb-mic-float" onClick={props.onMic}>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="8.5" y="2.5" width="7" height="12" rx="3.5" fill="currentColor" />
+              <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3.5M8.5 21.5h7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          </button>
+        )}
+        <button type="button" className="mo-reset" onClick={onReset} data-testid="orb-reset"
+                tabIndex={phase === "answered" ? 0 : -1} aria-hidden={phase !== "answered"}>{COPY.reset}</button>
+      </div>
 
       <div className="mo-live" ref={liveRef} role="status" aria-live="polite" />
 

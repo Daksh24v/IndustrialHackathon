@@ -137,3 +137,58 @@ test('no microphone permission: says why', async () => {
   expect(hook.result.current.mic).toBe('off');
   expect(onError).toHaveBeenCalledWith('Allow the microphone to talk to the guide.');
 });
+
+test('never stuck: tapping while it works stops talking; a refused text stops with a friendly notice', async () => {
+  const { hook } = await setup();
+  await act(async () => hook.result.current.toggle());
+  await act(async () => hook.result.current.waiting());
+  expect(hook.result.current.mic).toBe('thinking');
+  await act(async () => hook.result.current.toggle());   // used to do nothing
+  expect(hook.result.current.mic).toBe('off');
+  await act(async () => hook.result.current.say({ reply: 'Late answer.', question: null, map: null }));
+  expect(hook.result.current.mic).toBe('off');           // the answer arrives as text, not read out
+
+  const refused = jest.fn(() => false);
+  const other = await renderHook(() => useVoice({ buildingId: 'b', onHeard: refused, onError: jest.fn() }));
+  await act(async () => other.result.current.toggle());
+  mockAudio.recording = { ...mockAudio.recording, isRecording: true, metering: -20, durationMillis: 400 };
+  await act(async () => other.rerender({}));
+  mockAudio.recording = { ...mockAudio.recording, isRecording: true, metering: -55, durationMillis: 1400 };
+  await act(async () => other.rerender({}));
+  expect(refused).toHaveBeenCalled();
+  expect(other.result.current.mic).toBe('off');
+  expect(other.result.current.notice).toMatch(/say it again/);
+});
+
+test('a quiet voice still gets sent when the mic is tapped; silence explains itself', async () => {
+  const { hook, onHeard, level } = await setup();
+  await act(async () => hook.result.current.toggle());
+  await level(-45, 900);                                 // quieter than the speech threshold
+  await act(async () => hook.result.current.toggle());
+  expect(onHeard).toHaveBeenCalledWith('Where is the coffee machine?');
+
+  const quiet = await setup();
+  await act(async () => quiet.hook.result.current.toggle());
+  await quiet.level(-60, 8100);
+  expect(quiet.hook.result.current.mic).toBe('off');
+  expect(quiet.hook.result.current.notice).toMatch(/didn't hear anything/);
+});
+
+test('the browser refuses to play the answer: listens again instead of hanging on "speaking"', async () => {
+  const { hook } = await setup();
+  await act(async () => hook.result.current.toggle());
+  await act(async () => hook.result.current.say({ reply: 'Answer.', question: null, map: null }));
+  expect(hook.result.current.mic).toBe('speaking');
+  mockAudio.playing = { didJustFinish: false, error: 'NotAllowedError: play() failed' } as typeof mockAudio.playing;
+  await act(async () => hook.rerender({}));
+  expect(hook.result.current.mic).toBe('listening');
+});
+
+test('a second tap during the permission prompt does not start twice', async () => {
+  const { hook } = await setup();
+  await act(async () => {
+    hook.result.current.toggle();
+    hook.result.current.toggle();
+  });
+  expect(mockRecorder.record).toHaveBeenCalledTimes(1);
+});
