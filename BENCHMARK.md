@@ -61,23 +61,29 @@ Cost: about $0.03–0.04 per question (prompt caching on).
 
 ## The test-set submission
 
-`submission/team_answers.csv` (145 answers) was made on 2026-10-24 by the Claude agent with
+`submission/team_answers.csv` (145 answers) was made on 2026-10-24, after the kit 1.1.0 route rules, by the
+Claude agent with
 
 ```bash
-uv run --env-file .env python -m navagent.benchmark data/test --out agent_output/test_run.csv --resume
+uv run --env-file .env python -m navagent.benchmark data/test --out agent_output/test_run.csv --double-check --resume
 ```
 
-(single run, $3.99), then checked for free with
+(every question twice, a third run only on disagreement: the two runs agreed on 145/145, so none was needed;
+290 runs, $6.54), then checked for free with
 `uv run python -m evals.check_submission submission/team_answers.csv --reference <other run>`:
-format OK (UTF-8, header, every test id once, under 5 MB), every answer line readable by the scorer, and
-145/145 answers agree with an independent earlier run (the Phase 1 template reader, 138/138 on dev).
-No answer was edited by hand.
+format OK (UTF-8, header, every test id once, under 5 MB) and every answer line readable by the scorer.
+
+Against the previous submission (made with the 1.0.0 route rules) 124/145 answers are the same; the 21 that
+changed are exactly the route-dependent ones the new rules move (19 errands, 2 what-if doors), and each new
+answer equals the engine's 1.1.0 result computed directly from the question. The 18 wide-delivery counts did
+not change. No answer was edited by hand.
 
 ## Sunday dry run
 
-From a fresh clone of this repository: `uv sync`, create `.env`, then the command above on one test building
-directory (`data/test/osm-way363805324`, 7 questions): a valid CSV in 44 s (about 6 s per question, run one
-after another), all 7 answers the same as in the submission. A Sunday building with 20 questions takes about
+From a fresh clone of this repository (2026-10-24, after kit 1.1.0): `uv sync` (1 s with the uv cache),
+create `.env`, then the command above on one test building directory (`data/test/osm-way363805324`,
+7 questions): a valid CSV in 43 s (about 6 s per question, run one after another), every answer line readable
+by the scorer, all 7 answers the same as in the submission. A Sunday building with 20 questions takes about
 2–3 minutes and costs under $1.
 
 ## Level 4: buildings from floor plans
