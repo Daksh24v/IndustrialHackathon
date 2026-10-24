@@ -676,10 +676,12 @@ class BuildingAgent:
             fallbacks="default",
         )
         final = None
+        said = []  # everything the agent wrote this turn, also text written next to tool calls
         for message in runner:
             final = message
             self.track_usage(message)
             self.messages.append({"role": "assistant", "content": message.content})
+            said += [block.text.strip() for block in message.content if block.type == "text" and block.text.strip()]
             tool_response = runner.generate_tool_call_response()
             if tool_response is not None:
                 self.messages.append(tool_response)
@@ -688,7 +690,7 @@ class BuildingAgent:
             return "(no response)"
         if final.stop_reason == "refusal":
             return "Sorry, I can't help with that request."
-        return "\n".join(block.text for block in final.content if block.type == "text").strip()
+        return "\n\n".join(said)
 
     def answer_benchmark(self, question: str) -> str:
         """Full reply for a scored question, ending with the code-written 'Answer:' line."""

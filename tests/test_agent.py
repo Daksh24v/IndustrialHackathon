@@ -121,3 +121,26 @@ def test_double_check_disagreement_takes_a_third_vote(scripted):
     client = scripted(submit(4), submit(5), submit(5))
     reply = answer_module.answer(DATA / "dev" / "proc-factory-dev-003", "?", double_check=True)
     assert reply.endswith("Answer: 5") and len(client.requests) == 3
+
+
+def test_text_written_before_a_question_reaches_the_person(tiny: Building):
+    from types import SimpleNamespace
+
+    from tests.fake_claude import FakeRunner
+
+    class TalkingRunner(FakeRunner):
+        def __iter__(self):
+            first = True
+            for message in super().__iter__():
+                if first:  # the model writes a sentence next to its first tool call
+                    message.content = [SimpleNamespace(type="text", text="I read 2 floors."), *message.content]
+                    first = False
+                yield message
+
+    client = FakeClient([([("ask_user", {"question": "Which floor?", "options": [{"label": "A"}, {"label": "B"}]})],
+                          "")])
+    client.beta.messages.tool_runner = lambda **request: client.requests.append(request) or TalkingRunner(
+        request["tools"], client.script.pop(0), client.log)
+    agent = BuildingAgent(Session(tiny), client, mode=CHAT)
+    assert agent.ask("set it up") == "I read 2 floors."
+    assert agent.session.pending_question["question"] == "Which floor?"
