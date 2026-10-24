@@ -79,3 +79,24 @@ From a fresh clone of this repository: `uv sync`, create `.env`, then the comman
 directory (`data/test/osm-way363805324`, 7 questions): a valid CSV in 44 s (about 6 s per question, run one
 after another), all 7 answers the same as in the submission. A Sunday building with 20 questions takes about
 2–3 minutes and costs under $1.
+
+## Level 4: buildings from floor plans
+
+`navcore/plans.py` reads `floor_<level>.svg` plans (rooms, kind of space, room numbers, doors, entrances,
+title), measures the scale from the drawing's 2 m margin, lines the floors up (stair and lift shafts first,
+walls to fine-tune, centred when no shafts) and links stairs and lifts. What the plans don't contain (room
+types, door widths, floor heights, stairs drawn like corridors, labels the renderer left out) is asked in a
+builder conversation (`navagent/builder.py`, server `POST /imports`).
+
+`uv run python -m evals.plans` rebuilds buildings from their own plans and compares with `building.json`
+(geometry floor by floor; floor alignment only where the dataset's floors share one frame):
+
+| Buildings | Rooms | Doors | Stairs/lifts | Floors lined up | Routes | Shared walls | Above/below | Room numbers |
+|---|---|---|---|---|---|---|---|---|
+| Build (192) | 100% | 99.5% | 28% | 79% | 57% | 100% | 100% | 83% |
+| **Hold-out (48), run once** | **100%** | **97%** | **22%** | **95%** | **55%** | **100%** | **100%** | **81%** |
+| Procedural only, build and hold-out | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% |
+
+The low stairs/routes numbers come from Swiss Dwellings, whose stairwells are drawn like corridors (the
+builder asks which spaces are the stairs, with suggestions), and from OSM floors that the data itself maps a
+few decimetres apart. Missing room numbers are not in the drawings at all; the builder lets the person name them.

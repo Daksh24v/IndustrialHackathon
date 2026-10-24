@@ -146,8 +146,9 @@ def compare(truth: Building, imported: dict) -> dict:
     return result
 
 
-def run(buildings: list[str], verbose: bool) -> Counter:
+def run(buildings: list[str], verbose: bool, quiet: bool = False) -> Counter:
     total: Counter = Counter()
+    by_source: dict[str, Counter] = {}
     paths = {p.name: p for split in ("train", "dev") for p in (DATA / split).iterdir()}
     perfect = 0
     for building_id in buildings:
@@ -159,19 +160,30 @@ def run(buildings: list[str], verbose: bool) -> Counter:
             scores = compare(truth, imported)
         except (PlanError, StopIteration, ValueError) as error:
             total["failed"] += 1
-            print(f"FAILED {building_id}: {error}")
+            if not quiet:
+                print(f"FAILED {building_id}: {error}")
             continue
         total.update(scores)
+        by_source.setdefault(truth.info["source"], Counter()).update(scores)
         ok = all(scores[f"{key}_right" if key in ("routes", "walls", "stacked") else f"{key}_found"
                         if key in ("doors", "connectors") else "spaces_matched"] == scores[key]
                  for key in ("spaces", "doors", "connectors", "routes", "walls", "stacked")) and \
             scores["floors_aligned"] == scores["floors_to_align"]
         perfect += ok
-        if verbose or not ok:
+        if (verbose or not ok) and not quiet:
             print(f"{'OK ' if ok else '-- '} {building_id:24s} " + " ".join(
                 f"{k}={scores[k]}" for k in sorted(scores)))
     total["buildings"] = len(buildings)
     total["perfect"] = perfect
+    print(f"\n{'source':16s} {'spaces':>10s} {'doors':>10s} {'stairs/lifts':>13s} {'floors':>8s} {'routes':>8s} "
+          f"{'walls':>8s} {'labels':>10s}")
+    for source, scores in sorted(by_source.items()):
+        def cell(part, whole):
+            return f"{scores[part] / scores[whole]:.0%}" if scores[whole] else "-"
+        print(f"{source:16s} {cell('spaces_matched', 'spaces'):>10s} {cell('doors_found', 'doors'):>10s} "
+              f"{cell('connectors_found', 'connectors'):>13s} {cell('floors_aligned', 'floors_to_align'):>8s} "
+              f"{cell('routes_right', 'routes'):>8s} {cell('walls_right', 'walls'):>8s} "
+              f"{cell('label_right', 'labelled'):>10s}")
     return total
 
 
@@ -202,7 +214,7 @@ def main() -> None:
     buildings = sorted(read(HOLDOUT_LIST if arguments.holdout else BUILD_LIST))
     if arguments.limit:
         buildings = buildings[: arguments.limit]
-    report(run(buildings, arguments.verbose and not arguments.holdout))
+    report(run(buildings, arguments.verbose and not arguments.holdout, quiet=arguments.holdout))
 
 
 if __name__ == "__main__":
