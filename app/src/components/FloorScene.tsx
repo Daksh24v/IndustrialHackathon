@@ -145,7 +145,7 @@ export function FloorScene({ detail, floorId, map, footprints, width, height }: 
       const c = Math.cos(cam.yaw);
       const s = Math.sin(cam.yaw);
       const lit = Math.abs((ex * c - ey * s) * light[0] + (ex * s + ey * c) * light[1]); // turned like the view
-      wallFaces.push({ d: path(quad), fill: grey(236 - 26 * lit), depth: depthOf(cam, p) + depthOf(cam, q) });
+      wallFaces.push({ d: path(quad), fill: grey(colours.wallFace[0] + (colours.wallFace[1] - colours.wallFace[0]) * lit), depth: depthOf(cam, p) + depthOf(cam, q) });
     }
     wallFaces.sort((x, y) => y.depth - x.depth);
 
@@ -181,8 +181,8 @@ export function FloorScene({ detail, floorId, map, footprints, width, height }: 
       <Animated.View ref={gestures.ref} {...gestures.panHandlers} style={[{ width, height }, gestures.style]}>
         <Svg width={width + 2 * MARGIN_PX} height={height + 2 * MARGIN_PX} style={{ position: 'absolute', left: -MARGIN_PX, top: -MARGIN_PX }}>
           <G transform={`translate(${MARGIN_PX} ${MARGIN_PX})`}>
-            {scene.slabSides.map((side, i) => <Path key={`slab-${i}`} d={side.d} fill="#E2E2E2" stroke="#D2D2D2" strokeWidth={0.6} />)}
-            {scene.slabTops.map((d, i) => <Path key={`top-${i}`} d={d} fill={colours.background} stroke="#D6D6D6" strokeWidth={1} />)}
+            {scene.slabSides.map((side, i) => <Path key={`slab-${i}`} d={side.d} fill={colours.slabSide} stroke={colours.blockEdge} strokeWidth={0.6} />)}
+            {scene.slabTops.map((d, i) => <Path key={`top-${i}`} d={d} fill={colours.slab} stroke={colours.blockEdge} strokeWidth={1} />)}
             {scene.tiles.map((tile) => <Path key={tile.id} d={tile.d!} fill={tile.fill} />)}
             {scene.labels.map((label) => (
               <SvgText key={`label-${label.id}`} x={label.x} y={label.y + label.size / 3} fill={colours.label}
@@ -199,7 +199,7 @@ export function FloorScene({ detail, floorId, map, footprints, width, height }: 
               </G>
             ))}
             {scene.wallFaces.map((face, i) => (
-              <Path key={`wall-${i}`} d={face.d} fill={face.fill} stroke="#C9C9C9" strokeWidth={0.6} strokeLinejoin="round" />
+              <Path key={`wall-${i}`} d={face.d} fill={face.fill} stroke={colours.wall} strokeWidth={0.6} strokeLinejoin="round" />
             ))}
             {/* the route seen through the walls, faintly, so it never disappears behind one */}
             {scene.routes.map((route, i) => (
@@ -236,9 +236,9 @@ export const styles = StyleSheet.create({
   frame: { overflow: 'hidden', backgroundColor: colours.background },
   controls: { position: 'absolute', right: 12, top: 60, gap: 8 },
   button: {
-    width: 36, height: 36, borderRadius: 18, backgroundColor: colours.background, alignItems: 'center',
+    width: 36, height: 36, borderRadius: 18, backgroundColor: colours.surface, alignItems: 'center',
     justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth, borderColor: colours.blockEdge,
-    shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 4, shadowOffset: { width: 0, height: 1 },
+    shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 4, shadowOffset: { width: 0, height: 1 },
   },
   buttonText: { fontSize: 20, color: colours.text },
 });

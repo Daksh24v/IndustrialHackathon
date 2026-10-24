@@ -3,12 +3,13 @@ import { Component, type ReactNode, useCallback, useEffect, useReducer, useRef, 
 import { ActivityIndicator, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { api, ApiError, pickBuilding } from './src/api';
+import { api, ApiError, type ChatReply, pickBuilding } from './src/api';
 import { BuildingBlocks } from './src/components/BuildingBlocks';
 import { ChatCard } from './src/components/ChatCard';
 import { FinniLogo } from './src/components/FinniLogo';
 import { FloorPlan } from './src/components/FloorPlan';
 import { FloorScene } from './src/components/FloorScene';
+import MorphOrb, { type OrbAnswer, type OrbHandle } from './src/orb/MorphOrb';
 import { initial, nextStep, reduce } from './src/state';
 import { colours } from './src/theme';
 import { useVoice } from './src/useVoice';
@@ -49,11 +50,15 @@ function Guide() {
   const [state, dispatch] = useReducer(reduce, initial);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [threeD, setThreeD] = useState(true);
+  // home: the orb; map: the building and the route (comes in when an answer has a route)
+  const [mode, setMode] = useState<'home' | 'map'>('home');
+  const orb = useRef<OrbHandle>(null);
   const insets = useSafeAreaInsets();
   const window = useWindowDimensions();
   // A laptop (or a tablet held sideways): the conversation on the left, the map beside it. Phones: one column.
   const wide = window.width >= WIDE_MIN_PX && window.width > window.height;
 
+  const loaded = useRef(deferred<string>());
   useEffect(() => {
     (async () => {
       try {
@@ -61,6 +66,7 @@ function Guide() {
         if (!id) throw new ApiError('The server has no buildings.', 0);
         const [detail, outline, session] = await Promise.all([api.building(id), api.outline(id), api.startSession(id)]);
         dispatch({ type: 'loaded', detail, outline, sessionId: session.session_id });
+        loaded.current.resolve(session.session_id);
       } catch (error) {
         dispatch({ type: 'error', message: (error as Error).message });
       }
@@ -71,10 +77,37 @@ function Guide() {
   const sendRef = useRef<(text: string) => void>(() => {});
   const voice = useVoice({
     buildingId: state.detail?.building.id ?? null,
-    onHeard: (text) => sendRef.current(text),
+    onHeard: (text) => (modeRef.current === 'home' ? orb.current?.ask(text) : sendRef.current(text)),
     onError: (message) => dispatch({ type: 'error', message }),
   });
   const talking = voice.mic !== 'off'; // a spoken conversation: short answers, read out
+  const talkingRef = useRef(talking);
+  talkingRef.current = talking;
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const lastReply = useRef<ChatReply | null>(null);
+
+  /** A question from the orb screen: same conversation as the map's, answered as a card. */
+  const askFromOrb = useCallback(async (text: string): Promise<OrbAnswer> => {
+    const sessionId = await loaded.current.promise;
+    dispatch({ type: 'send', text });
+    voice.waiting();
+    try {
+      const reply = await api.chat(sessionId, text, undefined, talkingRef.current);
+      lastReply.current = reply;
+      dispatch({ type: 'reply', reply });
+      void voice.say(reply);
+      const said = [reply.reply, reply.question?.question].filter(Boolean).join('\n\n');
+      return { text: said || 'Here it is on the map.', options: reply.question?.options };
+    } catch (error) {
+      voice.stop();
+      return { text: (error as Error).message };
+    }
+  }, [voice]);
+
+  const onAnswered = useCallback(() => {
+    if (lastReply.current?.map?.focus_floor_id) setTimeout(() => setMode('map'), MAP_AFTER_MS);
+  }, []);
 
   const send = useCallback(
     async (text: string) => {
@@ -102,18 +135,28 @@ function Guide() {
   const inside = state.view === 'floor';
   const bottom = Math.max(insets.bottom, 12);
 
+  if (mode === 'home') {
+    return (
+      <>
+        <StatusBar style="light" />
+        <MorphOrb handleRef={orb} onSubmit={askFromOrb} onAnswered={onAnswered} mic={voice.mic} onMic={voice.toggle}
+                  onOpenMap={state.map ? () => setMode('map') : undefined} notice={state.error ?? undefined} />
+      </>
+    );
+  }
+
   return (
     <SafeAreaView style={[styles.screen, wide && styles.row]} edges={['top', 'left', 'right']}>
-      <StatusBar style="dark" />
+      <StatusBar style="light" />
       <View style={wide ? styles.sidebar : null} testID={wide ? 'sidebar' : undefined}>
         <View style={styles.header}>
-          {inside || state.view === 'flying' ? (
-            <Pressable testID="back" accessibilityLabel="Back to the building" onPress={() => dispatch({ type: 'back' })}
-                       style={styles.back} hitSlop={8}>
-              <Text style={styles.backText}>‹</Text>
-            </Pressable>
-          ) : null}
-          <FinniLogo />
+          <Pressable testID="back" accessibilityLabel="Back to Finni" onPress={() => setMode('home')}
+                     style={styles.back} hitSlop={8}>
+            <Text style={styles.backText}>‹</Text>
+          </Pressable>
+          <Pressable onPress={() => setMode('home')} accessibilityLabel="Finni home">
+            <FinniLogo />
+          </Pressable>
         </View>
         <ChatCard messages={state.messages} question={state.question} busy={state.busy} onSend={send}
                   onMic={voice.toggle} mic={voice.mic} tall={wide} />
@@ -182,6 +225,13 @@ function Guide() {
 }
 
 const WIDE_MIN_PX = 860;
+const MAP_AFTER_MS = 1300; // the answer card stays this long before the map comes in
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => (resolve = res));
+  return { promise, resolve };
+}
 const SIDEBAR_PX = 400;
 
 const edge = { borderWidth: StyleSheet.hairlineWidth, borderColor: colours.blockEdge };
@@ -200,15 +250,15 @@ const styles = StyleSheet.create({
             justifyContent: 'space-between' },
   floors: { gap: 6, minWidth: 36 },
   floorChip: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center',
-               backgroundColor: colours.background, ...edge },
+               backgroundColor: colours.surface, ...edge },
   floorChipActive: { backgroundColor: colours.accent, borderColor: colours.accent },
   floorText: { color: colours.text, fontWeight: '600' },
   floorTextActive: { color: '#FFFFFF' },
-  floorName: { marginTop: 8, color: colours.muted, fontSize: 13, fontWeight: '600', backgroundColor: 'rgba(255,255,255,0.85)',
+  floorName: { marginTop: 8, color: colours.muted, fontSize: 13, fontWeight: '600', backgroundColor: 'rgba(28,28,30,0.85)',
                paddingHorizontal: 10, paddingVertical: 3, borderRadius: 10, overflow: 'hidden' },
-  toggle: { flexDirection: 'row', backgroundColor: colours.chip, borderRadius: 18, padding: 3 },
+  toggle: { flexDirection: 'row', backgroundColor: colours.surface, borderRadius: 18, padding: 3, ...edge },
   toggleItem: { paddingHorizontal: 12, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
-  toggleActive: { backgroundColor: colours.background, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 3,
+  toggleActive: { backgroundColor: colours.surfaceRaised, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3,
                   shadowOffset: { width: 0, height: 1 }, elevation: 1 },
   toggleText: { color: colours.muted, fontWeight: '700', fontSize: 13 },
   toggleTextActive: { color: colours.accent },
@@ -216,7 +266,7 @@ const styles = StyleSheet.create({
   step: { position: 'absolute', alignSelf: 'center', backgroundColor: colours.accent, borderRadius: 20,
           paddingHorizontal: 16, paddingVertical: 10 },
   stepText: { color: '#FFFFFF', fontWeight: '600' },
-  distance: { position: 'absolute', right: 12, backgroundColor: colours.background, borderRadius: 14,
+  distance: { position: 'absolute', right: 12, backgroundColor: colours.surface, borderRadius: 14,
               paddingHorizontal: 10, paddingVertical: 6, ...edge },
   distanceText: { color: colours.accent, fontWeight: '700' },
 });

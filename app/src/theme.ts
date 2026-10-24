@@ -1,24 +1,33 @@
-/** Minimal white map with one accent colour: orange is "you" and "your way". */
+/** Dark map, one accent colour: orange is "you" and "your way". Same look as the orb screen (src/orb/orb.css). */
 export const colours = {
-  background: '#FFFFFF',
-  block: '#F4F4F4',
-  blockTop: '#FFFFFF',
-  blockEdge: '#D8D8D8',
-  room: '#FAFAFA',
-  corridor: '#F1F1F1',
-  hall: '#F6F6F6',
-  shaft: '#ECECEC',
-  outdoor: '#F3F7F1',
-  wall: '#CFCFCF',
-  label: '#9A9A9A',
-  text: '#1F1F1F',
-  muted: '#8A8A8A',
-  chip: '#F3F3F3',
-  chipText: '#2A2A2A',
+  background: '#000000',
+  surface: '#1C1C1E',
+  surfaceRaised: '#2C2C2E',
+  line: 'rgba(255, 255, 255, 0.10)',
+  block: '#1C1C1E', // the building from outside: walls facing left
+  blockSide: '#141416', // walls facing right
+  blockTop: '#2A2A2E',
+  blockEdge: '#3A3A3E',
+  blockShadow: '#0D0D0F',
+  room: '#18181B',
+  corridor: '#232327',
+  hall: '#1D1D20',
+  shaft: '#2C2C31',
+  outdoor: '#142019',
+  wall: '#3F3F45',
+  wallFace: [42, 70] as const, // grey levels of 3D walls: away from the light .. lit
+  slab: '#121214',
+  slabSide: '#0E0E10',
+  label: '#8E8E93',
+  text: '#F2F2F7',
+  muted: '#8E8E93',
+  chip: '#1C1C1E',
+  chipText: '#E5E5EA',
   accent: '#FF7A00',
   accentSoft: 'rgba(255, 122, 0, 0.35)',
-  accentFaint: 'rgba(255, 122, 0, 0.12)',
-  error: '#C62828',
+  accentFaint: 'rgba(255, 122, 0, 0.16)',
+  accentChip: 'rgba(255, 122, 0, 0.12)',
+  error: '#FF6B6B',
 } as const;
 
 export const spaceFill: Record<string, string> = {

@@ -1,5 +1,5 @@
-// End-to-end check of the built website, like a person would use it, on a laptop and on a phone: ask, pick an
-// option, see the route, zoom and drag with the mouse.
+// End-to-end check of the built website, like a person would use it, on a laptop and on a phone: ask the orb,
+// pick an option in the answer card, the map takes over with the route; zoom and drag with the mouse; back home.
 // No Claude API calls: the /chat answers are canned, but the map in them is a real route from the server.
 //
 //   uv run --env-file .env uvicorn server.app:app --port 8000      (in the repo root)
@@ -33,48 +33,63 @@ const OUT = process.argv[2] ?? 'e2e/screenshots';
     await page.route('**/sessions/*/chat', (request) =>
       request.fulfill({ contentType: 'application/json', body: JSON.stringify(queue.shift()) }));
     const shot = (name) => page.screenshot({ path: `${OUT}/${size}-${name}.png` });
+    const answered = () => page.waitForSelector('[data-testid="orb-home"][data-phase="answered"]', { timeout: 20000 });
     await page.goto(WEB);
-    await page.waitForSelector('[data-testid="building-blocks"]', { timeout: 30000 });
-    if (size === 'laptop') await page.waitForSelector('[data-testid="sidebar"]');
-    else if (await page.$('[data-testid="sidebar"]')) throw new Error('phone shows the sidebar');
-    await page.waitForTimeout(2500);
-    await shot('1-dashboard');
-    await page.fill('[data-testid="chat-input"]', 'Where is office 1.04?');
-    await page.waitForSelector('[data-testid="send"]');
+    await page.waitForSelector('[data-testid="resting-orb"]', { timeout: 30000 });
+    await page.waitForTimeout(1500);
+    await shot('1-home');
+    await page.fill('[data-testid="orb-input"]', 'Where is office 1.04?');
+    await shot('2-typed');
     await page.keyboard.press('Enter');
-    await page.waitForSelector('[data-testid="question"]');
-    await shot('2-question');
-    await page.click('[data-testid="chip-Ground floor"]');
-    await page.waitForSelector('[data-testid="floor-scene"]', { timeout: 10000 });
+    await page.waitForTimeout(900);
+    await shot('3-flying');
+    await page.waitForSelector('[data-testid="orb-home"][data-phase="think"]', { timeout: 10000 });
+    await page.waitForTimeout(700);
+    await shot('4-thinking');
+    await answered();
+    await page.waitForTimeout(700);
+    await shot('5-question-card');
+    await page.click('[data-testid="orb-chip-Ground floor"]');
+    await answered();
+    await page.waitForTimeout(500);
+    await shot('6-answer-card');
+    // the answer has a route: the map takes over
+    await page.waitForSelector('[data-testid="floor-scene"]', { timeout: 15000 });
     await page.waitForSelector('[data-testid="you-are-here"]');
     await page.waitForSelector('[data-testid="route-line"]');
+    if (size === 'laptop') await page.waitForSelector('[data-testid="sidebar"]');
+    else if (await page.$('[data-testid="sidebar"]')) throw new Error('phone shows the sidebar');
     await page.waitForTimeout(1500);
-    await shot('3-floor-3d');
+    await shot('7-map-3d');
     if (size === 'laptop') {
       // mouse: wheel zoom about the pointer, then drag
       const map = await page.$('[data-testid="floor-scene"]');
       const box = await map.boundingBox();
-      const before = await page.$eval('[data-testid="you-are-here"]', (node) => node.getBoundingClientRect().width);
+      const before = await page.$eval('[data-testid="route-line"]', (node) => node.getBoundingClientRect().height);
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       await page.mouse.wheel(0, -400);
       await page.waitForTimeout(400);
-      const after = await page.$eval('[data-testid="you-are-here"]', (node) => node.getBoundingClientRect().width);
+      const after = await page.$eval('[data-testid="route-line"]', (node) => node.getBoundingClientRect().height);
       if (!(after > before)) throw new Error(`wheel did not zoom in (${before} -> ${after})`);
       await page.mouse.down();
       await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2 + 40, { steps: 8 });
       await page.mouse.up();
       await page.waitForTimeout(400);
-      await shot('4-zoomed-and-dragged');
     }
     await page.click('[data-testid="view-2D"]');
     await page.waitForSelector('[data-testid="floor-plan"]');
     await page.waitForTimeout(1600);
-    await shot('5-floor-2d');
+    await shot('8-map-2d');
     await page.click('[data-testid="view-3D"]');
     await page.click('[data-testid="next-step"]');
     await page.waitForSelector('[data-testid="target-pin"]');
     await page.waitForTimeout(1500);
-    await shot('6-upstairs-3d');
+    await shot('9-upstairs-3d');
+    await page.click('[data-testid="back"]');
+    await page.waitForSelector('[data-testid="resting-orb"]');
+    await page.waitForSelector('[data-testid="open-map"]');
+    await page.waitForTimeout(1200);
+    await shot('10-back-home');
     await page.close();
   }
   await browser.close();

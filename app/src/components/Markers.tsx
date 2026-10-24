@@ -38,7 +38,7 @@ export function HereMarker({ x, y, radius, flatten = 1 }: HereProps) {
       <Ellipse cx={x} cy={y} rx={radius * 2.3} ry={radius * 2.3 * flatten} fill={colours.accentFaint} />
       <AnimatedEllipse cx={x} cy={y} rx={ring} ry={ringY} fill="none" stroke={colours.accent} strokeWidth={2}
                        opacity={fade} />
-      <Ellipse cx={x} cy={y + radius * 0.25} rx={radius * 1.1} ry={radius * 1.1 * flatten} fill="rgba(0,0,0,0.12)" />
+      <Ellipse cx={x} cy={y + radius * 0.25} rx={radius * 1.1} ry={radius * 1.1 * flatten} fill="rgba(0,0,0,0.45)" />
       <Ellipse cx={x} cy={y} rx={radius} ry={radius * flatten} fill={colours.accent} stroke="#FFFFFF" strokeWidth={2.5} />
     </G>
   );
@@ -57,7 +57,7 @@ export function TargetPin({ x, y, height, flatten = 0.45 }: PinProps) {
   const d = `M${x} ${y} L${x - r * 0.92} ${cy + r * 0.39} A${r} ${r} 0 1 1 ${x + r * 0.92} ${cy + r * 0.39} Z`;
   return (
     <G testID="target-pin">
-      <Ellipse cx={x} cy={y} rx={r * 0.9} ry={r * 0.9 * flatten} fill="rgba(0,0,0,0.16)" />
+      <Ellipse cx={x} cy={y} rx={r * 0.9} ry={r * 0.9 * flatten} fill="rgba(0,0,0,0.5)" />
       <Path d={d} fill={colours.accent} stroke="#FFFFFF" strokeWidth={1.5} strokeLinejoin="round" />
       <Circle cx={x} cy={cy} r={r * 0.42} fill="#FFFFFF" />
     </G>

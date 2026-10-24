@@ -3,16 +3,18 @@
 A website for laptops and phones (built with Expo / React Native for web). It talks to the backend in
 `../server`, which also serves the built site, so site and API share one address.
 
-Layout: on a laptop (wide screen) the conversation is a sidebar on the left and the map fills the rest; on a
-phone it's one column with the "Talk to Finni…" field at the top (the keyboard can't cover it).
+Home: a black screen with a dotted orb resting in the middle and the "Ask Finni…" pill (with the orange mic) at
+the bottom (`src/orb/MorphOrb.tsx`, styles in `src/orb/orb.css`, timelines in `src/orb/motion.ts`). Send a
+question: the pill shrinks into a ball, flies into the orb, the orb thinks ("Searching the building…"), turns
+green and unfolds into the answer card. When Finni asks back, the options are chips in the card. When the
+answer has a route, the map takes over after a moment: on a laptop the conversation is a sidebar on the left
+and the map fills the rest; on a phone it's one column. The back arrow (or the logo) returns to the orb; the
+"Map" button on the orb screen opens the last route again. Everything is dark, with Finni orange as the accent.
 
-What it does: a clean white start screen with the Finni logo, the "Talk to Finni…" field, an orange mic and a
-few example questions, and the building you're in, seen from outside as white blocks. Ask where to go ("Where's the coffee machine?");
-Finni asks back with options when it needs to (which floor, where you are); then the view flies into that floor:
-a tilted 3D view with low walls and door gaps, an orange band for the route with arrows flowing along it, a
-pin on the target and an orange disc with a spreading ring where you are. Drag to move; pinch, the mouse wheel,
-a trackpad pinch or +/− to zoom; ⟳ to turn; the 2D/3D switch shows the flat plan instead. Routes over several floors show "Take Lift 1 to
-Floor 2".
+The map: the building from outside as dark blocks, then the floor in a tilted 3D view with low walls and door
+gaps, an orange band for the route with arrows flowing along it, a pin on the target and an orange disc with a
+spreading ring where you are. Drag to move; pinch, the mouse wheel, a trackpad pinch or +/− to zoom; ⟳ to turn;
+the 2D/3D switch shows the flat plan instead. Routes over several floors show "Take Lift 1 to Floor 2".
 
 Where you are: for now Finni asks. The AR camera (later) will tell the server with
 `api.setPosition(sessionId, room)` (`POST /sessions/{id}/position`); from then on Finni doesn't ask and the map

@@ -53,7 +53,7 @@ function floorFaces(iso: Iso, footprints: Point[][], bottom: number, top: number
       if (rx + ry >= 0) continue;
       const quad = [isoProject(iso, a, bottom), isoProject(iso, b, bottom), isoProject(iso, b, top), isoProject(iso, a, top)]
         .map(toScreen);
-      const shade = rx < ry ? colours.block : '#E4E4E4'; // left-facing walls lighter, right-facing darker
+      const shade = rx < ry ? colours.block : colours.blockSide; // left-facing walls lighter, right-facing darker
       walls.push({ d: path(quad), fill: shade, depth: (isoDepth(iso, a) + isoDepth(iso, b)) / 2 });
     }
     tops.push({ d: path(ring.map((p) => toScreen(isoProject(iso, p, top)))), fill: colours.blockTop, depth: Infinity });
@@ -105,7 +105,7 @@ export function BuildingBlocks({ outline, focusFloorId, onArrived, width, height
           {/* a soft shadow under the building */}
           <Path
             d={path(floors[0]?.footprints[0]?.map((p) => toScreen(isoProject(iso, [p[0] + 1.5, p[1] - 1.5], 0))) ?? [])}
-            fill="#EDEDED"
+            fill={colours.blockShadow}
           />
           {floors.map((floor) => {
             const faces = floorFaces(iso, floor.footprints, floor.elevation_m,
