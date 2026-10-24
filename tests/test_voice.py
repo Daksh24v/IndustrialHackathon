@@ -147,6 +147,26 @@ def test_errors_and_missing_key(tmp_path, monkeypatch):
         ElevenLabs()
 
 
+def test_a_key_id_instead_of_the_key_is_explained(monkeypatch):
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "a1b2c3d4e5f6")  # the key's ID, as listed on the dashboard
+    with pytest.raises(VoiceError, match="start with sk_"):
+        ElevenLabs()
+    monkeypatch.setenv("ELEVENLABS_API_KEY", '"sk_secret"\n')  # quotes and a newline are tolerated
+    assert ElevenLabs(cache=None).http.headers["xi-api-key"] == "sk_secret"
+
+
+def test_refused_key_is_one_short_sentence(tmp_path):
+    def handle(request):
+        return httpx.Response(400, json={"detail": {
+            "type": "authentication_error", "code": "invalid_api_key", "status": "api_key_id_used_as_api_key",
+            "message": "API key ID used as API key - only valid API keys can be used.", "request_id": "x"}})
+
+    client = ElevenLabs(api_key="sk_x", cache=tmp_path, transport=httpx.MockTransport(handle))
+    with pytest.raises(VoiceError) as error:
+        client.speak("Hi.")
+    assert "start with sk_" in str(error.value) and "request_id" not in str(error.value)
+
+
 def test_usable_keyterms():
     terms = ["CNC mill", "CNC mill", "x" * 60, "one two three four five six", "Desk [A]", ""] + \
         [f"Office {n}" for n in range(200)]

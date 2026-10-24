@@ -20,6 +20,12 @@ MAX_KEYTERMS = 100  # above 100, every request is billed as at least 20 s
 CACHE = Path(__file__).resolve().parent / ".cache"
 
 
+KEY_PREFIX = "sk_"
+KEY_HELP = ("ELEVENLABS_API_KEY in .env is not an ElevenLabs API key (those start with sk_; this looks like the "
+            "key's ID). On elevenlabs.io: Developers, API Keys, create or rotate a key, copy the sk_ value into "
+            ".env and restart the server.")
+
+
 class VoiceError(Exception):
     """ElevenLabs couldn't do it (bad key, no credits, network)."""
 
@@ -34,9 +40,12 @@ class ElevenLabs:
         cache: Path | None = CACHE,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        api_key = api_key or os.environ.get("ELEVENLABS_API_KEY", "")
         if not api_key:
-            raise VoiceError("ELEVENLABS_API_KEY is not set; put it in .env.")
+            api_key = os.environ.get("ELEVENLABS_API_KEY", "").strip().strip("\"'")
+            if not api_key:
+                raise VoiceError("ELEVENLABS_API_KEY is not set; put it in .env.")
+            if not api_key.startswith(KEY_PREFIX):
+                raise VoiceError(KEY_HELP)
         self.voice_id = voice_id or os.environ.get("ELEVENLABS_VOICE_ID") or VOICE_ID
         self.tts_model = tts_model or os.environ.get("ELEVENLABS_TTS_MODEL") or TTS_MODEL
         self.stt_model = stt_model or os.environ.get("ELEVENLABS_STT_MODEL") or STT_MODEL
@@ -77,8 +86,24 @@ class ElevenLabs:
         except httpx.HTTPError as error:
             raise VoiceError(f"Can't reach ElevenLabs: {error}") from error
         if response.status_code != 200:
-            raise VoiceError(f"ElevenLabs {response.status_code}: {response.text[:300]}")
+            raise VoiceError(f"ElevenLabs {response.status_code}: {reason(response)}")
         return response
+
+
+def reason(response: httpx.Response) -> str:
+    """ElevenLabs' own one-line reason for an error, not the whole JSON body."""
+    try:
+        detail = response.json().get("detail")
+    except ValueError:
+        return response.text[:200]
+    if isinstance(detail, dict):
+        if detail.get("type") == "authentication_error" or response.status_code == 401:
+            if "key id" in str(detail.get("message", "")).lower():
+                return KEY_HELP
+            refused = detail.get("message") or detail.get("status")
+            return f"the API key was refused ({refused}). Check ELEVENLABS_API_KEY in .env."
+        return str(detail.get("message") or detail.get("status") or detail)[:200]
+    return str(detail or response.text)[:200]
 
 
 def usable_keyterms(terms) -> list[str]:
