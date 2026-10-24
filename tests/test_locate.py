@@ -136,3 +136,24 @@ def test_benchmark_answers_do_not_change(factory):
     for space in factory.spaces.values():
         assert find_space(factory, factory.label(space["id"])) == space["id"]
     assert factory.distances_from(LAB, Constraints())
+
+
+def test_directions_say_which_way_to_turn(factory):
+    """The corridor runs north-south with the lab and the kitchen on its west side: out of the lab (walking
+    east) the kitchen is to the left (north), and from the corridor (walking north) its door is on the left."""
+    session = Session(factory)
+    steps = [step for leg in session.route("Quality lab 0.21 (Ground floor)", "Kitchen 0.28 (Ground floor)")["legs"]
+             for step in leg["steps"]]
+    assert "turn left through the door into Office corridor 0.16" in steps[0]
+    assert "turn left through the door into Kitchen 0.28" in steps[1] and "(by the Coffee machine" in steps[1]
+    steps = session.route("Meeting room 0.24 (Ground floor)", "Locker room 0.39 (Ground floor)")["legs"][0]["steps"]
+    assert "turn left" in steps[0] and "turn right through the door into Locker room 0.39" in steps[1]
+
+
+def test_turn_words():
+    from navagent.tools import turn_word
+
+    east, north, south, west = (1, 0), (0, 1), (0, -1), (-1, 0)
+    assert turn_word(east, north) == "turn left" and turn_word(east, south) == "turn right"
+    assert turn_word(east, east) == "go straight" and turn_word(east, west) == "turn around and go"
+    assert turn_word(None, east) == "go"

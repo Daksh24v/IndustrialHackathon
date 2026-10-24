@@ -36,3 +36,6 @@ def test_unseen_building(building_id):
         assert session.where_am_i_options(floor_id)["landmarks"] or not building.spaces_on(floor_id)
     session.set_position(start)
     assert session.where_am_i_options()["last_known"] == building.label(start)
+    farthest = max((space_id for space_id in distances if space_id in building.spaces), key=distances.get)
+    steps = [step for leg in session.route(None, farthest)["legs"] for step in leg["steps"]]
+    assert steps and steps[-1].startswith("Walk about")  # turn-by-turn works in buildings never seen

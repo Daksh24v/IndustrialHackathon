@@ -407,10 +407,7 @@ class Building:
                 last["then"] = {"kind": connector["kind"], "via": how, "name": connector["name"], "to_floor_id": floor_id}
                 pieces.append({"floor_id": floor_id, "points": [list(point)], "then": None})
                 continue
-            walk = self.walk_area(how).path(self.landing(how, previous, extra_openings),
-                                            self.landing(how, current, extra_openings))
-            last["points"].extend(list(p) for p in walk)
-            last["points"].append(list(point))
+            last["points"].extend(list(p) for p in self.hop_points(previous, current, how, extra_openings)[1:])
         for piece in pieces:  # a door's landing can be the door itself, a centre point its own landing
             cleaned = [piece["points"][0]]
             for point in piece["points"][1:]:
@@ -418,6 +415,17 @@ class Building:
                     cleaned.append(point)
             piece["points"] = cleaned
         return pieces
+
+    def hop_points(
+        self, previous: str, current: str, space_id: str, extra_openings: tuple[dict, ...] = ()
+    ) -> list[tuple[float, float]]:
+        """The walk of one hop through a space, as drawn: from one node, via its landing and the corners the
+        walk bends round, to the next node."""
+        start = self.node_point(previous, extra_openings)[1]
+        end = self.node_point(current, extra_openings)[1]
+        walk = self.walk_area(space_id).path(self.landing(space_id, previous, extra_openings),
+                                             self.landing(space_id, current, extra_openings))
+        return [tuple(start), *(tuple(p) for p in walk), tuple(end)]
 
     def tour(self, stops: list[str], constraints: Constraints = Constraints()) -> list[Route]:
         return [self.route(first, second, constraints) for first, second in itertools.pairwise(stops)]

@@ -1,6 +1,7 @@
 """What the agent can do in one building. Plain functions that return JSON-ready dicts, so they are tested
 without the API; agent.py wraps them as Claude tools. Every fact the agent states comes from here."""
 
+import itertools
 import math
 import time
 from dataclasses import asdict, dataclass, field
@@ -40,6 +41,10 @@ NEAREST_SPACE_M = 3.0  # a tapped point this close to a space (on a wall, in a d
 MAX_LANDMARKS = 8
 LANDMARK_MAX_PER_FLOOR = 2  # a kind of thing that occurs at most this often on a floor is a landmark
 MAX_FLOORS_IN_ONE_QUESTION = 4  # more floors than this: ask the floor first, then landmarks
+TURN_REACH_M = 2.0  # a turn is judged over the 2 m before and after a door
+STRAIGHT_DEG = 30.0
+AROUND_DEG = 150.0
+LANDMARK_NEAR_DOOR_M = 3.0  # a rare thing this close to a door is named in the step
 
 
 @dataclass
@@ -57,6 +62,33 @@ class Position:
 
 def find_asset_type(building: Building, words: str) -> str:
     return find_type(words, asset_types(building), asset_names(building))
+
+
+def heading(points: list[tuple[float, float]], at_end: bool) -> tuple[float, float] | None:
+    """Which way someone walks over the last (at_end) or first TURN_REACH_M of a path; None if it has no length."""
+    path = list(reversed(points)) if at_end else points
+    walked = 0.0
+    for first, second in itertools.pairwise(path):
+        walked += math.dist(first, second)
+        if walked >= TURN_REACH_M:
+            break
+    far = second if len(path) > 1 else path[0]
+    vector = (path[0][0] - far[0], path[0][1] - far[1]) if at_end else (far[0] - path[0][0], far[1] - path[0][1])
+    return vector if math.hypot(*vector) > 1e-6 else None
+
+
+def turn_word(incoming: tuple[float, float] | None, outgoing: tuple[float, float] | None) -> str:
+    """'turn left', 'turn right', 'go straight' or 'turn around' (x east, y north: counter-clockwise is left)."""
+    if incoming is None or outgoing is None:
+        return "go"
+    cross = incoming[0] * outgoing[1] - incoming[1] * outgoing[0]
+    dot = incoming[0] * outgoing[0] + incoming[1] * outgoing[1]
+    angle = math.degrees(math.atan2(cross, dot))
+    if abs(angle) < STRAIGHT_DEG:
+        return "go straight"
+    if abs(angle) > AROUND_DEG:
+        return "turn around and go"
+    return "turn left" if angle > 0 else "turn right"
 
 
 def bare_name(name: str) -> str:
@@ -361,9 +393,12 @@ class Session:
         }
 
     def directions(self, route: Route) -> list[str]:
-        """Followable steps: one line per door into another space and per stair or lift, with the metres."""
+        """Followable steps: one line per door into another space and per stair or lift, with the metres, the
+        turn (left / right / straight, from the walk itself) and a rare thing next to the door when there is
+        one ("by the Air compressor H-C5")."""
         building = self.building
         openings = {opening["id"]: opening for opening in [*building.openings.values(), *self.new_openings]}
+        added = tuple(self.new_openings)
         steps = []
         walked = 0.0
         following = [*route.hops[1:], None]
@@ -381,12 +416,31 @@ class Session:
                     steps.append(f"Walk about {walked:.0f} m and leave the building through the entrance.")
                     walked = 0.0
                 elif after[2] in building.spaces and after[2] != how:
+                    incoming = heading(building.hop_points(previous, current, how, added), at_end=True)
+                    outgoing = heading(building.hop_points(current, after[1], after[2], added), at_end=False)
                     passage = "through the door" if opening["kind"] == "door" else "through the opening"
-                    steps.append(f"Walk about {walked:.0f} m {passage} into {building.spaces[after[2]]['name']}.")
+                    near = self.thing_near(opening)
+                    landmark = f" (by the {near})" if near else ""
+                    steps.append(f"Walk about {walked:.0f} m, then {turn_word(incoming, outgoing)} "
+                                 f"{passage} into {building.spaces[after[2]]['name']}{landmark}.")
                     walked = 0.0
         if not route.nodes[-1].startswith(DOOR_PREFIX):
             steps.append(f"Walk about {walked:.0f} m. You have arrived at {building.label(route.nodes[-1])}.")
         return steps
+
+    def thing_near(self, opening: dict) -> str | None:
+        """The rare thing (at most 2 of its kind on the floor) closest to a door, if within 3 m: a landmark."""
+        building = self.building
+        floor_id = opening["floor_id"]
+        kinds: dict[str, int] = {}
+        for asset in building.assets.values():
+            if asset["floor_id"] == floor_id:
+                kinds[asset["type"]] = kinds.get(asset["type"], 0) + 1
+        near = [(math.dist(asset["position"], opening["position"]), asset["name"]) for asset in building.assets.values()
+                if asset["floor_id"] == floor_id and kinds[asset["type"]] <= LANDMARK_MAX_PER_FLOOR
+                and set(opening["space_ids"]) & {asset["space_id"]}]
+        distance, name = min(near, default=(math.inf, None))
+        return name if distance <= LANDMARK_NEAR_DOOR_M else None
 
     def nearest_exit(self, room: str | None = None, step_free: bool = False) -> dict:
         """Walk from a room (default: where the person is) out of the building through its nearest entrance,

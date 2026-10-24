@@ -84,6 +84,9 @@ short sentence with the key fact (where, which floor, how far), no lists, markdo
 the rest. Asking back with ask_user works as usual (the options are read out).
 - If a tool returns several readings for a same-named room and they give different answers, ask which \
 room they mean, with the readings as options (e.g. "Büro 0.11, 26 m²").
+- When you say the way, use the turns and things from the route's steps ("turn left into the corridor, the \
+kitchen is on the left after 30 m, by the coffee machine"), not room numbers alone: people see turns and \
+machines, not ids.
 - Keep replies short: what you found, where, and how far (e.g. "Coffee machine in Kitchen 2.04, 40 m"). \
 Show it with show_on_map (their position, the target, the route from find_route): the app draws the route \
 on the map, so don't write step-by-step lists unless asked.
