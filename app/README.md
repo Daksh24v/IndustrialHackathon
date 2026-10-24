@@ -37,7 +37,7 @@ node e2e/run.cjs       # screenshots in e2e/screenshots
 ## Code
 
 - `App.tsx`: the screen; `src/state.ts`: its state machine (outside → flying in → floor).
-- `src/components/BuildingBlocks.tsx`: the 3D outside view (three.js via react-three-fiber).
+- `src/components/BuildingBlocks.tsx`: the outside view: floors as white isometric blocks, drawn with SVG.
 - `src/components/FloorPlan.tsx`: the 2D floor, the orange blob, route and pin.
 - `src/components/ChatSheet.tsx`: messages, option chips, text field, microphone button (voice branch).
 - `src/api.ts`, `src/geometry.ts`, `src/theme.ts`: server client, drawing maths, colours.

@@ -88,3 +88,41 @@ export function centre(polygon: Point[]): Point {
   const b = boundsOf(polygon);
   return [(b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2];
 }
+
+/** Isometric drawing of plan coordinates (metres) at a height z: the "block" look of the outside view.
+ * The building is turned by `angle` (radians) about its centre before projecting. */
+export interface Iso {
+  angle: number;
+  centre: Point;
+}
+
+const COS30 = Math.cos(Math.PI / 6);
+const SIN30 = 0.5;
+
+export function isoProject(iso: Iso, [x, y]: Point, z: number): Point {
+  const dx = x - iso.centre[0];
+  const dy = y - iso.centre[1];
+  const rx = dx * Math.cos(iso.angle) - dy * Math.sin(iso.angle);
+  const ry = dx * Math.sin(iso.angle) + dy * Math.cos(iso.angle);
+  return [(rx - ry) * COS30, -(rx + ry) * SIN30 - z]; // screen: right, down
+}
+
+/** How far a wall is from the viewer (bigger = nearer, drawn later). */
+export function isoDepth(iso: Iso, [x, y]: Point): number {
+  const dx = x - iso.centre[0];
+  const dy = y - iso.centre[1];
+  const rx = dx * Math.cos(iso.angle) - dy * Math.sin(iso.angle);
+  const ry = dx * Math.sin(iso.angle) + dy * Math.cos(iso.angle);
+  return -(rx + ry);
+}
+
+/** Signed area (positive = counter-clockwise in plan coordinates). */
+export function signedArea(polygon: Point[]): number {
+  let total = 0;
+  for (let i = 0; i < polygon.length; i += 1) {
+    const [x1, y1] = polygon[i];
+    const [x2, y2] = polygon[(i + 1) % polygon.length];
+    total += x1 * y2 - x2 * y1;
+  }
+  return total / 2;
+}

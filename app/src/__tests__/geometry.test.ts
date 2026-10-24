@@ -41,3 +41,23 @@ describe('paths', () => {
     expect(grow(boundsOf([[1, 1], [2, 3]]), 1)).toEqual({ minX: 0, minY: 0, maxX: 3, maxY: 4 });
   });
 });
+
+describe('isometric view', () => {
+  const { isoProject, isoDepth, signedArea } = require('../geometry');
+  const iso = { angle: 0, centre: [0, 0] };
+
+  it('draws higher things higher up the screen and keeps the centre in place', () => {
+    expect(isoProject(iso, [0, 0], 0)).toEqual([0, -0]);
+    expect(isoProject(iso, [0, 0], 10)[1]).toBeLessThan(isoProject(iso, [0, 0], 0)[1]);
+  });
+
+  it('puts the near corner (-x, -y) lower on the screen and in front', () => {
+    expect(isoProject(iso, [-5, -5], 0)[1]).toBeGreaterThan(isoProject(iso, [5, 5], 0)[1]);
+    expect(isoDepth(iso, [-5, -5])).toBeGreaterThan(isoDepth(iso, [5, 5]));
+  });
+
+  it('knows the winding of a ring', () => {
+    expect(signedArea([[0, 0], [4, 0], [4, 2], [0, 2]])).toBe(8);
+    expect(signedArea([[0, 0], [0, 2], [4, 2], [4, 0]])).toBe(-8);
+  });
+});
