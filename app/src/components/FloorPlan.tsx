@@ -1,12 +1,14 @@
 /** One floor seen from straight above (the 2D view): white rooms, thin walls, labels that size with the zoom;
  * you as an orange disc with a spreading ring, the route as an orange line that draws itself in, the target as
  * a pin. Drag to move, pinch or +/− to zoom; the plan redraws itself sharp at every zoom. */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type ComponentRef, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Pressable, Text, View } from 'react-native';
 import Svg, { G, Path, Text as SvgText } from 'react-native-svg';
 
 import type { BuildingDetail, MapView, Point } from '../api';
-import { boundsOf, fit, grow, linePath, lineLength, moveTransform, polygonPath, toScreen, type Transform } from '../geometry';
+import {
+  boundsOf, fit, grow, linePath, lineLength, moveTransform, polygonPath, toScreen, toWorld, type Transform,
+} from '../geometry';
 import { useMapGestures } from '../gestures';
 import { colours, spaceFill } from '../theme';
 import { LABEL_FONT, styles } from './FloorScene';
@@ -23,9 +25,11 @@ interface Props {
   map: MapView | null;
   width: number;
   height: number;
+  /** A tap on the floor: where on it (metres), e.g. to say "I'm here". */
+  onTapFloor?: (floorId: string, point: Point) => void;
 }
 
-export function FloorPlan({ detail, floorId, map, width, height }: Props) {
+export function FloorPlan({ detail, floorId, map, width, height, onTapFloor }: Props) {
   const spaces = useMemo(() => detail.spaces.filter((space) => space.floor_id === floorId), [detail, floorId]);
   const pieces = useMemo(
     () => (map?.route?.pieces ?? []).filter((piece) => piece.floor_id === floorId),
@@ -46,8 +50,18 @@ export function FloorPlan({ detail, floorId, map, width, height }: Props) {
   }, [pieces, here, target, spaces, width, height]);
   const [transform, setTransform] = useState<Transform>(fitted);
   useEffect(() => setTransform(fitted), [fitted]);
+  const frame = useRef<ComponentRef<typeof View>>(null);
+  const shown = useRef(transform);
+  useLayoutEffect(() => {
+    shown.current = transform;
+  }, [transform]);
+  const tapped = onTapFloor
+    ? ([pageX, pageY]: [number, number]) =>
+        frame.current?.measureInWindow((left, top) =>
+          onTapFloor(floorId, toWorld(shown.current, [pageX - left, pageY - top])))
+    : undefined;
   const gestures = useMapGestures(width, height, ({ k, tx, ty }) =>
-    setTransform((current) => moveTransform(current, k, tx, ty, width, height)));
+    setTransform((current) => moveTransform(current, k, tx, ty, width, height)), tapped);
   const zoomBy = (k: number) => setTransform((current) => moveTransform(current, k, 0, 0, width, height));
 
   // The route draws itself in.
@@ -64,7 +78,7 @@ export function FloorPlan({ detail, floorId, map, width, height }: Props) {
   const targetPx = target ? toScreen(transform, target.position) : null;
 
   return (
-    <View style={[styles.frame, { width, height }]} testID="floor-plan">
+    <View ref={frame} style={[styles.frame, { width, height }]} testID="floor-plan">
       <Animated.View {...gestures.panHandlers} style={[{ width, height }, gestures.style]}>
         <Svg width={width + 2 * MARGIN_PX} height={height + 2 * MARGIN_PX} style={{ position: 'absolute', left: -MARGIN_PX, top: -MARGIN_PX }}>
           <G transform={`translate(${MARGIN_PX} ${MARGIN_PX})`}>

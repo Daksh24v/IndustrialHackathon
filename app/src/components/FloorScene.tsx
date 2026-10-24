@@ -2,7 +2,7 @@
  * stand up (low, so you can see into the rooms) with gaps at the doors, the route is an orange band on the
  * floor with arrows flowing along it, the target is a pin and you are an orange disc on the floor.
  * Drawn with SVG (no 3D engine: those crash Expo Go on iPhones). Drag to move, pinch or +/− to zoom, ⟳ to turn. */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type ComponentRef, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { G, Path, Text as SvgText } from 'react-native-svg';
 
@@ -33,6 +33,8 @@ interface Props {
   footprints: Point[][];
   width: number;
   height: number;
+  /** A tap on the floor: where on it (metres), e.g. to say "I'm here". */
+  onTapFloor?: (floorId: string, point: Point) => void;
 }
 
 const n = (value: number) => (Math.round(value * 10) / 10).toString();
@@ -46,7 +48,7 @@ function grey(level: number): string {
   return `#${v}${v}${v}`;
 }
 
-export function FloorScene({ detail, floorId, map, footprints, width, height }: Props) {
+export function FloorScene({ detail, floorId, map, footprints, width, height, onTapFloor }: Props) {
   const spaces = useMemo(() => detail.spaces.filter((space) => space.floor_id === floorId), [detail, floorId]);
   const openings = useMemo(() => detail.openings.filter((opening) => opening.floor_id === floorId), [detail, floorId]);
   const walls = useMemo(() => wallSegments(spaces.map((space) => space.polygon), openings), [spaces, openings]);
@@ -69,8 +71,18 @@ export function FloorScene({ detail, floorId, map, footprints, width, height }: 
   const [cam, setCam] = useState<Camera>(fitted);
   useEffect(() => setCam(fitted), [fitted]);
 
+  const frame = useRef<ComponentRef<typeof View>>(null);
+  const camera = useRef(cam);
+  useLayoutEffect(() => {
+    camera.current = cam;
+  }, [cam]);
+  const tapped = onTapFloor
+    ? ([pageX, pageY]: [number, number]) =>
+        frame.current?.measureInWindow((left, top) =>
+          onTapFloor(floorId, unproject3d(camera.current, [pageX - left, pageY - top])))
+    : undefined;
   const gestures = useMapGestures(width, height, ({ k, tx, ty }) =>
-    setCam((current) => moveCamera(current, k, tx, ty, width, height)));
+    setCam((current) => moveCamera(current, k, tx, ty, width, height)), tapped);
   const zoomBy = (k: number) => setCam((current) => moveCamera(current, k, 0, 0, width, height));
 
   // Turn a quarter about whatever is in the middle of the screen.
@@ -177,7 +189,7 @@ export function FloorScene({ detail, floorId, map, footprints, width, height }: 
   const flatten = Math.cos(TILT);
 
   return (
-    <Animated.View style={[styles.frame, { width, height, opacity: appear }]} testID="floor-scene">
+    <Animated.View ref={frame} style={[styles.frame, { width, height, opacity: appear }]} testID="floor-scene">
       <Animated.View {...gestures.panHandlers} style={[{ width, height }, gestures.style]}>
         <Svg width={width + 2 * MARGIN_PX} height={height + 2 * MARGIN_PX} style={{ position: 'absolute', left: -MARGIN_PX, top: -MARGIN_PX }}>
           <G transform={`translate(${MARGIN_PX} ${MARGIN_PX})`}>

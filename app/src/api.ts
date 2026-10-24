@@ -136,14 +136,38 @@ export const api = {
   /** One turn. spoken: said into the mic and read out, so Finni answers in one short sentence (and faster). */
   chat: (sessionId: string, text: string, fetcher?: typeof fetch, spoken = false) =>
     call<ChatReply>(`/sessions/${sessionId}/chat`, { method: 'POST', body: JSON.stringify({ text, spoken }) }, fetcher),
-  /** Where the person is (the AR camera will call this): from then on Finni doesn't ask. */
+  /** Where the person is, by a place's name (the AR camera can call this too): from then on Finni doesn't ask. */
   setPosition: (sessionId: string, space: string, fetcher?: typeof fetch) =>
-    call<{ space_id: string; label: string; floor_id: string }>(
+    call<Position>(`/sessions/${sessionId}/position`, { method: 'POST', body: JSON.stringify({ space }) }, fetcher),
+  /** Where the person is, by a point on a floor: a tap on the map ("I'm here"). */
+  setPositionAt: (sessionId: string, floorId: string, [x, y]: Point, fetcher?: typeof fetch) =>
+    call<Position>(
       `/sessions/${sessionId}/position`,
-      { method: 'POST', body: JSON.stringify({ space }) },
+      { method: 'POST', body: JSON.stringify({ floor: floorId, x, y }) },
       fetcher,
     ),
 };
+
+/** Where the person is, as the server took it; on a route, how far along they are. */
+export interface Position {
+  space_id: string;
+  floor_id: string;
+  label: string;
+  point: Point | null;
+  source: string;
+  floor: string;
+  on_route?: boolean;
+  route_to?: string;
+  arrived?: boolean;
+  next?: string | null;
+}
+
+/** The map's "you are here" for a position: the exact point when known, else the room's centre. */
+export function placeOf(position: Position, detail: { spaces: { id: string; anchor: Point }[] }): Place {
+  const anchor = detail.spaces.find((space) => space.id === position.space_id)?.anchor ?? [0, 0];
+  return { label: position.label, floor_id: position.floor_id, position: position.point ?? anchor,
+           space_id: position.space_id };
+}
 
 /** The building to open: EXPO_PUBLIC_BUILDING if set, else the first factory, else the first building. */
 export function pickBuilding(ids: string[], preferred = process.env.EXPO_PUBLIC_BUILDING): string | undefined {

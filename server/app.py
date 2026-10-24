@@ -9,7 +9,8 @@ Endpoints
 - POST /buildings/{id}/route              a route without the agent: length + lines per floor
 - POST /sessions                          start a conversation with the agent about one building
 - POST /sessions/{id}/chat                one turn: {reply, question, map}
-- POST /sessions/{id}/position             where the person is (from the phone's AR, later)
+- POST /sessions/{id}/position            where the person is: a place, or a tapped point on a floor
+- GET/DELETE /sessions/{id}/position      where they are, were and the route they follow / forget it
 - DELETE /sessions/{id}                   end it
 - POST /imports                           set up a new building from floor plans: a builder conversation
 - POST /imports/{session_id}/save         save it (the agent can also save when the person confirms)
@@ -37,6 +38,7 @@ from navagent.builder import Draft
 from navagent.tools import Session
 from navcore.engine import Building, EngineError
 from navcore.plans import PlanError
+from navcore.resolve import AmbiguousSpace, NoSuchSpace
 from voice import app as voice_service
 
 DATA = Path(__file__).resolve().parent.parent / "data"
@@ -251,18 +253,44 @@ def save_import(session_id: str, request: SaveRequest) -> dict:
 
 
 class PositionRequest(BaseModel):
-    space: str = Field(min_length=1, description="where the person is: a space id or 'Name (Floor name)'")
+    space: str | None = Field(None, min_length=1, description="a room ('Name (Floor name)', a name, a number, "
+                                                             "an id), a thing next to them, or an entrance id")
+    floor: str | None = Field(None, description="with x and y: the floor of a point (a tap on the map, AR later)")
+    x: float | None = None
+    y: float | None = None
 
 
 @app.post("/sessions/{session_id}/position")
 def set_position(session_id: str, request: PositionRequest) -> dict:
-    """Where the person is, as the phone worked it out (the AR camera, later). From then on the agent uses it
-    instead of asking, and the map shows it as 'you are here'."""
+    """Where the person is: a place, or a point on a floor (tap on the map; the AR camera later). From then on
+    the agent uses it instead of asking, routes start there, and the map shows it as 'you are here'. If they
+    are following a route, the answer says how far along they are. A name shared by several rooms answers 422
+    with `candidates` to pick from."""
     agent = agent_for(session_id)
     try:
-        return agent.session.set_position(request.space)
+        return agent.session.set_position(request.space, request.floor, request.x, request.y, source="phone")
+    except AmbiguousSpace as error:
+        building = agent.session.building
+        raise HTTPException(422, {"message": str(error), "candidates": [
+            {"space_id": space_id, "label": building.label(space_id)} for space_id in error.candidates]}) from error
+    except NoSuchSpace as error:
+        building = agent.session.building
+        raise HTTPException(422, {"message": str(error), "candidates": [
+            {"space_id": space_id, "label": building.label(space_id)} for space_id in error.suggestions]}) from error
     except EngineError as error:
-        raise HTTPException(422, str(error)) from error
+        raise HTTPException(422, {"message": str(error), "candidates": []}) from error
+
+
+@app.get("/sessions/{session_id}/position")
+def get_position(session_id: str) -> dict:
+    """Where the person is now, where they were, and the route they are following."""
+    return agent_for(session_id).session.position_state()
+
+
+@app.delete("/sessions/{session_id}/position")
+def clear_position(session_id: str) -> dict:
+    """Forget the position (e.g. the person put the phone away and walked off)."""
+    return agent_for(session_id).session.clear_position()
 
 
 @app.delete("/sessions/{session_id}")

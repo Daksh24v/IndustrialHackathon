@@ -11,9 +11,12 @@ pin on the target and an orange disc with a spreading ring where you are. Drag t
 ⟳ to turn; the 2D/3D switch shows the flat plan instead. Routes over several floors show "Take Lift 1 to
 Floor 2".
 
-Where you are: for now Finni asks. The AR camera (later) will tell the server with
-`api.setPosition(sessionId, room)` (`POST /sessions/{id}/position`); from then on Finni doesn't ask and the map
-shows it. No GPS: indoors it's 5-50 m off and doesn't know floors.
+Where you are: **tap the floor ("I'm here")** and the dot moves there (`api.setPositionAt(sessionId, floorId,
+[x, y])`, `POST /sessions/{id}/position` with `{floor, x, y}`). Or just say it ("I'm at the lift", "next to the
+CNC mill"). From then on Finni doesn't ask, starts routes there, remembers where you were ("take me back") and
+follows your progress along the route. When it doesn't know, it asks once by landmarks you can see. The AR
+camera (later) sends points the same way, or a place with `api.setPosition(sessionId, room)`. No GPS: indoors
+it's 5-50 m off and doesn't know floors.
 
 The 3D view is drawn with SVG (a projected camera in `src/geometry.ts`), not a 3D engine: three.js and
 react-three-fiber crash Expo Go on iPhones.

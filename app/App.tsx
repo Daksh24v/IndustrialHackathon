@@ -3,7 +3,7 @@ import { Component, type ReactNode, useCallback, useEffect, useReducer, useRef, 
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { api, ApiError, pickBuilding } from './src/api';
+import { api, ApiError, pickBuilding, placeOf, type Point } from './src/api';
 import { BuildingBlocks } from './src/components/BuildingBlocks';
 import { ChatCard } from './src/components/ChatCard';
 import { FinniLogo } from './src/components/FinniLogo';
@@ -91,6 +91,20 @@ function Guide() {
   );
   sendRef.current = send;
 
+  // Tap the map: "I'm here". The dot moves, and Finni starts routes there without asking.
+  const tapHere = useCallback(
+    async (floorId: string, point: Point) => {
+      if (!state.sessionId || !state.detail) return;
+      try {
+        const position = await api.setPositionAt(state.sessionId, floorId, point);
+        dispatch({ type: 'here', place: placeOf(position, state.detail) });
+      } catch (error) {
+        dispatch({ type: 'error', message: (error as Error).message });
+      }
+    },
+    [state.sessionId, state.detail],
+  );
+
   const floors = [...(state.detail?.floors ?? [])].sort((a, b) => a.level - b.level);
   const floorName = floors.find((floor) => floor.id === state.floorId)?.name;
   const footprints = state.outline?.floors.find((floor) => floor.id === state.floorId)?.footprints ?? [];
@@ -129,9 +143,10 @@ function Guide() {
         {state.detail && state.floorId && inside && size.width > 0 ? (
           threeD ? (
             <FloorScene detail={state.detail} floorId={state.floorId} map={state.map} footprints={footprints}
-                        width={size.width} height={size.height} />
+                        width={size.width} height={size.height} onTapFloor={tapHere} />
           ) : (
-            <FloorPlan detail={state.detail} floorId={state.floorId} map={state.map} width={size.width} height={size.height} />
+            <FloorPlan detail={state.detail} floorId={state.floorId} map={state.map} width={size.width} height={size.height}
+                       onTapFloor={tapHere} />
           )
         ) : null}
 

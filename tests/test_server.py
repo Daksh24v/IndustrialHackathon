@@ -163,11 +163,31 @@ def test_position_from_the_phone_is_used_without_asking(http):
     assert placed["label"] == "Quality lab 0.21 (Ground floor)"
     body = http.post(f"/sessions/{session}/chat", json={"text": "Where is office 1.04?"}).json()
     sent = fake.requests[0]["messages"][-1]["content"]
-    assert sent.startswith("[Position from the phone: the person is in Quality lab 0.21 (Ground floor)]")
+    assert sent.startswith("[Position: the person is in Quality lab 0.21 (Ground floor) "
+                           "(id proc-factory-dev-003-F0-S021), from the phone.]")
     assert sent.endswith("Where is office 1.04?")
     assert body["map"]["you_are_here"]["label"] == "Quality lab 0.21 (Ground floor)"  # the map shows it too
     assert http.post(f"/sessions/{session}/position", json={"space": "Nowhere 9.99"}).status_code == 422
     assert http.post("/sessions/nope/position", json={"space": "0.21"}).status_code == 404
+
+
+def test_tapped_point_history_and_forgetting(http):
+    session = http.post("/sessions", json={"building_id": BUILDING}).json()["session_id"]
+    detail = http.get(f"/buildings/{BUILDING}").json()
+    lab = next(space for space in detail["spaces"] if space["name"] == "Quality lab 0.21")
+    x, y = lab["anchor"]
+    tapped = http.post(f"/sessions/{session}/position", json={"floor": "Ground floor", "x": x, "y": y}).json()
+    assert tapped["space_id"] == lab["id"] and tapped["point"] == [x, y]
+    http.post(f"/sessions/{session}/position", json={"space": "the locker room"})  # a forgiving name
+    state = http.get(f"/sessions/{session}/position").json()
+    assert state["position"]["label"] == "Locker room 0.39 (Ground floor)"
+    assert state["history"][0]["label"] == "Quality lab 0.21 (Ground floor)"
+    far = http.post(f"/sessions/{session}/position", json={"floor": "Ground floor", "x": 1e6, "y": 1e6})
+    assert far.status_code == 422
+    typo = http.post(f"/sessions/{session}/position", json={"space": "Qualty lab 0.21"})
+    assert typo.status_code == 422 and typo.json()["detail"]["candidates"][0]["space_id"] == lab["id"]
+    assert http.delete(f"/sessions/{session}/position").json() == {"position": None}
+    assert http.get(f"/sessions/{session}/position").json()["position"] is None
 
 
 def test_voice_is_served_by_the_backend(http):

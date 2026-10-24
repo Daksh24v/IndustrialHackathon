@@ -1,5 +1,5 @@
 /** The screen's state machine: the building from outside → (the agent shows something) fly in → one floor. */
-import type { BuildingDetail, ChatReply, MapView, Outline, Question, RoutePiece } from './api';
+import type { BuildingDetail, ChatReply, MapView, Outline, Place, Question, RoutePiece } from './api';
 import type { Message } from './components/ChatCard';
 
 export type View = 'loading' | 'outside' | 'flying' | 'floor';
@@ -24,6 +24,7 @@ export type Event =
   | { type: 'arrived' }
   | { type: 'floor'; floorId: string }
   | { type: 'back' }
+  | { type: 'here'; place: Place }
   | { type: 'error'; message: string };
 
 export const initial: State = {
@@ -52,6 +53,11 @@ export function reduce(state: State, event: Event): State {
       return { ...state, floorId: event.floorId, view: state.view === 'outside' ? 'flying' : 'floor' };
     case 'back':
       return { ...state, view: 'outside', floorId: null };
+    case 'here': {
+      // "I'm here" from a tap: the dot moves at once; the route and the target stay as they are.
+      const base: MapView = state.map ?? { you_are_here: null, target: null, route: null, focus_floor_id: null };
+      return { ...state, error: null, map: { ...base, you_are_here: event.place } };
+    }
     case 'error':
       return { ...state, busy: false, error: event.message };
   }

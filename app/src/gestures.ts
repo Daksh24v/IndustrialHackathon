@@ -1,5 +1,6 @@
 /** Drag with one finger, pinch with two: the drawing follows the fingers (a cheap transform), and when they
- * let go the scene redraws itself sharp at the new place and size (onCommit). */
+ * let go the scene redraws itself sharp at the new place and size (onCommit). A tap that doesn't move calls
+ * onTap with the finger's position on the page ("I'm here"). */
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Animated, PanResponder } from 'react-native';
 
@@ -11,12 +12,22 @@ export interface Move {
 
 const MIN_ZOOM = 0.4;
 const MAX_ZOOM = 6;
+const TAP_SLOP_PX = 6;
 
-export function useMapGestures(width: number, height: number, onCommit: (move: Move) => void) {
+export function useMapGestures(
+  width: number,
+  height: number,
+  onCommit: (move: Move) => void,
+  onTap?: (page: [number, number]) => void,
+) {
   const translate = useRef(new Animated.ValueXY()).current;
   const zoom = useRef(new Animated.Value(1)).current;
   const commit = useRef(onCommit);
   commit.current = onCommit;
+  const tap = useRef(onTap);
+  useLayoutEffect(() => {
+    tap.current = onTap;
+  }, [onTap]);
   const size = useRef({ width, height });
   size.current = { width, height };
   const [settled, setSettled] = useState(0);
@@ -25,6 +36,7 @@ export function useMapGestures(width: number, height: number, onCommit: (move: M
     const move = { k: 1, tx: 0, ty: 0 };
     let last: { x: number; y: number } | null = null;
     let pinch: { d: number; mx: number; my: number; k: number; tx: number; ty: number } | null = null;
+    let pressed: { x: number; y: number; moved: boolean } | null = null;
     const finish = () => {
       if (move.k !== 1 || move.tx !== 0 || move.ty !== 0) {
         commit.current({ ...move });
@@ -37,10 +49,15 @@ export function useMapGestures(width: number, height: number, onCommit: (move: M
       pinch = null;
     };
     return PanResponder.create({
+      onStartShouldSetPanResponder: () => tap.current !== undefined,
       onMoveShouldSetPanResponder: (event, g) =>
         event.nativeEvent.touches.length > 1 || Math.abs(g.dx) + Math.abs(g.dy) > 4,
-      onPanResponderMove: (event) => {
+      onPanResponderGrant: (event) => {
+        pressed = { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY, moved: false };
+      },
+      onPanResponderMove: (event, g) => {
         const touches = event.nativeEvent.touches;
+        if (pressed && (touches.length > 1 || Math.abs(g.dx) + Math.abs(g.dy) > TAP_SLOP_PX)) pressed.moved = true;
         const cx = size.current.width / 2;
         const cy = size.current.height / 2;
         if (touches.length >= 2) {
@@ -66,8 +83,15 @@ export function useMapGestures(width: number, height: number, onCommit: (move: M
         translate.setValue({ x: move.tx, y: move.ty });
         zoom.setValue(move.k);
       },
-      onPanResponderRelease: finish,
-      onPanResponderTerminate: finish,
+      onPanResponderRelease: () => {
+        if (pressed && !pressed.moved) tap.current?.([pressed.x, pressed.y]);
+        pressed = null;
+        finish();
+      },
+      onPanResponderTerminate: () => {
+        pressed = null;
+        finish();
+      },
     });
   }, [translate, zoom]);
 
