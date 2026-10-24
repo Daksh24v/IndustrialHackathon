@@ -268,4 +268,39 @@ def test_router_mounts_in_another_app():
     host = FastAPI()
     host.include_router(voice_app.router)
     paths = set(host.openapi()["paths"])
-    assert {"/voice/sessions", "/voice/sessions/{session_id}/turn", "/voice/sessions/{session_id}/say"} <= paths
+    assert {"/voice/sessions", "/voice/sessions/{session_id}/turn", "/voice/sessions/{session_id}/say",
+            "/voice/speak", "/voice/transcribe"} <= paths
+
+
+# ---------- building blocks for the app: speak anything, transcribe only ----------
+
+def test_speak_says_app_text_without_the_agent(talk):
+    talk.script()  # the agent must not be called
+    answer = talk.post("/voice/speak", json={"text": "**Turn left** at Office 1.04, then 12.4 m straight on"}).json()
+    assert answer["spoken"] == "Turn left at Office one zero four, then 12 metres straight on."
+    assert base64.b64decode(answer["audio_base64"]) == b"MP3" and answer["playback_rate"] == voice_app.PLAYBACK_RATE
+    raw = talk.post("/voice/speak", json={"text": "Office 1.04", "clean": False}).json()
+    assert raw["spoken"] == "Office 1.04"
+    assert talk.post("/voice/speak", json={"text": ""}).status_code == 422
+    assert talk.post("/voice/speak", json={}).status_code == 422
+    asked = {"reply": "", "question": {"question": "Which floor are you on?", "options": FLOORS}, "map": None}
+    assert talk.post("/voice/speak", json={"answer": asked}).json()["spoken"] == \
+        "Which floor are you on? Ground floor, or Floor 1?"
+    assert talk.post("/voice/speak", json={"text": "x" * 1001}).status_code == 422
+
+
+def test_transcribe_only_returns_the_words_with_building_names(talk):
+    talk.script()  # the agent must not be called
+    talk.fake_voice.heard = ["Where is Quality lab 0.21?", "hello", ""]
+    by_building = talk.post(f"/voice/transcribe?building_id={BUILDING}", content=b"M4A",
+                            headers={"content-type": "audio/m4a"}).json()
+    assert by_building == {"heard": "Where is Quality lab 0.21?"}
+    audio, content_type, terms = talk.fake_voice.recordings[0]
+    assert audio == b"M4A" and content_type == "audio/m4a" and "Quality lab 0.21" in terms
+    session = talk.post("/voice/sessions", json={"building_id": BUILDING}).json()["session_id"]
+    talk.post(f"/voice/transcribe?session_id={session}", content=b"A")
+    assert "Quality lab 0.21" in talk.fake_voice.recordings[1][2]
+    assert talk.post("/voice/transcribe", content=b"B").json() == {"heard": ""}
+    assert talk.fake_voice.recordings[2][2] == []  # no building given: no names
+    assert talk.post("/voice/transcribe", content=b"").status_code == 422
+    assert talk.post("/voice/transcribe?building_id=nope", content=b"C").status_code == 404

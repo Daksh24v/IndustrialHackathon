@@ -9,6 +9,10 @@ Endpoints (all under /voice, so `router` can also be mounted in the backend app;
 - POST /voice/sessions/{id}/turn       one turn from speech: the raw recording as the body (webm, mp4, wav...)
 - POST /voice/sessions/{id}/say        one turn from text: {"text": "..."} (typed, or a tapped option)
 - DELETE /voice/sessions/{id}          end it
+- POST /voice/speak                    say it, no agent: {"text": "Turn left now."} (AR guidance, alerts) or
+                                       {"answer": <a /chat answer>} (short, with the question and its options)
+- POST /voice/transcribe               a recording to text only, no agent; ?building_id= or ?session_id= helps
+                                       it hear the building's names
 
 Every turn answers {heard, sent, reply, question, map, spoken, audio_base64, audio_error, playback_rate}:
 `heard` is what the person said, `sent` what went to the agent (an option label when they clearly picked one),
@@ -26,18 +30,20 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from voice.elevenlabs import ElevenLabs, VoiceError
-from voice.speech import DIDNT_GET_IT, keyterms, match_option, spoken_text
+from voice.speech import DIDNT_GET_IT, keyterms, match_option, speakable, spoken_text
 
 BACKEND = os.environ.get("NAV_BACKEND_URL", "http://localhost:8000")
 # v4 Turbo ignores ElevenLabs' speed setting, so players speed up instead (pitch kept): a touch faster
 PLAYBACK_RATE = float(os.environ.get("VOICE_PLAYBACK_RATE") or 1.08)
 MAX_AUDIO_BYTES = 10_000_000
+MAX_SPEAK_CHARS = 1000  # one spoken line, not a book: protects the credits
 PAGE = Path(__file__).resolve().parent / "web" / "index.html"
 
 router = APIRouter(prefix="/voice", tags=["voice"])
 
 _last_question: dict[str, dict | None] = {}  # per session: the options the person is answering
-_keyterms: dict[str, list[str]] = {}         # per session: names in the building, to help speech to text
+_session_building: dict[str, str] = {}       # per session: its building
+_keyterms: dict[str, list[str]] = {}         # per building: names worth listening for in speech to text
 _backend: httpx.Client | None = None
 _voice: ElevenLabs | None = None
 
@@ -81,25 +87,26 @@ class SayRequest(BaseModel):
     audio: bool = Field(True, description="false: only the words, no ElevenLabs call (free)")
 
 
+class SpeakRequest(BaseModel):
+    text: str | None = Field(None, min_length=1, max_length=MAX_SPEAK_CHARS,
+                             description="what to say, e.g. 'Turn left now.'")
+    answer: dict | None = Field(None, description="a /chat answer {reply, question, map} to read out")
+    clean: bool = Field(True, description="for text: read room numbers and units naturally, drop markdown")
+
+
 @router.post("/sessions")
 def start_session(request: SessionRequest) -> dict:
     session = call_backend("POST", "/sessions", json={"building_id": request.building_id})
     _last_question[session["session_id"]] = None
-    _keyterms[session["session_id"]] = keyterms(call_backend("GET", f"/buildings/{request.building_id}"))
+    _session_building[session["session_id"]] = request.building_id
+    building_terms(request.building_id)
     return session
 
 
 @router.post("/sessions/{session_id}/turn")
 async def turn_from_speech(session_id: str, request: Request) -> dict:
     """The body is the recording itself, with its Content-Type (what the browser or phone recorded)."""
-    audio = await request.body()
-    if not audio or len(audio) > MAX_AUDIO_BYTES:
-        raise HTTPException(422, "Send the recording (up to 10 MB) as the request body.")
-    content_type = request.headers.get("content-type", "audio/webm").split(";")[0]
-    try:
-        heard = voice().transcribe(audio, content_type, _keyterms.get(session_id, []))
-    except VoiceError as error:
-        raise HTTPException(502, str(error)) from error
+    heard = await transcribe_body(request, _session_building.get(session_id))
     if not heard:
         return nothing_heard()
     return turn(session_id, heard)
@@ -113,8 +120,43 @@ def say(session_id: str, request: SayRequest) -> dict:
 @router.delete("/sessions/{session_id}")
 def end_session(session_id: str) -> dict:
     _last_question.pop(session_id, None)
-    _keyterms.pop(session_id, None)
+    _session_building.pop(session_id, None)
     return call_backend("DELETE", f"/sessions/{session_id}")
+
+
+@router.post("/speak")
+def speak_text(request: SpeakRequest) -> dict:
+    """Say anything the app decides itself (an AR step, an alert), or a /chat answer it got, without the agent."""
+    if request.answer is not None:
+        return speak(spoken_text(request.answer)[:MAX_SPEAK_CHARS])
+    if request.text is None:
+        raise HTTPException(422, "Send `text` or `answer`.")
+    return speak(speakable(request.text) if request.clean else request.text)
+
+
+@router.post("/transcribe")
+async def transcribe(request: Request, building_id: str | None = None, session_id: str | None = None) -> dict:
+    """What was said, as text, for an app that sends it to /chat itself. Pass the building (or a voice
+    session) so names like "Quality lab 0.21" are heard right."""
+    return {"heard": await transcribe_body(request, building_id or _session_building.get(session_id or ""))}
+
+
+async def transcribe_body(request: Request, building_id: str | None) -> str:
+    audio = await request.body()
+    if not audio or len(audio) > MAX_AUDIO_BYTES:
+        raise HTTPException(422, "Send the recording (up to 10 MB) as the request body.")
+    content_type = request.headers.get("content-type", "audio/webm").split(";")[0]
+    terms = building_terms(building_id) if building_id else []
+    try:
+        return voice().transcribe(audio, content_type, terms)
+    except VoiceError as error:
+        raise HTTPException(502, str(error)) from error
+
+
+def building_terms(building_id: str) -> list[str]:
+    if building_id not in _keyterms:
+        _keyterms[building_id] = keyterms(call_backend("GET", f"/buildings/{building_id}"))
+    return _keyterms[building_id]
 
 
 def turn(session_id: str, heard: str, with_audio: bool = True) -> dict:

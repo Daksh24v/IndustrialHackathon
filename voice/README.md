@@ -21,14 +21,26 @@ uv run --env-file .env uvicorn voice.app:app --port 8001    # voice
 
 ## API (for the app)
 
+Two ways to use it; pick per feature.
+
+**A. Building blocks: the app keeps its own chat flow (`api.chat`) and adds voice around it.**
+
+| Endpoint | Body | Answer |
+|---|---|---|
+| `POST /voice/transcribe?building_id=...` | the recording itself, with its `Content-Type` (`audio/m4a`, `audio/webm`, `audio/mp4`, `audio/wav`) | `{"heard": "..."}` (empty when nothing was said). `building_id` (or `session_id` of a voice session) makes it hear the building's names. |
+| `POST /voice/speak` | `{"answer": <the /chat answer>}` | `{spoken, audio_base64, audio_error, playback_rate}`: the reply, short, plus the question and its options |
+| `POST /voice/speak` | `{"text": "Turn left at Office 1.04."}` (max 1000 characters; `"clean": false` to say it exactly as written) | same; for anything the app decides itself: AR steps, alerts, "One moment…" |
+
+**B. One call per turn: voice talks to the agent for you.**
+
 | Endpoint | Body | |
 |---|---|---|
 | `POST /voice/sessions` | `{"building_id": "..."}` | same answer as `POST /sessions` |
-| `POST /voice/sessions/{id}/turn` | the recording itself, with its `Content-Type` (`audio/webm`, `audio/mp4`, `audio/m4a`, `audio/wav`) | one spoken turn |
+| `POST /voice/sessions/{id}/turn` | the recording itself, with its `Content-Type` | one spoken turn |
 | `POST /voice/sessions/{id}/say` | `{"text": "...", "audio": true}` | one typed turn, or a tapped option |
 | `DELETE /voice/sessions/{id}` | | end it |
 
-Every turn answers the backend's `/chat` fields plus:
+Every B turn answers the backend's `/chat` fields plus:
 
 | Field | |
 |---|---|
@@ -41,8 +53,30 @@ Every turn answers the backend's `/chat` fields plus:
 
 When nothing was heard, the turn says "Sorry, I didn't catch that…" without calling the agent.
 
-In Expo: record with `expo-audio` (m4a), `fetch(url, {method: "POST", headers: {"content-type": "audio/m4a"},
-body: file})`, then play `audio_base64` with the rate set and pitch correction on.
+## Wiring it into the Expo app (`app/`)
+
+`ChatSheet` already has an `onMic` prop for this. With way A, `App.tsx` stays in charge of the conversation:
+
+```ts
+// 1. microphone -> words -> the normal send()
+const recording = await record();                       // expo-audio, m4a
+const { heard } = await voiceApi.transcribe(recording, buildingId);
+if (heard) send(heard);                                 // the existing path: api.chat + map + chips
+
+// 2. after each api.chat reply, say it
+const { audio_base64, playback_rate } = await voiceApi.speak({ answer: reply });
+play(audio_base64, playback_rate);                      // expo-audio player, rate set, pitch correction on
+
+// 3. later, AR guidance (or anything else) just speaks text
+await voiceApi.speak({ text: 'Turn left at the press, then 10 m straight on.' });
+```
+
+- Record with `expo-audio` (not in `app/package.json` yet), and send the file as the body:
+  `fetch(url, {method: "POST", headers: {"content-type": "audio/m4a"}, body})`.
+- Tapped option chips are text: send them with `send(label)` as today. Spoken picks ("first floor") are
+  matched to the option by way B only; with way A the agent reads the person's words, which works too.
+- Where voice lives: either mount `voice.app.router` in the backend (one URL, `EXPO_PUBLIC_API_URL`; see
+  below) or run it on port 8001 and give the app `EXPO_PUBLIC_VOICE_URL`.
 
 ## Settings (`.env`, all optional)
 

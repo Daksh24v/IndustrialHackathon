@@ -74,6 +74,11 @@ def options_phrase(labels: list[str]) -> str:
     return ", ".join(labels[:-1]) + f", or {labels[-1]}?"
 
 
+def speakable(text: str) -> str:
+    """Any text the app wants said (no shortening): markdown out, room numbers and units as words."""
+    return say_numbers(plain(text))
+
+
 def spoken_text(answer: dict) -> str:
     """One /chat answer {reply, question, map} as the words to speak."""
     parts = []
