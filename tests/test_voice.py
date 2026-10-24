@@ -27,17 +27,21 @@ def test_question_is_read_with_its_options():
     assert spoken_text(answer) == "Which floor are you on? Ground floor, or Floor 1?"
 
 
-def test_three_options_and_reply_before_question():
+def test_with_a_question_only_the_question_is_spoken():
     options = [{"label": "Ground floor"}, {"label": "Floor 1"}, {"label": "Floor 2"}]
-    answer = {"reply": "There are two printers.", "question": {"question": "Which one?", "options": options}}
-    assert spoken_text(answer) == "There are two printers. Which one? Ground floor, Floor 1, or Floor 2?"
+    answer = {"reply": "There are 7 coffee machines. To find the closest, I need to know where you are.",
+              "question": {"question": "Which floor are you on?", "options": options}}
+    assert spoken_text(answer) == "Which floor are you on? Ground floor, Floor 1, or Floor 2?"
 
 
 def test_route_answer_points_to_the_map_once():
     answer = {"reply": "Office 1.04 is upstairs, about 143.27 m.", "question": None, "map": ROUTE_MAP}
     assert spoken_text(answer) == "Office one zero four is upstairs, about 143 metres. It's on your map."
-    already = {"reply": "I put it on your map.", "question": None, "map": ROUTE_MAP}
-    assert spoken_text(already) == "I put it on your map."
+    pin = {"reply": "It's in **Quality lab 0.21 on the Ground floor**, and I've put a pin on it on your map.",
+           "question": None, "map": ROUTE_MAP}
+    assert spoken_text(pin) == "It's in Quality lab zero two one on the Ground floor. It's on your map."
+    only_map = {"reply": "Sure! I put it on your map.", "question": None, "map": ROUTE_MAP}
+    assert spoken_text(only_map) == "It's on your map."
     assert spoken_text({"reply": "Closed.", "question": None, "map": None}) == "Closed."
 
 
@@ -48,6 +52,16 @@ def test_nothing_to_say():
 def test_markdown_and_step_lists_become_two_sentences():
     reply = "**Coffee machine** in Kitchen 2.04.\n\n1. Leave the lab\n2. Turn left\n3. Take the stairs"
     assert short(reply) == "Coffee machine in Kitchen 2.04. Leave the lab."
+
+
+def test_short_drops_filler_and_stops_at_the_word_cap():
+    assert short("Got it, the Office lift is now closed.") == "The Office lift is now closed."
+    long_first = "Word " * 40 + "end."
+    assert short(long_first + " Second sentence.") == long_first.strip()  # the first sentence always stays
+    assert short("Sure.") == "Sure." and short("Okay! I've put it on your map.") == ""
+    assert short("Yes, you can get there without any steps from the quality lab to the office on floor one. "
+                 "It's a 145 m walk that uses the Office lift instead of the stairs, and the route is on your "
+                 "map. If you tell me more I can help.").endswith("instead of the stairs.")
 
 
 @pytest.mark.parametrize("text, said", [
@@ -304,3 +318,15 @@ def test_transcribe_only_returns_the_words_with_building_names(talk):
     assert talk.fake_voice.recordings[2][2] == []  # no building given: no names
     assert talk.post("/voice/transcribe", content=b"").status_code == 422
     assert talk.post("/voice/transcribe?building_id=nope", content=b"C").status_code == 404
+
+
+def test_agent_is_asked_to_be_brief_but_sent_stays_clean(talk, monkeypatch):
+    fake = talk.script(([], "Kitchen 2.04, 40 m."), ([], "Done."))
+    session = talk.post("/voice/sessions", json={"building_id": BUILDING}).json()["session_id"]
+    answer = talk.post(f"/voice/sessions/{session}/say", json={"text": "coffee?"}).json()
+    asked = fake.requests[0]["messages"][-1]["content"]
+    assert "coffee?" in str(asked) and "one short sentence" in str(asked)
+    assert answer["sent"] == "coffee?" and set(answer["timings_ms"]) == {"agent", "speak"}
+    monkeypatch.setattr(voice_app, "BRIEF", False)
+    talk.post(f"/voice/sessions/{session}/say", json={"text": "close the lift"})
+    assert "one short sentence" not in str(fake.requests[1]["messages"][-1]["content"])

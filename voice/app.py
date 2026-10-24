@@ -16,11 +16,13 @@ Endpoints (all under /voice, so `router` can also be mounted in the backend app;
 
 Every turn answers {heard, sent, reply, question, map, spoken, audio_base64, audio_error, playback_rate}:
 `heard` is what the person said, `sent` what went to the agent (an option label when they clearly picked one),
-`spoken` the words in `audio_base64` (MP3), to be played at `playback_rate`.
+`spoken` the words in `audio_base64` (MP3), to be played at `playback_rate`; `timings_ms` says where the time
+went (transcribe, agent, speak).
 """
 
 import base64
 import os
+import time
 from pathlib import Path
 
 import httpx
@@ -33,8 +35,13 @@ from voice.elevenlabs import ElevenLabs, VoiceError
 from voice.speech import DIDNT_GET_IT, keyterms, match_option, speakable, spoken_text
 
 BACKEND = os.environ.get("NAV_BACKEND_URL", "http://localhost:8000")
-# v4 Turbo ignores ElevenLabs' speed setting, so players speed up instead (pitch kept): a touch faster
-PLAYBACK_RATE = float(os.environ.get("VOICE_PLAYBACK_RATE") or 1.08)
+# v4 Turbo ignores ElevenLabs' speed setting, so players speed up instead (pitch kept)
+PLAYBACK_RATE = float(os.environ.get("VOICE_PLAYBACK_RATE") or 1.15)
+# Added to what the person said, so the agent answers for the ear (shorter is also faster). Remove once the
+# backend has a voice mode for sessions; VOICE_BRIEF=0 turns it off.
+VOICE_HINT = ("\n\n[Spoken conversation: answer in one short sentence with the key fact (where, which floor, "
+              "how far); no lists, no offers; the map shows the details.]")
+BRIEF = os.environ.get("VOICE_BRIEF", "1") != "0"
 MAX_AUDIO_BYTES = 10_000_000
 MAX_SPEAK_CHARS = 1000  # one spoken line, not a book: protects the credits
 PAGE = Path(__file__).resolve().parent / "web" / "index.html"
@@ -106,10 +113,14 @@ def start_session(request: SessionRequest) -> dict:
 @router.post("/sessions/{session_id}/turn")
 async def turn_from_speech(session_id: str, request: Request) -> dict:
     """The body is the recording itself, with its Content-Type (what the browser or phone recorded)."""
+    started = time.perf_counter()
     heard = await transcribe_body(request, _session_building.get(session_id))
+    transcribed = {"transcribe": since(started)}
     if not heard:
-        return nothing_heard()
-    return turn(session_id, heard)
+        return nothing_heard(transcribed)
+    answer = turn(session_id, heard)
+    answer["timings_ms"] = transcribed | answer["timings_ms"]
+    return answer
 
 
 @router.post("/sessions/{session_id}/say")
@@ -163,24 +174,36 @@ def turn(session_id: str, heard: str, with_audio: bool = True) -> dict:
     """What the person said -> the agent -> what we say back."""
     question = _last_question.get(session_id)
     sent = match_option(heard, question["options"]) if question else heard
-    answer = call_backend("POST", f"/sessions/{session_id}/chat", json={"text": sent})
+    started = time.perf_counter()
+    answer = call_backend("POST", f"/sessions/{session_id}/chat", json={"text": sent + (VOICE_HINT if BRIEF else "")})
+    asked = since(started)
     _last_question[session_id] = answer.get("question")
-    return {"heard": heard, "sent": sent, **answer, **speak(spoken_text(answer), with_audio)}
+    spoken = speak(spoken_text(answer), with_audio)
+    spoken["timings_ms"] = {"agent": asked} | spoken["timings_ms"]
+    return {"heard": heard, "sent": sent, **answer, **spoken}
 
 
-def nothing_heard() -> dict:
+def nothing_heard(timings_ms: dict) -> dict:
     """Silence or noise: ask again without bothering the agent (the open question stays open)."""
-    return {"heard": "", "sent": None, "reply": "", "question": None, "map": None, **speak(DIDNT_GET_IT)}
+    spoken = speak(DIDNT_GET_IT)
+    spoken["timings_ms"] = timings_ms | spoken["timings_ms"]
+    return {"heard": "", "sent": None, "reply": "", "question": None, "map": None, **spoken}
 
 
 def speak(text: str, with_audio: bool = True) -> dict:
     audio, audio_error = None, None
+    started = time.perf_counter()
     if with_audio:
         try:
             audio = base64.b64encode(voice().speak(text)).decode()
         except VoiceError as error:
             audio_error = str(error)  # the words still go back, so the app can show them
-    return {"spoken": text, "audio_base64": audio, "audio_error": audio_error, "playback_rate": PLAYBACK_RATE}
+    return {"spoken": text, "audio_base64": audio, "audio_error": audio_error, "playback_rate": PLAYBACK_RATE,
+            "timings_ms": {"speak": since(started)}}
+
+
+def since(started: float) -> int:
+    return round((time.perf_counter() - started) * 1000)
 
 
 app = FastAPI(title="Talk to your building: voice", version="0.2")

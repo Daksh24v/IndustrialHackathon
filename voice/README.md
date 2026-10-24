@@ -14,8 +14,10 @@ uv run --env-file .env uvicorn server.app:app --port 8000   # the backend
 uv run --env-file .env uvicorn voice.app:app --port 8001    # voice
 ```
 
-- **Demo page with the microphone:** http://localhost:8001 . Tap the button (or press space), ask, pause; it
-  stops listening by itself and answers out loud. Options the agent asks back show as chips.
+- **Demo page with the microphone:** http://localhost:8001 . Press Start once, then just talk: it hears when
+  you stop (0.8 s of quiet), answers out loud, and listens again. Talk over it (or press space) to interrupt;
+  "End conversation" stops it. Says "One moment." if the agent takes over 1.2 s, and shows where the time went.
+  Headphones work best (on speakers, interrupting needs you to speak up). Options also show as chips.
 - **Terminal tester (type, hear):** `uv run python -m voice.talk [building_id]`
 - **API docs:** http://localhost:8001/docs
 
@@ -49,7 +51,8 @@ Every B turn answers the backend's `/chat` fields plus:
 | `reply`, `question`, `map` | exactly as `/chat` |
 | `spoken` | the words in the audio: short, no markdown, the question read with its options |
 | `audio_base64` | MP3 of `spoken` (null if ElevenLabs failed; then `audio_error` says why) |
-| `playback_rate` | play at this rate with pitch kept (1.08: v4 Turbo ignores ElevenLabs' own speed setting) |
+| `playback_rate` | play at this rate with pitch kept (1.15: v4 Turbo ignores ElevenLabs' own speed setting) |
+| `timings_ms` | where the time went: `transcribe`, `agent`, `speak` |
 
 When nothing was heard, the turn says "Sorry, I didn't catch that…" without calling the agent.
 
@@ -84,7 +87,8 @@ await voiceApi.speak({ text: 'Turn left at the press, then 10 m straight on.' })
 |---|---|
 | `ELEVENLABS_VOICE_ID` | `q1OMOTZNtqpS50TIQtu4` (Tony Smyles; add him to "My Voices" in the ElevenLabs account first) |
 | `ELEVENLABS_TTS_MODEL` / `ELEVENLABS_STT_MODEL` | `eleven_v4_turbo` / `scribe_v2` |
-| `VOICE_PLAYBACK_RATE` | `1.08` |
+| `VOICE_PLAYBACK_RATE` | `1.15` |
+| `VOICE_BRIEF` | `1`: each turn asks the agent for one short spoken sentence; `0` sends the words only |
 | `NAV_BACKEND_URL` | `http://localhost:8000` |
 
 Spoken audio is cached in `voice/.cache/` (gitignored), so repeated lines cost no credits.
@@ -102,8 +106,10 @@ Voice still reaches the agent over HTTP at `NAV_BACKEND_URL`, which is then the 
 
 ## Wished for on main (backend)
 
-- `POST /sessions` with `"voice": true`: the agent answers in one or two spoken sentences with no markdown.
-  Today `voice/speech.py` cleans replies up and keeps the first two sentences.
+- `POST /sessions` with `"voice": true`: the agent answers in one short spoken sentence with no markdown, at
+  lower effort (chat runs at "medium" today; the agent is most of the wait, 4-6 s of a 6 s turn). Until then
+  voice adds a one-line hint to each turn (`VOICE_HINT` in `voice/app.py`), and `voice/speech.py` trims replies:
+  only the question when the agent asks back, no "on your map" talk, at most two sentences and 35 words.
 
 ## Tests
 

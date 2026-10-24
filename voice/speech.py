@@ -4,6 +4,7 @@ say back matched to the option it means. Plain functions, tested without any API
 import re
 
 MAX_SENTENCES = 2
+MAX_WORDS = 35  # a safety net; the agent is also asked for one short sentence (voice/app.py VOICE_HINT)
 ON_MAP = "It's on your map."
 DIDNT_GET_IT = "Sorry, I didn't catch that. Could you say it again?"
 
@@ -19,6 +20,10 @@ ROOM_REF = re.compile(r"(?<=[A-Za-zÄÖÜäöüß] )(-?\d{1,2})\.(\d{2,3})(?:-([
 METRES = re.compile(r"(\d+(?:\.\d+)?)\s?m\b(?!²)")
 A_METRES = re.compile(r"\b([Aa]n?) (\d+(?:\.\d+)?)\s?m\b(?!²)")  # "a 145 m walk" -> "a 145-metre walk"
 SQUARE_METRES = re.compile(r"(\d+(?:\.\d+)?)\s?(?:m²|m2\b|sqm\b)")
+FILLER_START = re.compile(r"^(?:sure|okay|ok|got it|great|alright|of course|good question|no problem)\b[!.,]?\s*",
+                          re.IGNORECASE)
+# ", and I've put a pin on it on your map" / " and the route is on your map": we say ON_MAP once instead
+MAP_CLAUSE = re.compile(r"(?:,\s*|\s+)(?:and|so)?\s*[^,.!?]*\bmap\b[^,.!?]*", re.IGNORECASE)
 
 
 # ---------- what the agent said -> what we say ----------
@@ -63,8 +68,35 @@ def sentences(text: str) -> list[str]:
     return [part for part in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"'])", text) if part.strip()]
 
 
+def without_map_talk(sentence: str) -> str:
+    if "map" not in sentence.lower():
+        return sentence
+    trimmed = MAP_CLAUSE.sub("", sentence).strip()
+    if not trimmed or "map" in trimmed.lower() or len(trimmed.split()) < 3:
+        return ""  # the whole sentence was about the map
+    return trimmed if trimmed[-1] in ".!?" else trimmed + "."
+
+
 def short(reply: str) -> str:
-    return " ".join(sentences(plain(reply))[:MAX_SENTENCES])
+    """At most two sentences and about 35 words (always the first sentence), no filler, no map talk."""
+    kept: list[str] = []
+    only_filler = None  # "Sure." on its own is still an answer, unless the rest was map talk
+    map_talk = False
+    for sentence in sentences(plain(reply)):
+        cleaned = FILLER_START.sub("", sentence).strip()
+        if not cleaned:
+            only_filler = only_filler or sentence
+            continue
+        sentence = without_map_talk(cleaned)
+        if not sentence:
+            map_talk = True
+            continue
+        if kept and len(" ".join(kept + [sentence]).split()) > MAX_WORDS:
+            break
+        kept.append(sentence[0].upper() + sentence[1:])
+        if len(kept) == MAX_SENTENCES:
+            break
+    return " ".join(kept) or ("" if map_talk else only_filler or "")
 
 
 def options_phrase(labels: list[str]) -> str:
@@ -80,17 +112,17 @@ def speakable(text: str) -> str:
 
 
 def spoken_text(answer: dict) -> str:
-    """One /chat answer {reply, question, map} as the words to speak."""
-    parts = []
-    reply = short(answer.get("reply") or "")
-    if reply:
-        parts.append(reply)
+    """One /chat answer {reply, question, map} as the words to speak. When the agent asks back, only the
+    question and its options: the reply before it is lead-up ("There are 7 coffee machines...")."""
     question = answer.get("question")
     if question:
-        parts.append(question["question"].strip())
-        parts.append(options_phrase([option["label"] for option in question.get("options", [])]))
-    elif shows_something(answer.get("map")) and "map" not in reply.lower():
-        parts.append(ON_MAP)
+        parts = [question["question"].strip(),
+                 options_phrase([option["label"] for option in question.get("options", [])])]
+    else:
+        reply = short(answer.get("reply") or "")
+        parts = [reply] if reply else []
+        if shows_something(answer.get("map")):
+            parts.append(ON_MAP)
     return say_numbers(" ".join(parts)) if parts else DIDNT_GET_IT
 
 
@@ -109,6 +141,7 @@ def keyterms(building: dict) -> list[str]:
               if space.get("name") and space.get("type") in ("room", "hall")]
     terms += [connector["name"] for connector in building.get("vertical_connectors", []) if connector.get("name")]
     return list(dict.fromkeys(term for term in terms if term))
+
 
 def words(text: str) -> list[str]:
     tokens = re.findall(r"[a-z0-9äöüß]+", text.lower().replace("'", ""))
