@@ -178,10 +178,15 @@ def run(
     buildings: set[str] | None = None,
     double_check: bool = False,
     resume: bool = False,
+    force: bool = False,
 ) -> Counter:
     items = select(load_questions(source), per_kind, buildings)
     if not items:
         sys.exit(f"No questions found in {source}")
+    existing = read_existing(out)
+    if not resume and not force and len(existing) > len(items):
+        sys.exit(f"{out} already has {len(existing)} answers and this run has only {len(items)} questions: it would "
+                 f"replace them. Use --resume to keep them, another --out, or --force to replace.")
     done = {key: reply for key, reply in read_existing(out).items() if finished(reply)} if resume else {}
     results: Counter = Counter()
     rows: dict[str, str] = {}
@@ -200,12 +205,14 @@ def run(
                 reply = f"{ERROR_PREFIX}{type(error).__name__}: {error}"
         rows[entry.id] = reply
         write_csv(out, rows)  # after every question, so an interrupted run keeps what it paid for
+        mark = "   "
         if isinstance(question.get("answer"), dict):
-            correct = score_reply(question["answer"], reply)
-            results[(question.get("kind", "?"), correct)] += 1
-            mark = "OK " if correct else "BAD"
-        else:
-            mark = "   "
+            try:  # scoring is only a check: an answer key in another format must not stop the run
+                correct = score_reply(question["answer"], reply)
+                results[(question.get("kind", "?"), correct)] += 1
+                mark = "OK " if correct else "BAD"
+            except Exception:
+                mark = " ? "
         last = reply.splitlines()[-1] if reply else ""
         print(f"{mark} {entry.id:36s} {last[:70]}", flush=True)
     print(f"\n{len(rows)} answers written to {out}")
@@ -235,11 +242,13 @@ def main() -> None:
     parser.add_argument("--buildings", type=Path, default=None, help="file with building ids to keep, one per line")
     parser.add_argument("--double-check", action="store_true", help="run each question twice (+1 on disagreement)")
     parser.add_argument("--resume", action="store_true", help="keep answers already in --out, answer the rest")
+    parser.add_argument("--force", action="store_true", help="replace an --out file that has more answers than this run")
     arguments = parser.parse_args()
     buildings = None
     if arguments.buildings:
         buildings = {line.strip() for line in arguments.buildings.read_text().splitlines() if line.strip()}
-    run(arguments.source, arguments.out, arguments.per_kind, buildings, arguments.double_check, arguments.resume)
+    run(arguments.source, arguments.out, arguments.per_kind, buildings, arguments.double_check, arguments.resume,
+        arguments.force)
 
 
 if __name__ == "__main__":

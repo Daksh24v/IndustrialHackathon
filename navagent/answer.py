@@ -16,6 +16,7 @@ from navcore.engine import Building
 
 LOG_DIRECTORY = Path("agent_output") / "logs"
 DOUBLE_CHECK_ENVIRONMENT_VARIABLE = "NAVAGENT_DOUBLE_CHECK"
+CALL_TIMEOUT_S = 180  # one Claude call; a stalled one is retried instead of blocking the run
 
 _client: anthropic.Anthropic | None = None
 USAGE: Counter = Counter()  # tokens of every agent run in this process, for cost reports
@@ -24,7 +25,7 @@ USAGE: Counter = Counter()  # tokens of every agent run in this process, for cos
 def client() -> anthropic.Anthropic:
     global _client
     if _client is None:
-        _client = anthropic.Anthropic(max_retries=5)
+        _client = anthropic.Anthropic(max_retries=5, timeout=CALL_TIMEOUT_S)
     return _client
 
 

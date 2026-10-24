@@ -93,7 +93,7 @@ await voiceApi.speak({ text: 'Turn left at the press, then 10 m straight on.' })
 | `ELEVENLABS_VOICE_ID` | `q1OMOTZNtqpS50TIQtu4` (Tony Smyles; add him to "My Voices" in the ElevenLabs account first) |
 | `ELEVENLABS_TTS_MODEL` / `ELEVENLABS_STT_MODEL` | `eleven_v4_turbo` / `scribe_v2` |
 | `VOICE_PLAYBACK_RATE` | `1.15` |
-| `VOICE_BRIEF` | `1`: turns are sent as spoken (one short sentence, lower effort); `0` as normal chat turns |
+| `VOICE_BRIEF` | `1`: turns are sent as spoken (two short sentences, lower effort); `0` as normal chat turns |
 | `NAV_BACKEND_URL` | `http://localhost:8000` |
 
 Spoken audio is cached in `voice/.cache/` (gitignored), so repeated lines cost no credits.
@@ -111,7 +111,7 @@ Voice still reaches the agent over HTTP at `NAV_BACKEND_URL`, which is then the 
 
 ## Spoken turns in the backend
 
-`POST /sessions/{id}/chat` takes `"spoken": true`: the agent answers in one short sentence for the ear, with
+`POST /sessions/{id}/chat` takes `"spoken": true`: the agent answers in two short sentences for the ear (where and how far, then the first turn), with
 no markdown, at lower effort (faster). Voice sends every turn that way (unless `VOICE_BRIEF=0`), and so does
 the app while the mic conversation is on. `voice/speech.py` still trims replies as a safety net: only the
 question when the agent asks back, no "on your map" talk, at most two sentences and 35 words.

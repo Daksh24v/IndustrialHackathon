@@ -29,9 +29,11 @@ It takes what it is given:
 Options: `--per-kind N` (first N questions of each kind), `--buildings <file>` (only these building ids),
 `--double-check` (each question twice, a third run on disagreement; a run that fails doesn't spoil the
 others), `--resume` (keep the answers already in `--out`, answer the rest **and every error row or row without
-an `Answer:` line again**; an interrupted run never pays twice). A question that fails becomes an error row,
-never a stopped run. The CSV is replaced after every question (written aside, then moved, so stopping the run
-never leaves half a file).
+an `Answer:` line again**; an interrupted run never pays twice), `--force` (replace an `--out` file that has
+more answers than this run: without it a short test run refuses to overwrite a full submission). A question that
+fails becomes an error row, never a stopped run, and an answer key the scorer doesn't know shows `?` instead of
+stopping the run. The CSV is replaced after every question (written aside, then moved, so stopping the run never
+leaves half a file). Each Claude call times out after 180 s and is retried.
 
 ## How it answers
 

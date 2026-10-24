@@ -97,3 +97,29 @@ def test_a_missing_building_is_an_error_row_and_resume_redoes_it(fake, tmp_path,
     benchmark.run(table, out, resume=True)
     assert calls == ["q1"], "only the failed row is answered again"
     assert "Answer:" in answers(out)["q1"]
+
+
+def test_scoring_trouble_never_stops_the_run_and_a_short_run_never_replaces_a_full_file(tmp_path, monkeypatch):
+    import json
+
+    from navagent import benchmark
+
+    questions = tmp_path / "questions.jsonl"
+    rows = [{"id": "Q1", "building_id": "b", "kind": "route", "question": "Way?",
+             "answer": {"optimal_length_m": 12.0}},  # an answer key the scorer doesn't know
+            {"id": "Q2", "building_id": "b", "kind": "route", "question": "Way?"}]
+    questions.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    monkeypatch.setattr(benchmark, "answer", lambda *args, **kwargs: "Answer: 12")
+    monkeypatch.setattr(benchmark, "ensure_building", lambda building: None)
+    monkeypatch.setattr(benchmark, "select", lambda items, per_kind, buildings: [
+        benchmark.Item(id=row["id"], question=row, building=tmp_path, problem=None) for row in rows])
+    out = tmp_path / "answers.csv"
+    benchmark.run(questions, out)
+    assert benchmark.read_existing(out) == {"Q1": "Answer: 12", "Q2": "Answer: 12"}
+
+    monkeypatch.setattr(benchmark, "select", lambda items, per_kind, buildings: [
+        benchmark.Item(id="Q1", question=rows[0], building=tmp_path, problem=None)])
+    with pytest.raises(SystemExit, match="would replace"):
+        benchmark.run(questions, out)
+    benchmark.run(questions, out, force=True)
+    assert list(benchmark.read_existing(out)) == ["Q1"]

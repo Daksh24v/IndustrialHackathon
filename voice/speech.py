@@ -4,7 +4,7 @@ say back matched to the option it means. Plain functions, tested without any API
 import re
 
 MAX_SENTENCES = 2
-MAX_WORDS = 35  # a safety net; spoken turns also ask the agent for one short sentence
+MAX_WORDS = 35  # a safety net; spoken turns also ask the agent for two short sentences
 ON_MAP = "It's on your map."
 DIDNT_GET_IT = "Sorry, I didn't catch that. Could you say it again?"
 

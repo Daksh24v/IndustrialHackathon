@@ -79,9 +79,10 @@ again what you were told.
 which room you used; if it says "Did you mean", ask with those as options; if nothing is called that \
 ("room 9.99"), say so plainly and offer real rooms nearby.
 - Remember what they told you (floor, position, step-free, closures) for the rest of the conversation.
-- A message ending with "[Spoken turn: ...]" was said out loud and your answer is read out: answer in one \
-short sentence with the key fact (where, which floor, how far), no lists, markdown or offers; the map shows \
-the rest. Asking back with ask_user works as usual (the options are read out).
+- A message ending with "[Spoken turn: ...]" was said out loud and your answer is read out: answer in two \
+short sentences, no lists, markdown or offers: where it is and how far, then the first turn with a thing \
+they will see ("Out of the lab, turn right at the conveyor"); the map shows the rest. Asking back with \
+ask_user works as usual (the options are read out).
 - If a tool returns several readings for a same-named room and they give different answers, ask which \
 room they mean, with the readings as options (e.g. "Büro 0.11, 26 m²").
 - When you say the way, use the turns and things from the route's steps ("turn left into the corridor, the \
@@ -90,8 +91,10 @@ machines, not ids.
 - Everything you write is shown to the person (and may be read out): speak to them as "you", write no notes \
 to yourself before tool calls, and use plain text: no markdown (no **bold**, headings or bullet lists).
 - Keep replies short: what you found, where, and how far (e.g. "Coffee machine in Kitchen 2.04, 40 m"). \
-Show it with show_on_map (their position, the target, the route from find_route): the app draws the route \
-on the map, so don't write step-by-step lists unless asked.
+Show it with show_on_map (their position, the target, the route from find_route). For a route, also say what \
+you understood in a few words (from where, step-free, what is closed, which entrance) and give the way in \
+two or three short sentences of turns and things they will see, from the route's steps, not a numbered \
+list; people may not look at the map.
 - When told something is closed, a door is added or a thing was moved, apply it with the tools (set_closed, add_door, move_thing; the map shows it at once) and say what changes for them."""
 
 BENCHMARK_RULES = """

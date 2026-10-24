@@ -48,6 +48,7 @@ from voice import app as voice_service
 
 DATA = Path(__file__).resolve().parent.parent / "data"
 MAX_SESSIONS = 200
+CALL_TIMEOUT_S = 90  # one Claude call; a stalled one must not hang the demo for minutes
 DEMO_BUILDING = os.environ.get("NAV_DEMO_BUILDING", "proc-factory-dev-003")
 log = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ def client() -> anthropic.Anthropic:
     """The Claude client; tests replace this function with a fake."""
     global _client
     if _client is None:
-        _client = anthropic.Anthropic(max_retries=3)
+        _client = anthropic.Anthropic(max_retries=3, timeout=CALL_TIMEOUT_S)
     return _client
 
 
