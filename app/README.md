@@ -14,10 +14,17 @@ pin on the target. Routes over several floors show "Take Lift 1 to Floor 2".
 uv sync
 uv run --env-file .env uvicorn server.app:app --host 0.0.0.0 --port 8000
 
-# 2. app (this folder)
+# 2. voice, for the mic button (repo root; ELEVENLABS_API_KEY in .env; see ../voice/README.md)
+uv run --env-file .env uvicorn voice.app:app --host 0.0.0.0 --port 8001
+
+# 3. app (this folder)
 npm install
-EXPO_PUBLIC_API_URL=http://<your-laptop-ip>:8000 npx expo start
+EXPO_PUBLIC_API_URL=http://<your-laptop-ip>:8000 EXPO_PUBLIC_VOICE_URL=http://<your-laptop-ip>:8001 npx expo start
 ```
+
+- **Voice:** tap the mic once and talk. It stops listening when you pause, reads the answer out and listens
+  again; tap while it talks to interrupt, or before you speak to stop. Typed and tapped turns are read out too
+  while a spoken conversation is going.
 
 - **Phone:** install Expo Go, be on the same Wi-Fi as the laptop, scan the QR code. `localhost` won't work
   from the phone, so use the laptop's IP address in `EXPO_PUBLIC_API_URL`.
@@ -27,7 +34,7 @@ EXPO_PUBLIC_API_URL=http://<your-laptop-ip>:8000 npx expo start
 ## Checks
 
 ```bash
-npm test               # Jest: geometry, API client, state machine, chat chips
+npm test               # Jest: geometry, API client, state machine, chat chips, voice
 npx tsc --noEmit       # types
 # end to end on the web build (no Claude API calls; uses a real route from the server):
 npx expo export --platform web && npx serve dist -l 8081 &
@@ -39,5 +46,6 @@ node e2e/run.cjs       # screenshots in e2e/screenshots
 - `App.tsx`: the screen; `src/state.ts`: its state machine (outside → flying in → floor).
 - `src/components/BuildingBlocks.tsx`: the outside view: floors as white isometric blocks, drawn with SVG.
 - `src/components/FloorPlan.tsx`: the 2D floor, the orange blob, route and pin.
-- `src/components/ChatSheet.tsx`: messages, option chips, text field, microphone button (voice branch).
+- `src/components/ChatSheet.tsx`: messages, option chips, text field, microphone button.
+- `src/useVoice.ts`, `src/voice.ts`: the microphone and the spoken answers (expo-audio, the voice service).
 - `src/api.ts`, `src/geometry.ts`, `src/theme.ts`: server client, drawing maths, colours.

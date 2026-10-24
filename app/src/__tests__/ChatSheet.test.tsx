@@ -36,3 +36,22 @@ describe('ChatSheet', () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 });
+
+describe('ChatSheet microphone', () => {
+  it('starts voice and shows what the guide is doing', async () => {
+    const onMic = jest.fn();
+    const view = await render(<ChatSheet messages={[]} question={null} busy={false} onSend={jest.fn()} onMic={onMic} />);
+    expect(screen.queryByTestId('mic-hint')).toBeNull();
+    await fireEvent.press(screen.getByTestId('mic'));
+    expect(onMic).toHaveBeenCalled();
+    await view.rerender(<ChatSheet messages={[]} question={null} busy={false} onSend={jest.fn()} onMic={onMic}
+                                   mic="listening" />);
+    expect(screen.getByText('Listening… pause when you are done')).toBeTruthy();
+    await view.rerender(<ChatSheet messages={[]} question={null} busy={false} onSend={jest.fn()} onMic={onMic}
+                                   mic="speaking" />);
+    expect(screen.getByText('Speaking… tap the mic to interrupt')).toBeTruthy();
+    await view.rerender(<ChatSheet messages={[]} question={null} busy={false} onSend={jest.fn()} onMic={onMic}
+                                   mic="thinking" />);
+    expect(screen.queryByTestId('mic')).toBeNull();  // a spinner while it works
+  });
+});

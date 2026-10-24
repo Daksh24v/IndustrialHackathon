@@ -1,10 +1,11 @@
 /** The conversation at the bottom of the screen: messages, the agent's question as tappable chips, a text
- * field and a microphone button (voice comes from the voice branch). */
+ * field and a microphone button (src/useVoice.ts: tap once to talk, again to interrupt or stop). */
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { ScrollViewInstance } from 'react-native';
 
 import type { Question } from '../api';
+import type { MicState } from '../useVoice';
 import { colours } from '../theme';
 
 export interface Message {
@@ -18,9 +19,17 @@ interface Props {
   busy: boolean;
   onSend: (text: string) => void;
   onMic?: () => void;
+  mic?: MicState;
 }
 
-export function ChatSheet({ messages, question, busy, onSend, onMic }: Props) {
+const MIC_HINT: Record<MicState, string> = {
+  off: '',
+  listening: 'Listening… pause when you are done',
+  thinking: '',
+  speaking: 'Speaking… tap the mic to interrupt',
+};
+
+export function ChatSheet({ messages, question, busy, onSend, onMic, mic = 'off' }: Props) {
   const [text, setText] = useState('');
   const scroll = useRef<ScrollViewInstance>(null);
   useEffect(() => {
@@ -60,6 +69,7 @@ export function ChatSheet({ messages, question, busy, onSend, onMic }: Props) {
           </View>
         </View>
       )}
+      {MIC_HINT[mic] ? <Text testID="mic-hint" style={styles.micHint}>{MIC_HINT[mic]}</Text> : null}
       <View style={styles.inputRow}>
         <TextInput
           testID="chat-input"
@@ -72,15 +82,17 @@ export function ChatSheet({ messages, question, busy, onSend, onMic }: Props) {
           returnKeyType="send"
           editable={!busy}
         />
-        {busy ? (
+        {busy || mic === 'thinking' ? (
           <ActivityIndicator color={colours.accent} style={styles.round} />
         ) : text.trim() ? (
           <Pressable testID="send" accessibilityLabel="Send" style={[styles.round, styles.send]} onPress={() => send(text)}>
             <Text style={styles.sendText}>↑</Text>
           </Pressable>
         ) : (
-          <Pressable testID="mic" accessibilityLabel="Speak" style={styles.round} onPress={onMic}>
-            <Text style={styles.mic}>🎙</Text>
+          <Pressable testID="mic" accessibilityLabel={mic === 'off' ? 'Speak' : 'Stop'}
+                     accessibilityState={{ selected: mic !== 'off' }}
+                     style={[styles.round, mic !== 'off' && styles.micOn]} onPress={onMic}>
+            <Text style={styles.mic}>{mic === 'listening' ? '●' : '🎙'}</Text>
           </Pressable>
         )}
       </View>
@@ -111,5 +123,7 @@ const styles = StyleSheet.create({
   round: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
   send: { backgroundColor: colours.accent },
   sendText: { color: '#FFFFFF', fontSize: 20, fontWeight: '700' },
-  mic: { fontSize: 20 },
+  mic: { fontSize: 20, color: '#FFFFFF' },
+  micOn: { backgroundColor: colours.accent },
+  micHint: { color: colours.muted, fontSize: 12, textAlign: 'center' },
 });

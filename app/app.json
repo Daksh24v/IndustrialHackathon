@@ -21,6 +21,14 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "backgroundColor": "#FFFFFF"
+    "backgroundColor": "#FFFFFF",
+    "plugins": [
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow $(PRODUCT_NAME) to hear your questions, so you can ask the way hands-free."
+        }
+      ]
+    ]
   }
 }

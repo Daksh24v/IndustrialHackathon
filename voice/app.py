@@ -13,6 +13,7 @@ Endpoints (all under /voice, so `router` can also be mounted in the backend app;
                                        {"answer": <a /chat answer>} (short, with the question and its options)
 - POST /voice/transcribe               a recording to text only, no agent; ?building_id= or ?session_id= helps
                                        it hear the building's names
+- GET  /voice/audio/{id}.mp3           a spoken answer again by URL (`audio_url`), for players that stream
 
 Every turn answers {heard, sent, reply, question, map, spoken, audio_base64, audio_error, playback_rate}:
 `heard` is what the person said, `sent` what went to the agent (an option label when they clearly picked one),
@@ -21,14 +22,16 @@ went (transcribe, agent, speak).
 """
 
 import base64
+import hashlib
 import os
 import time
+from collections import OrderedDict
 from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from voice.elevenlabs import ElevenLabs, VoiceError
@@ -44,6 +47,7 @@ VOICE_HINT = ("\n\n[Spoken conversation: answer in one short sentence with the k
 BRIEF = os.environ.get("VOICE_BRIEF", "1") != "0"
 MAX_AUDIO_BYTES = 10_000_000
 MAX_SPEAK_CHARS = 1000  # one spoken line, not a book: protects the credits
+MAX_CLIPS = 200  # recent spoken answers kept for audio_url
 PAGE = Path(__file__).resolve().parent / "web" / "index.html"
 
 router = APIRouter(prefix="/voice", tags=["voice"])
@@ -51,6 +55,7 @@ router = APIRouter(prefix="/voice", tags=["voice"])
 _last_question: dict[str, dict | None] = {}  # per session: the options the person is answering
 _session_building: dict[str, str] = {}       # per session: its building
 _keyterms: dict[str, list[str]] = {}         # per building: names worth listening for in speech to text
+_clips: OrderedDict[str, bytes] = OrderedDict()  # audio_url id -> MP3
 _backend: httpx.Client | None = None
 _voice: ElevenLabs | None = None
 
@@ -164,6 +169,14 @@ async def transcribe_body(request: Request, building_id: str | None) -> str:
         raise HTTPException(502, str(error)) from error
 
 
+@router.get("/audio/{clip_id}.mp3", include_in_schema=False)
+def audio(clip_id: str) -> Response:
+    clip = _clips.get(clip_id)
+    if clip is None:
+        raise HTTPException(404, "No such clip (they are kept for the last 200 answers).")
+    return Response(clip, media_type="audio/mpeg", headers={"cache-control": "max-age=3600"})
+
+
 def building_terms(building_id: str) -> list[str]:
     if building_id not in _keyterms:
         _keyterms[building_id] = keyterms(call_backend("GET", f"/buildings/{building_id}"))
@@ -191,15 +204,26 @@ def nothing_heard(timings_ms: dict) -> dict:
 
 
 def speak(text: str, with_audio: bool = True) -> dict:
-    audio, audio_error = None, None
+    audio, audio_url, audio_error = None, None, None
     started = time.perf_counter()
     if with_audio:
         try:
-            audio = base64.b64encode(voice().speak(text)).decode()
+            clip = voice().speak(text)
+            audio, audio_url = base64.b64encode(clip).decode(), keep_clip(clip)
         except VoiceError as error:
             audio_error = str(error)  # the words still go back, so the app can show them
-    return {"spoken": text, "audio_base64": audio, "audio_error": audio_error, "playback_rate": PLAYBACK_RATE,
-            "timings_ms": {"speak": since(started)}}
+    return {"spoken": text, "audio_base64": audio, "audio_url": audio_url, "audio_error": audio_error,
+            "playback_rate": PLAYBACK_RATE, "timings_ms": {"speak": since(started)}}
+
+
+def keep_clip(clip: bytes) -> str:
+    """Remember the MP3 for a while and return its path under this router."""
+    clip_id = hashlib.sha256(clip).hexdigest()[:24]
+    _clips[clip_id] = clip
+    _clips.move_to_end(clip_id)
+    while len(_clips) > MAX_CLIPS:
+        _clips.popitem(last=False)
+    return f"{router.prefix}/audio/{clip_id}.mp3"
 
 
 def since(started: float) -> int:

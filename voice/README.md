@@ -51,14 +51,19 @@ Every B turn answers the backend's `/chat` fields plus:
 | `reply`, `question`, `map` | exactly as `/chat` |
 | `spoken` | the words in the audio: short, no markdown, the question read with its options |
 | `audio_base64` | MP3 of `spoken` (null if ElevenLabs failed; then `audio_error` says why) |
+| `audio_url` | the same MP3 as a URL on this service (`/voice/audio/<id>.mp3`), for players that stream |
 | `playback_rate` | play at this rate with pitch kept (1.15: v4 Turbo ignores ElevenLabs' own speed setting) |
 | `timings_ms` | where the time went: `transcribe`, `agent`, `speak` |
 
 When nothing was heard, the turn says "Sorry, I didn't catch that…" without calling the agent.
 
-## Wiring it into the Expo app (`app/`)
+## In the Expo app (`app/`)
 
-`ChatSheet` already has an `onMic` prop for this. With way A, `App.tsx` stays in charge of the conversation:
+Done with way A: `app/src/useVoice.ts` (expo-audio) and `app/src/voice.ts` (this API). The mic button
+starts a spoken conversation: it stops listening on a pause (recorder metering), hands the words to the
+app's normal `send()`, plays the answer from `audio_url` at `playback_rate`, says "One moment." when
+the agent is slow, and listens again. Set `EXPO_PUBLIC_VOICE_URL` (default `http://localhost:8001`).
+The pattern, for new features:
 
 ```ts
 // 1. microphone -> words -> the normal send()

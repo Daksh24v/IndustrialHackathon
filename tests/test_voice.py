@@ -330,3 +330,11 @@ def test_agent_is_asked_to_be_brief_but_sent_stays_clean(talk, monkeypatch):
     monkeypatch.setattr(voice_app, "BRIEF", False)
     talk.post(f"/voice/sessions/{session}/say", json={"text": "close the lift"})
     assert "one short sentence" not in str(fake.requests[1]["messages"][-1]["content"])
+
+
+def test_spoken_answers_can_be_fetched_by_url(talk):
+    answer = talk.post("/voice/speak", json={"text": "Turn left now."}).json()
+    assert answer["audio_url"].startswith("/voice/audio/") and answer["audio_url"].endswith(".mp3")
+    clip = talk.get(answer["audio_url"])
+    assert clip.status_code == 200 and clip.content == b"MP3" and clip.headers["content-type"] == "audio/mpeg"
+    assert talk.get("/voice/audio/nothing.mp3").status_code == 404
