@@ -7,7 +7,7 @@ uv sync
 uv run --env-file .env python -m navagent.benchmark <input> --out <answers.csv>
 ```
 
-`.env` holds `ANTHROPIC_API_KEY=...` (gitignored). `<input>` can be any of:
+`.env` holds `ANTHROPIC_API_KEY=...` (gitignored, so create it in a fresh clone). `<input>` can be any of:
 
 | Input | Example |
 |---|---|
@@ -72,3 +72,10 @@ uv run --env-file .env python -m navagent.benchmark data/test --out agent_output
 format OK (UTF-8, header, every test id once, under 5 MB), every answer line readable by the scorer, and
 145/145 answers agree with an independent earlier run (the Phase 1 template reader, 138/138 on dev).
 No answer was edited by hand.
+
+## Sunday dry run
+
+From a fresh clone of this repository: `uv sync`, create `.env`, then the command above on one test building
+directory (`data/test/osm-way363805324`, 7 questions): a valid CSV in 44 s (about 6 s per question, run one
+after another), all 7 answers the same as in the submission. A Sunday building with 20 questions takes about
+2–3 minutes and costs under $1.
