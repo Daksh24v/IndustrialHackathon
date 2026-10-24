@@ -232,6 +232,39 @@ class Building:
             hops=hops,
         )
 
+    def polyline(self, route: Route) -> list[dict]:
+        """The route as lines to draw, one piece per floor: space anchor -> door -> space anchor ...
+        A lift or stair hop ends one piece and starts the next on the other floor; going outside (between
+        two entrances) also breaks the line. Each piece says which connector or entrance leads onward."""
+        pieces: list[dict] = []
+
+        def point(node: str) -> tuple[str, list[float]] | None:
+            if node == OUTSIDE:
+                return None
+            if node.startswith(DOOR_PREFIX):
+                opening_id = node.removeprefix(DOOR_PREFIX)
+                opening = self.openings.get(opening_id)
+                return (opening["floor_id"], list(opening["position"])) if opening else None
+            return self.spaces[node]["floor_id"], list(self.anchor(node))
+
+        start = point(route.nodes[0])
+        pieces.append({"floor_id": start[0], "points": [start[1]], "then": None})
+        for previous, current, via in route.hops:
+            here = point(current)
+            if here is None:  # stepped outside; the next point starts a new piece
+                pieces[-1]["then"] = {"kind": "outside", "via": via}
+                continue
+            floor_id, xy = here
+            last = pieces[-1]
+            if via in self.connectors or floor_id != last["floor_id"] or previous == OUTSIDE:
+                if via in self.connectors:
+                    last["then"] = {"kind": self.connectors[via]["kind"], "via": via,
+                                    "name": self.connectors[via]["name"], "to_floor_id": floor_id}
+                pieces.append({"floor_id": floor_id, "points": [xy], "then": None})
+            else:
+                last["points"].append(xy)
+        return pieces
+
     def tour(self, stops: list[str], constraints: Constraints = Constraints()) -> list[Route]:
         return [self.route(first, second, constraints) for first, second in itertools.pairwise(stops)]
 

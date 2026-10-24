@@ -47,6 +47,8 @@ class Session:
     new_openings: list[dict] = field(default_factory=list)
     pending_question: dict | None = None  # set by ask_user; the app shows it as option chips
     submitted: dict | None = None  # set by submit_answer in benchmark mode
+    last_route: list[Route] | None = None  # legs of the most recent find_route, for show_on_map
+    map_view: dict | None = None  # what the app should draw after this turn (show_on_map)
 
     def constraints(
         self, step_free: bool = False, min_width_m: float = 0.0, closed: list[str] | None = None
@@ -278,6 +280,7 @@ class Session:
         stops = [find_space(building, start), *[find_space(building, stop) for stop in via or []]]
         stops.append(find_space(building, destination))
         legs = building.tour(stops, constraints)
+        self.last_route = legs
         return {
             "from": building.label(stops[0]),
             "to": building.label(stops[-1]),
@@ -562,6 +565,47 @@ class Session:
                 for asset in found[: MAX_RESULTS * 2]
             ],
         }
+
+    # ---------- map ----------
+
+    def show_on_map(
+        self, you_are_here: str | None = None, target: str | None = None, show_last_route: bool = False,
+        floor: str | None = None,
+    ) -> dict:
+        """Tell the app what to draw: the person's position (a room), the target (a room or a thing) and the
+        last computed route as lines per floor. Nothing is guessed: positions and lines come from the data."""
+        building = self.building
+        view: dict = {"you_are_here": None, "target": None, "route": None, "focus_floor_id": None}
+        if you_are_here:
+            space_id = find_space(building, you_are_here)
+            x, y = building.anchor(space_id)
+            view["you_are_here"] = {"space_id": space_id, "label": building.label(space_id),
+                                    "floor_id": building.spaces[space_id]["floor_id"], "position": [x, y]}
+        if target:
+            asset = building.assets.get(target) or next(
+                (a for a in building.assets.values() if normalise(a["name"]) == normalise(target)), None)
+            if asset:
+                view["target"] = {"asset_id": asset["id"], "space_id": asset["space_id"], "label": asset["name"],
+                                  "floor_id": asset["floor_id"], "position": list(asset["position"])}
+            else:
+                space_id = find_space(building, target)
+                x, y = building.anchor(space_id)
+                view["target"] = {"space_id": space_id, "label": building.label(space_id),
+                                  "floor_id": building.spaces[space_id]["floor_id"], "position": [x, y]}
+        if show_last_route:
+            if not self.last_route:
+                raise EngineError("No route computed yet: call find_route first.")
+            pieces = [piece for leg in self.last_route for piece in building.polyline(leg)]
+            view["route"] = {"length_m": rounded(sum(leg.length_m for leg in self.last_route)), "pieces": pieces}
+        if floor:
+            view["focus_floor_id"] = find_floor(building, floor)
+        else:
+            first = view["you_are_here"] or (view["route"] and {"floor_id": view["route"]["pieces"][0]["floor_id"]}) \
+                or view["target"]
+            view["focus_floor_id"] = first["floor_id"] if first else None
+        self.map_view = view
+        return {"shown": True, "focus_floor": building.floor_name(view["focus_floor_id"])
+                if view["focus_floor_id"] else None}
 
     # ---------- conversation ----------
 

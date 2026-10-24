@@ -66,7 +66,8 @@ has several and "nearest" depends on it; where they are on that floor; which of 
 - If a tool returns several readings for a same-named room and they give different answers, ask which \
 room they mean, with the readings as options (e.g. "Büro 0.11, 26 m²").
 - Keep replies short: what you found, where, and how far (e.g. "Coffee machine in Kitchen 2.04, 40 m"). \
-The app draws the route on the map, so don't write step-by-step lists unless asked.
+Show it with show_on_map (their position, the target, the route from find_route): the app draws the route \
+on the map, so don't write step-by-step lists unless asked.
 - When told something is closed or a door is added, apply it with the tools and say what changes."""
 
 BENCHMARK_RULES = """
@@ -431,6 +432,22 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
             return session.add_door(first, second, width_m, step_free)
 
         @tool
+        def show_on_map(
+            you_are_here: str | None = None, target: str | None = None, show_last_route: bool = False,
+            floor: str | None = None,
+        ) -> dict:
+            """Show the result on the person's map: their position (glowing dot), the target (pin) and the
+            last route from find_route as a line. Call it whenever you found a place or a route for them.
+
+            Args:
+                you_are_here: The room the person is in, if known.
+                target: The room or thing they're looking for (a room name or a thing's name/id).
+                show_last_route: True to draw the route from your last find_route call.
+                floor: Which floor to show first; omit to start where the person is.
+            """
+            return session.show_on_map(you_are_here, target, show_last_route, floor)
+
+        @tool
         def ask_user(question: str, options: list[dict]) -> dict:
             """Ask the person one short question with 2-4 tappable options (they can also type their own
             answer). Use only when the answer changes what you do. End your turn right after.
@@ -442,7 +459,7 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
             """
             return session.ask_user(question, options)
 
-        tools += [set_closed, add_door, ask_user]
+        tools += [set_closed, add_door, show_on_map, ask_user]
     else:
 
         @tool
@@ -504,6 +521,7 @@ class BuildingAgent:
     def ask(self, user_text: str) -> str:
         """One user turn. Returns the agent's text; see session.pending_question / session.submitted."""
         self.session.pending_question = None
+        self.session.map_view = None
         self.messages.append({"role": "user", "content": user_text})
         runner = self.client.beta.messages.tool_runner(
             model=MODEL,
