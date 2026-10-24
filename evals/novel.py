@@ -130,7 +130,7 @@ def entrances(b: Building, s: Session, rng: random.Random):
 
 
 def nearest_exit(b: Building, s: Session, rng: random.Random):
-    distances = b.distances_from(OUTSIDE)
+    distances = b.distances_to_exit()
     candidates = [sp for sp in rooms(b) if sp["id"] in distances and distances[sp["id"]] > 3]
     if not candidates:
         return None

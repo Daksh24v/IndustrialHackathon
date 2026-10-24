@@ -38,62 +38,67 @@ def test_buildings_list_and_detail(http):
     assert http.get("/buildings/nope").status_code == 404
 
 
+def vertical_cost(kind: str, rise_m: float) -> float:
+    """Kit 1.1.0: stairs 2 m per metre climbed; a lift ride 15 m + 1 m per metre climbed."""
+    return 2.0 * rise_m if kind == "stairs" else 15.0 + 1.0 * rise_m
+
+
 def route_length(route_map: dict, detail: dict) -> float:
-    """Length of the drawn lines plus the vertical connector costs (stairs 12 m/floor, lift 15 + 6 m/floor)."""
-    levels = {floor["id"]: floor["level"] for floor in detail["floors"]}
+    """Length of the drawn lines plus the stair and lift costs."""
+    elevations = {floor["id"]: floor["elevation_m"] for floor in detail["floors"]}
     total = 0.0
     for piece in route_map["route"]["pieces"]:
         total += sum(math.dist(a, b) for a, b in zip(piece["points"], piece["points"][1:]))
         then = piece["then"]
         if then and then["kind"] in ("stairs", "lift"):
-            span = abs(levels[then["to_floor_id"]] - levels[piece["floor_id"]])
-            total += 12.0 * span if then["kind"] == "stairs" else 15.0 + 6.0 * span
+            total += vertical_cost(then["kind"], abs(elevations[then["to_floor_id"]] - elevations[piece["floor_id"]]))
     return total
 
 
 def test_exact_polyline_length_is_the_route_length():
-    """The route model's own lines (through every anchor) add up to the route length."""
+    """The drawn lines follow the walk itself (door, landing, corners): with the stair and lift costs they add up
+    to the route length."""
     from navcore.engine import Building, Constraints
     from tests.conftest import DATA
 
     building = Building.load(DATA / "dev" / BUILDING)
-    route = building.route("proc-factory-dev-003-F0-S021", "proc-factory-dev-003-F1-S004", Constraints())
-    levels = {f["id"]: f["level"] for f in building.floors.values()}
-    total = 0.0
-    for piece in building.polyline(route):
-        total += sum(math.dist(a, b) for a, b in zip(piece["points"], piece["points"][1:]))
-        then = piece["then"]
-        if then and then["kind"] in ("stairs", "lift"):
-            span = abs(levels[then["to_floor_id"]] - levels[piece["floor_id"]])
-            total += 12.0 * span if then["kind"] == "stairs" else 15.0 + 6.0 * span
-    assert total == pytest.approx(route.length_m, abs=0.02)
+    for step_free in (False, True):
+        route = building.route("proc-factory-dev-003-F0-S021", "proc-factory-dev-003-F1-S004", Constraints(step_free))
+        drawn = route_length({"route": {"pieces": building.polyline(route)}},
+                             {"floors": list(building.floors.values())})
+        assert drawn == pytest.approx(route.length_m, abs=0.02)
 
 
-def test_map_lines_go_door_to_door_and_are_never_longer(http):
+def test_map_lines_match_the_route_length(http):
     detail = http.get(f"/buildings/{BUILDING}").json()
     response = http.post(f"/buildings/{BUILDING}/route",
                          json={"start": "Quality lab 0.21 (Ground floor)", "destination": "Office 1.04 (Floor 1)"})
     assert response.status_code == 200
     body = response.json()
-    assert route_length(body["map"], detail) <= body["summary"]["length_m"] + 0.01
+    assert route_length(body["map"], detail) == pytest.approx(body["summary"]["length_m"], abs=0.02)
     assert body["map"]["you_are_here"]["label"] == "Quality lab 0.21 (Ground floor)"
     assert body["map"]["focus_floor_id"].endswith("-F0")
 
 
-def test_route_vertices_are_anchors_or_doors(http):
+def test_route_lines_never_cross_a_wall(http):
+    """Every drawn segment stays inside one space, except the short steps through a door."""
+    from shapely.geometry import LineString, Polygon
+
     detail = http.get(f"/buildings/{BUILDING}").json()
-    anchors = {(space["floor_id"], tuple(space["anchor"])) for space in detail["spaces"]}
     doors = {(opening["floor_id"], tuple(opening["position"])) for opening in detail["openings"]}
+    outlines = {}
+    for space in detail["spaces"]:
+        outlines.setdefault(space["floor_id"], []).append(Polygon(space["polygon"]).buffer(0.02))
     body = http.post(f"/buildings/{BUILDING}/route",
                      json={"start": "Quality lab 0.21 (Ground floor)", "destination": "Office 1.04 (Floor 1)",
                            "step_free": True}).json()
     for piece in body["map"]["route"]["pieces"]:
-        for index, point in enumerate(piece["points"]):
-            key = (piece["floor_id"], tuple(point))
-            if 0 < index < len(piece["points"]) - 1:
-                assert key in doors  # the middle of a piece is door to door
-            else:
-                assert key in doors or key in anchors  # it starts and ends in a room (or at a door)
+        for a, b in zip(piece["points"], piece["points"][1:]):
+            if (piece["floor_id"], tuple(a)) in doors or (piece["floor_id"], tuple(b)) in doors:
+                assert math.dist(a, b) <= 0.31  # a door to its landing, 30 cm inside the space
+                continue
+            segment = LineString([a, b])
+            assert any(outline.covers(segment) for outline in outlines[piece["floor_id"]]), (a, b)
 
 
 def test_route_errors_are_422(http):

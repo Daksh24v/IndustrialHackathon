@@ -3,7 +3,7 @@
 import pytest
 from shapely.geometry import Polygon
 
-from evals.plans import compare
+from evals.plans import compare, told_heights
 from navcore.engine import Building
 from navcore.plans import (
     PlanError,
@@ -93,7 +93,7 @@ def test_assemble_doors_entrances_and_notes(tmp_path):
     assert any("Door widths" in note for note in notes)
     loaded = Building(building)  # a normal building: routing works on it
     office_a = next(s for s in building["spaces"] if s["ref"] == "0.01")["id"]
-    assert loaded.distances_from(office_a)["outside"] > 0
+    assert loaded.distances_to_exit()[office_a] > 0
 
 
 def upper_plan(tmp_path, shift=(3.0, -2.0), with_shafts=True):
@@ -176,7 +176,7 @@ def test_real_procedural_buildings_rebuild_exactly(building_id):
     path = DATA / "dev" / building_id
     truth = Building.load(path)
     imported, _ = import_plans(sorted(path.glob("floor_*.svg"), key=lambda p: int(p.stem.split("_")[1])),
-                               building_id="imp")
+                               building_id="imp", floor_heights_m=told_heights(truth))
     scores = compare(truth, imported)
     assert scores["spaces_matched"] == scores["spaces"]
     assert scores["doors_found"] == scores["doors"]

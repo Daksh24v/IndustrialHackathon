@@ -300,34 +300,40 @@ class Session:
         }
 
     def directions(self, route: Route) -> list[str]:
-        """One followable line per room change or floor change."""
+        """Followable steps: one line per door into another space and per stair or lift, with the metres."""
         building = self.building
+        openings = {opening["id"]: opening for opening in [*building.openings.values(), *self.new_openings]}
         steps = []
-        for previous, current, via in route.hops:
-            if current.startswith(DOOR_PREFIX):
-                continue
-            if current == OUTSIDE:
-                steps.append("Go outside through the entrance.")
-            elif via in building.connectors:
-                connector = building.connectors[via]
+        walked = 0.0
+        following = [*route.hops[1:], None]
+        for (previous, current, how), length, after in zip(route.hops, route.hop_lengths, following):
+            walked += length
+            if how in building.connectors:
+                connector = building.connectors[how]
                 verb = "Take" if connector["kind"] == "lift" else "Use"
                 floor = building.floor_name(building.spaces[current]["floor_id"])
                 steps.append(f"{verb} {connector['name']} ({connector['kind']}) to {floor}.")
-            elif previous == DOOR_PREFIX + via and building.openings.get(via, {}).get("kind") == "entrance":
-                steps.append(f"Come back in through the entrance into {building.label(current)}.")
-            else:
-                steps.append(f"Go into {building.spaces[current]['name']}.")
+                walked = 0.0
+            elif current.startswith(DOOR_PREFIX):
+                opening = openings[current.removeprefix(DOOR_PREFIX)]
+                if after is None:
+                    steps.append(f"Walk about {walked:.0f} m and leave the building through the entrance.")
+                    walked = 0.0
+                elif after[2] in building.spaces and after[2] != how:
+                    passage = "through the door" if opening["kind"] == "door" else "through the opening"
+                    steps.append(f"Walk about {walked:.0f} m {passage} into {building.spaces[after[2]]['name']}.")
+                    walked = 0.0
+        if not route.nodes[-1].startswith(DOOR_PREFIX):
+            steps.append(f"Walk about {walked:.0f} m. You have arrived at {building.label(route.nodes[-1])}.")
         return steps
 
     def nearest_exit(self, room: str, step_free: bool = False) -> dict:
-        """Walk from a room to its nearest entrance, with this conversation's changes."""
+        """Walk from a room out of the building through its nearest entrance, with this conversation's changes."""
         building = self.building
         space_id = find_space(building, room)
-        distance = building.distances_from(OUTSIDE, self.constraints(step_free)).get(space_id, math.inf)
-        if math.isinf(distance):
-            raise EngineError(f"No way out of {building.label(space_id)} with the current constraints.")
-        route = building.route(space_id, OUTSIDE, self.constraints(step_free))
-        return {"from": building.label(space_id), "walk_m": rounded(distance), "steps": self.directions(route)}
+        route = building.exit_route(space_id, self.constraints(step_free))
+        self.last_route = [route]
+        return {"from": building.label(space_id), "walk_m": rounded(route.length_m), "steps": self.directions(route)}
 
     def nearest_with_asset(self, start: str, asset_type: str, step_free: bool = False) -> dict:
         building = self.building
@@ -605,7 +611,9 @@ class Session:
         if show_last_route:
             if not self.last_route:
                 raise EngineError("No route computed yet: call find_route first.")
-            pieces = [piece for leg in self.last_route for piece in building.polyline(leg, through_anchors=False)]
+            added = tuple(self.new_openings)
+            pieces = [piece for leg in self.last_route
+                      for piece in building.polyline(leg, through_anchors=False, extra_openings=added)]
             view["route"] = {"length_m": rounded(sum(leg.length_m for leg in self.last_route)), "pieces": pieces}
         if floor:
             view["focus_floor_id"] = find_floor(building, floor)

@@ -48,6 +48,15 @@ def shifted(building: dict, dx: float, dy: float) -> dict:
     return building
 
 
+def told_heights(truth: Building) -> dict[int, float]:
+    """Floor heights as the person tells the builder (the plans don't show them, so the builder asks): kit 1.1.0
+    charges stairs and lifts by the metres climbed."""
+    floors = sorted(truth.floors.values(), key=lambda floor: floor["level"])
+    heights = {low["level"]: high["elevation_m"] - low["elevation_m"] for low, high in zip(floors, floors[1:])}
+    heights[floors[-1]["level"]] = floors[-1].get("height_m", 3.5)
+    return heights
+
+
 def compare(truth: Building, imported: dict) -> dict:
     """Scores for one building: counts and matches, plus answer checks."""
     result: Counter = Counter()
@@ -155,8 +164,8 @@ def run(buildings: list[str], verbose: bool, quiet: bool = False) -> Counter:
         path = paths[building_id]
         truth = Building.load(path)
         try:
-            imported, _ = import_plans(sorted(path.glob("floor_*.svg"),
-                                              key=lambda p: int(p.stem.split("_")[1])), building_id="imp")
+            imported, _ = import_plans(sorted(path.glob("floor_*.svg"), key=lambda p: int(p.stem.split("_")[1])),
+                                       building_id="imp", floor_heights_m=told_heights(truth))
             scores = compare(truth, imported)
         except (PlanError, StopIteration, ValueError) as error:
             total["failed"] += 1

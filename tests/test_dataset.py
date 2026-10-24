@@ -37,6 +37,8 @@ def pytest_generate_tests(metafunc):
 
 
 def test_route_lengths_match_to_the_centimetre(route_question):
+    """Kit 1.1.0 rules: length to the centimetre, every space passed and every door, stair flight and lift ride
+    used, and "no route" exactly where the expected answer says so (there is no way round the outside)."""
     directory, question = route_question
     answer = question["answer"]
     closed = frozenset([answer["closed_element_id"]]) if answer.get("closed_element_id") else frozenset()
@@ -44,13 +46,21 @@ def test_route_lengths_match_to_the_centimetre(route_question):
     target = building(directory)
     if answer.get("reachable") is False:
         with pytest.raises(EngineError):
-            target.route(answer["from_space_id"], answer["to_space_id"], constraints)
+            if question["kind"] == "tour":
+                target.tour(answer["stops"], constraints)
+            else:
+                target.route(answer["from_space_id"], answer["to_space_id"], constraints)
         return
     if question["kind"] == "tour":
-        length = sum(leg.length_m for leg in target.tour(answer["stops"], constraints))
-    else:
-        length = target.route(answer["from_space_id"], answer["to_space_id"], constraints).length_m
-    assert length == pytest.approx(answer["optimal_length_m"], abs=0.011)
+        legs = target.tour(answer["stops"], constraints)
+        assert sum(leg.length_m for leg in legs) == pytest.approx(answer["optimal_length_m"], abs=0.011)
+        for leg, expected in zip(legs, answer["legs"], strict=True):
+            assert leg.length_m == pytest.approx(expected["optimal_length_m"], abs=0.011)
+        return
+    route = target.route(answer["from_space_id"], answer["to_space_id"], constraints)
+    assert route.length_m == pytest.approx(answer["optimal_length_m"], abs=0.011)
+    assert route.space_path == answer["space_path"]
+    assert route.element_path == answer["element_path"]
 
 
 def call_tools_like_the_agent(session: Session, question: dict) -> None:

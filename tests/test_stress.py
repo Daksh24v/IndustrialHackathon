@@ -97,8 +97,8 @@ def test_two_cores_and_missing_step_free_flags():
 
 def test_step_only_entrance_blocks_wheelchairs_from_outside():
     building = two_cores()
-    assert "outside" in building.distances_from("S-C0")
-    assert "outside" not in building.distances_from("S-C0", Constraints(step_free=True))
+    assert "S-C0" in building.distances_to_exit()
+    assert "S-C0" not in building.distances_to_exit(Constraints(step_free=True))
 
 
 def test_duplicate_names_are_reported_with_labels():
@@ -135,6 +135,7 @@ def test_lift_cost_model_over_several_floors():
         (f"S-L{level}", level, "lift", "lift", f"Lift {level}", square(0, 0, 2, 2)) for level in (0, 1, 2)
     ], connectors=[{"id": "S-V", "kind": "lift", "name": "Lift", "floor_ids": ["S-F0", "S-F1", "S-F2"],
                     "space_ids": ["S-L0", "S-L1", "S-L2"], "step_free": True}])
-    # consecutive stops: each hop pays the 15 m wait, as in the README model
-    assert building.route("S-L0", "S-L2").length_m == pytest.approx(2 * (15 + 6))
+    # kit 1.1.0: one ride pays the 15 m once, plus 1 m per metre climbed (two floors of 4 m)
+    assert building.route("S-L0", "S-L2").length_m == pytest.approx(15 + 8.0)
+    assert building.route("S-L0", "S-L2").element_path == ["S-V"]
     assert math.isclose(building.straight_line_3d("S-L0", "S-L2"), 8.0)
