@@ -3,6 +3,14 @@ import type { StepKind } from '../steps';
 
 const line = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' } as const;
 
+/** Walls: a corner of a room, tall on one side and cut low on the other. */
+export const Walls = ({ mode }: { mode: 'cutaway' | 'low' | 'full' }) => (
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M3 19 L12 22 L21 19" {...line} />
+    <path d={mode === 'full' ? 'M3 19 V7 L12 4 L21 7 V19' : mode === 'low' ? 'M3 19 V16 M21 19 V16' : 'M3 19 V7 L12 4 V10 M21 19 V15'} {...line} />
+  </svg>
+);
+
 export const Mic = () => (
   <svg viewBox="0 0 24 24" aria-hidden="true">
     <rect x="8.5" y="2.5" width="7" height="12" rx="3.5" fill="currentColor" />

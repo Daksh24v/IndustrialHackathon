@@ -395,6 +395,45 @@ export function zigzag([ax, ay]: Point, [bx, by]: Point, steps = 6, amplitude = 
   return points;
 }
 
+/** The smallest rectangle around a polygon, turned to fit it (its long side along u): the way a stair or a room
+ * lies. fill is how much of the rectangle the polygon covers (1 = the polygon is that rectangle). */
+export interface OrientedBox {
+  centre: Point;
+  u: Point; // unit, along the long side
+  v: Point; // unit, u turned a quarter counter-clockwise
+  length: number; // along u
+  width: number; // along v
+  fill: number;
+}
+
+export function orientedBox(polygon: Point[]): OrientedBox {
+  let best: OrientedBox | null = null;
+  const area = Math.abs(signedArea(polygon));
+  for (let i = 0; i < polygon.length; i += 1) {
+    const a = polygon[i];
+    const b = polygon[(i + 1) % polygon.length];
+    const l = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (l < 1e-6) continue;
+    const e: Point = [(b[0] - a[0]) / l, (b[1] - a[1]) / l];
+    const f: Point = [-e[1], e[0]];
+    let [e0, e1, f0, f1] = [Infinity, -Infinity, Infinity, -Infinity];
+    for (const [x, y] of polygon) {
+      const pe = x * e[0] + y * e[1];
+      const pf = x * f[0] + y * f[1];
+      [e0, e1, f0, f1] = [Math.min(e0, pe), Math.max(e1, pe), Math.min(f0, pf), Math.max(f1, pf)];
+    }
+    const box = (e1 - e0) * (f1 - f0);
+    if (best && box >= best.length * best.width - 1e-9) continue;
+    const [ce, cf] = [(e0 + e1) / 2, (f0 + f1) / 2];
+    const centre: Point = [ce * e[0] + cf * f[0], ce * e[1] + cf * f[1]];
+    const long = e1 - e0 >= f1 - f0;
+    const u = long ? e : f;
+    best = { centre, u, v: [-u[1], u[0]], length: long ? e1 - e0 : f1 - f0, width: long ? f1 - f0 : e1 - e0,
+             fill: box > 0 ? area / box : 0 };
+  }
+  return best ?? { centre: polygon[0] ?? [0, 0], u: [1, 0], v: [0, 1], length: 0, width: 0, fill: 0 };
+}
+
 /** How far a point is from the segment a–b. */
 export function segmentDistance([px, py]: Point, [ax, ay]: Point, [bx, by]: Point): number {
   const dx = bx - ax;

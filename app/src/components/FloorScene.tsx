@@ -1,22 +1,32 @@
-/** One floor in 3D: the camera looks down at an angle with perspective, rooms are tiles on a floor slab, walls
- * stand up (low, so you can see into the rooms) with gaps at the doors, the route is an orange band on the
- * floor with arrows flowing along it, the target is a pin and you are an orange disc on the floor. Rooms are tinted
- * by what they're for; machines and equipment stand in them as lit boxes, furniture lies flat. Below, on the ground,
- * the OpenStreetMap neighbourhood when there is one: streets, green, water and next door's outlines.
+/** One floor in 3D: the camera looks down at an angle with perspective, rooms are tiles on a floor slab with the
+ * floor they really have (tiles in the bathrooms, a checkerboard in the kitchen, planks at home), walls with
+ * thickness stand full height on the far side and cut down elsewhere so you see into the rooms (the cut drawn as a
+ * cap, as on an architect's plan), doors stand open with their swing on the floor, stairs are real steps up (and down
+ * into the floor below), and every thing in the rooms is a small block model of what it is (models/catalog.ts):
+ * the closer you get, the more detail. The route is an orange band on the floor with arrows flowing along it, the
+ * target is a pin and you are an orange disc on the floor. Below, on the ground, the OpenStreetMap neighbourhood
+ * when there is one: streets, green, water and next door's outlines.
  * Drawn with SVG (no 3D engine: those crash Expo Go on iPhones). Drag to turn (mouse) or move (touch), Shift+drag
  * or right-drag to move, wheel / pinch / +/− to zoom. */
 import { type ComponentRef, type MutableRefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
-import Svg, { G, Path, Text as SvgText } from 'react-native-svg';
+import Svg, { Circle, ClipPath, Defs, G, Path, Text as SvgText } from 'react-native-svg';
 
 import type { BuildingDetail, Context, MapView, Point } from '../api';
 import { assetsOn, changesOn } from '../changes';
+import { finishOf, finishPattern } from '../finishes';
 import {
-  assetRect, boundsOf, chooseCamera, clipNear, depthOf, fitCamera, grow, moveCamera, nearby, pixelsPerMetre, project3d, ribbon, rotateAbout,
-  signedArea, unproject3d, wallSegments, type Camera, type Point3,
+  assetRect, boundsOf, chooseCamera, clipNear, depthOf, fitCamera, grow, moveCamera, nearby, pixelsPerMetre, pointInPolygon,
+  project3d, ribbon, rotateAbout, signedArea, unproject3d, type Camera, type Point3,
 } from '../geometry';
 import { useMapGestures } from '../gestures';
-import { assetStyle, colours, map as mapColours, nearStyle, roomStyle, shade } from '../theme';
+import { modelOf, SITS_ON_SURFACE, surfaceOf } from '../models/catalog';
+import type { Part } from '../models/kit';
+import { colourOf } from '../models/materials';
+import { cameraView, modelFaces } from '../models/render';
+import { layoutStairs, stairInput } from '../stairs';
+import { colours, map as mapColours, nearStyle, roomStyle } from '../theme';
+import { doorLeaves, floorWalls, leafParts, wallHeight, type WallMode, wallParts } from '../walls';
 import type { MapHandle } from '../ui/MapControls';
 import { safetyMarks } from '../safety';
 import { landmarkNames, routeSpaces, routeSteps } from '../steps';
@@ -33,6 +43,19 @@ const MIN_LABEL_PX = 38;
 const MARGIN_PX = 120; // drawn beyond the edges, so dragging doesn't show blank space
 const TURN_MS = 450;
 const MIN_ASSET_PX = 3; // things smaller than this on screen aren't drawn
+/** Pixels per metre where a thing shows more: below the first only its footprint, then its shape, then the
+ * model, then the small details (handles, burners, books). */
+const DETAIL_PX = [5, 13, 30];
+const DETAIL_BUDGET = [Infinity, 900, 260]; // at most this many things with the model / with every detail
+const FINISH_PX = 16; // floor tiles and planks show from this close
+const SHARP_MS = 140; // after turning or flying stops, the scene is drawn once more in full detail
+/** More faces than this (a whole big floor) and the faces of one colour are drawn as one shape, far to near by
+ * colour rather than face by face: hundreds of shapes instead of thousands, so it stays smooth. */
+const FACE_BUDGET = 2400;
+const FACE_BUDGET_BUSY = 1200;
+const CHAIRS = new Set(['chair', 'office_chair', 'dining_chair', 'outdoor_chair', 'armchair']);
+const TABLES = new Set(['desk', 'meeting_table', 'dining_table', 'seminar_table', 'canteen_table', 'reading_table', 'coffee_table',
+                        'outdoor_table', 'lab_bench', 'workbench', 'reception_desk', 'lecture_seating_row']);
 const GRID_M = 5;
 const GRID_REACH_M = 40; // how far the ground grid reaches beyond the building
 const NEAR_REACH_M = 150; // how much of the neighbourhood is drawn
@@ -103,31 +126,174 @@ interface Props {
   tilt?: number;
   /** Safety mode: everything dims but exits, extinguishers, defibrillators, eyewash stations and the stairs. */
   safety?: boolean;
+  /** How the walls stand: cut away so you see in (default), all low, or all full height. */
+  walls?: WallMode;
+}
+
+type SignKind = 'wc' | 'kitchen' | 'stairs' | 'lift' | 'meeting';
+
+/** The rooms people look for get a small sign by their name. */
+function signOf(space: { type: string; room_type: string }): SignKind | null {
+  if (space.room_type === 'toilet' || space.room_type === 'bathroom') return 'wc';
+  if (space.room_type === 'kitchen' || space.room_type === 'canteen') return 'kitchen';
+  if (space.type === 'stair') return 'stairs';
+  if (space.type === 'lift') return 'lift';
+  if (space.room_type === 'meeting_room' || space.room_type === 'seminar_room') return 'meeting';
+  return null;
+}
+
+const SIGN_COLOURS: Record<SignKind, string> = {
+  wc: '#2F80ED', kitchen: '#B565D9', stairs: '#2E9E5B', lift: '#3B82F6', meeting: '#5B6CFF',
+};
+
+/** A round sign: WC, a cup, steps, a lift's arrows, a table. */
+function Sign({ kind, x, y, size }: { kind: SignKind; x: number; y: number; size: number }) {
+  const r = size / 2;
+  const s = r * 0.55;
+  const glyph: Record<SignKind, string> = {
+    wc: '',
+    kitchen: `M${x - s * 0.7} ${y - s * 0.5} L${x + s * 0.5} ${y - s * 0.5} L${x + s * 0.35} ${y + s * 0.7} L${x - s * 0.55} ${y + s * 0.7} Z ` +
+             `M${x + s * 0.5} ${y - s * 0.2} L${x + s * 0.95} ${y - s * 0.2} L${x + s * 0.95} ${y + s * 0.3} L${x + s * 0.4} ${y + s * 0.3}`,
+    stairs: `M${x - s} ${y + s * 0.8} L${x - s * 0.4} ${y + s * 0.8} L${x - s * 0.4} ${y + s * 0.2} L${x + s * 0.2} ${y + s * 0.2} ` +
+            `L${x + s * 0.2} ${y - s * 0.4} L${x + s * 0.8} ${y - s * 0.4} L${x + s * 0.8} ${y - s}`,
+    lift: `M${x} ${y - s} L${x + s * 0.6} ${y - s * 0.15} L${x - s * 0.6} ${y - s * 0.15} Z M${x} ${y + s} L${x + s * 0.6} ${y + s * 0.15} ` +
+          `L${x - s * 0.6} ${y + s * 0.15} Z`,
+    meeting: `M${x - s} ${y - s * 0.2} L${x + s} ${y - s * 0.2} M${x - s * 0.6} ${y - s * 0.2} L${x - s * 0.6} ${y + s * 0.8} ` +
+             `M${x + s * 0.6} ${y - s * 0.2} L${x + s * 0.6} ${y + s * 0.8}`,
+  };
+  return (
+    <G>
+      <Circle cx={x} cy={y} r={r} fill={SIGN_COLOURS[kind]} stroke={mapColours.background} strokeWidth={1} />
+      {kind === 'wc' ? (
+        <SvgText x={x} y={y + r * 0.35} fontSize={r * 0.95} fontWeight="700" fontFamily={LABEL_FONT} textAnchor="middle" fill="#FFFFFF">WC</SvgText>
+      ) : (
+        <Path d={glyph[kind]} stroke="#FFFFFF" strokeWidth={Math.max(1, r * 0.18)} fill={kind === 'lift' ? '#FFFFFF' : 'none'}
+              strokeLinejoin="round" strokeLinecap="round" />
+      )}
+    </G>
+  );
+}
+
+/** Text with a halo in the map's background colour, so it reads over the models. */
+function Halo({ x, y, size, fill, text, bold = false }: { x: number; y: number; size: number; fill: string; text: string; bold?: boolean }) {
+  const common = { x, y, fontSize: size, fontFamily: LABEL_FONT, textAnchor: 'middle' as const, fontWeight: bold ? '700' : '400' };
+  return (
+    <>
+      <SvgText {...common} fill={mapColours.background} stroke={mapColours.background} strokeWidth={2.5} strokeOpacity={0.85}>{text}</SvgText>
+      <SvgText {...common} fill={fill}>{text}</SvgText>
+    </>
+  );
 }
 
 const n = (value: number) => (Math.round(value * 10) / 10).toString();
+
+/** A rectangle grown by m on every side (about its middle). */
+function grow4(rect: Point[], m: number): Point[] {
+  const cx = rect.reduce((sum, p) => sum + p[0], 0) / rect.length;
+  const cy = rect.reduce((sum, p) => sum + p[1], 0) / rect.length;
+  return rect.map(([x, y]) => {
+    const l = Math.hypot(x - cx, y - cy) || 1;
+    return [x + ((x - cx) / l) * m, y + ((y - cy) / l) * m] as Point;
+  });
+}
 
 function path(points: Point[], close = true): string {
   return points.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${n(x)} ${n(y)}`).join(' ') + (close ? ' Z' : '');
 }
 
-/** A wall's colour, from facing away from the light (0) to facing it (1). */
-function wallShade(lit: number): string {
-  const [d, l] = [mapColours.wallDark, mapColours.wallLit];
-  return `rgb(${d.map((v, i) => Math.round(v + (l[i] - v) * lit)).join(', ')})`;
-}
-
 interface Solid {
   depth: number; // bigger = farther, drawn first
-  faces: { d: string; fill: string; stroke: string }[];
-  rim?: string; // a bright line along the top
+  faces: { d: string; fill: string; stroke: string; opacity?: number }[];
   opacity?: number; // things off the route fade
+}
+
+/** What is finally drawn: one path, maybe many faces of the same colour. */
+interface Drawn {
+  key: string;
+  d: string;
+  fill: string;
+  fillOpacity: number;
+  stroke: string;
+  opacity: number;
+}
+
+const BANDS = 24; // past the budget: far to near in this many bands, one path per colour in each
+
+/** The solids, far to near, as paths: face by face (faces next to each other in the same colour joined), or, past
+ * the budget, one path per colour within each band of distance (so near things still cover far ones). */
+export function drawSolids(solids: Solid[], budget: number): Drawn[] {
+  const count = solids.reduce((sum, solid) => sum + solid.faces.length, 0);
+  const out: Drawn[] = [];
+  if (count > budget) {
+    const per = Math.ceil(solids.length / BANDS);
+    for (let band = 0; band * per < solids.length; band += 1) {
+      const groups = new Map<string, Drawn>();
+      for (const solid of solids.slice(band * per, (band + 1) * per)) {
+        for (const face of solid.faces) {
+          const key = `${band}|${face.fill}|${face.opacity ?? 1}|${solid.opacity ?? 1}`;
+          const group = groups.get(key);
+          if (group) group.d += ` ${face.d}`;
+          else groups.set(key, { key, d: face.d, fill: face.fill, fillOpacity: face.opacity ?? 1, stroke: face.stroke, opacity: solid.opacity ?? 1 });
+        }
+      }
+      out.push(...groups.values());
+    }
+    return out;
+  }
+  solids.forEach((solid, i) => {
+    let last: Drawn | null = null;
+    solid.faces.forEach((face, j) => {
+      if (last && last.fill === face.fill && last.stroke === face.stroke && last.fillOpacity === (face.opacity ?? 1)) {
+        last.d += ` ${face.d}`;
+        return;
+      }
+      last = { key: `${i}-${j}`, d: face.d, fill: face.fill, fillOpacity: face.opacity ?? 1, stroke: face.stroke, opacity: solid.opacity ?? 1 };
+      out.push(last);
+    });
+  });
+  return out;
+}
+
+/** Where each thing stands and which way it looks: chairs turned to face their table (the data doesn't say which
+ * way a chair faces), small appliances lifted onto the counter or desk they stand on. */
+export function placeThings<T extends { id: string; type: string; space_id: string; position: Point;
+                                        footprint: { width_m: number; depth_m: number; rotation_deg: number } }>(assets: T[]) {
+  const surfaces = assets.filter((asset) => surfaceOf(asset.type) !== null);
+  const tables = assets.filter((asset) => TABLES.has(asset.type));
+  return new Map(assets.map((asset) => {
+    let angle = (asset.footprint.rotation_deg * Math.PI) / 180;
+    let z = 0;
+    if (CHAIRS.has(asset.type)) {
+      let best: { d: number; to: Point } | null = null;
+      for (const table of tables) {
+        if (table.space_id !== asset.space_id) continue;
+        const to: Point = [table.position[0] - asset.position[0], table.position[1] - asset.position[1]];
+        const reach = 1.5 + Math.max(table.footprint.width_m, table.footprint.depth_m) / 2;
+        const d = Math.hypot(to[0], to[1]);
+        if (d < reach && (!best || d < best.d)) best = { d, to };
+      }
+      if (best) {
+        // face the table squarely: the front (-y) turned to the nearest quarter towards it
+        // (half turns only for a chair that isn't square, so it keeps its footprint)
+        const exact = Math.atan2(best.to[0], -best.to[1]);
+        const step = Math.abs(asset.footprint.width_m - asset.footprint.depth_m) > 0.05 ? Math.PI : Math.PI / 2;
+        angle += Math.round((exact - angle) / step) * step;
+      }
+    }
+    if (SITS_ON_SURFACE.has(asset.type)) {
+      for (const surface of surfaces) {
+        if (surface === asset || surface.space_id !== asset.space_id) continue;
+        if (pointInPolygon(asset.position, assetRect(surface.position, surface.footprint))) z = Math.max(z, surfaceOf(surface.type)!);
+      }
+    }
+    return [asset.id, { angle, z }] as const;
+  }));
 }
 
 const OFF_ROUTE = 0.28; // with a route: things in rooms you don't pass fade to this
 
 export function FloorScene({ detail, floorId, map, footprints, context, width, height, onTapFloor, controls = true, handleRef,
-                            inset = NO_INSET, highlight, focus, tilt = TILT, safety = false }: Props) {
+                            inset = NO_INSET, highlight, focus, tilt = TILT, safety = false, walls: wallMode = 'cutaway' }: Props) {
   const marks = useMemo(() => (safety ? safetyMarks(detail, floorId) : []), [safety, detail, floorId]);
   // Along a route: the things in the rooms you pass stay bright, the thing you're looking for turns orange with its
   // name, a landmark named in the steps gets its name too; everything else fades.
@@ -138,11 +304,41 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
   const openings = useMemo(() => detail.openings.filter((opening) => opening.floor_id === floorId), [detail, floorId]);
   const changes = useMemo(() => changesOn(detail, map, floorId), [detail, map, floorId]);
   const newDoors = map?.changes?.new_doors;
+  const storey = detail.floors.find((floor) => floor.id === floorId)?.height_m ?? 3;
   const walls = useMemo(() => {
     const added = (newDoors ?? []).filter((door) => door.floor_id === floorId); // a new door cuts a gap too
-    return wallSegments(spaces.map((space) => space.polygon), [...openings, ...added]);
-  }, [spaces, openings, newDoors, floorId]);
+    return floorWalls(spaces, [...openings, ...added], footprints);
+  }, [spaces, openings, newDoors, floorId, footprints]);
+  const leaves = useMemo(() => doorLeaves(openings, spaces, walls), [openings, spaces, walls]);
+  const stairs = useMemo(() => spaces.flatMap((space) => {
+    if (space.type !== 'stair') return [];
+    const laid = layoutStairs(stairInput(detail, space));
+    return laid ? [{ id: space.id, ...laid }] : [];
+  }), [spaces, detail]);
   const assets = useMemo(() => assetsOn(detail, map, floorId), [detail, map, floorId]);
+  const placed = useMemo(() => placeThings(assets), [assets]);
+  const roomOf = useMemo(() => new Map(spaces.map((space) => [space.id, space.room_type])), [spaces]);
+  const finishes = useMemo(() => spaces.flatMap((space) => {
+    const finish = finishOf(space);
+    return finish ? [{ id: space.id, anchor: space.anchor, ...finishPattern(space, finish), kind: finish.kind }] : [];
+  }), [spaces]);
+  // Walls and door leaves as parts, kept per height (the cut changes as the view turns).
+  const wallCache = useMemo(() => new Map<string, Part[]>(), [walls]);
+  // Turning by hand or flying: drawn with a little less detail, then once more sharp when it stops.
+  const busy = useRef(false);
+  const [sharp, setSharp] = useState(0);
+  const settle = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const moving = () => {
+    busy.current = true;
+    if (settle.current) clearTimeout(settle.current);
+    settle.current = setTimeout(() => {
+      busy.current = false;
+      setSharp((k) => k + 1);
+    }, SHARP_MS);
+  };
+  useEffect(() => () => {
+    if (settle.current) clearTimeout(settle.current);
+  }, []);
   const around = useMemo(
     () => (context && footprints.length ? nearby(context, boundsOf(footprints.flat()), NEAR_REACH_M) : null),
     [context, footprints],
@@ -202,6 +398,7 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
     const began = Date.now();
     const step = () => {
       const t = Math.min(1, (Date.now() - began) / TURN_MS);
+      moving();
       setCam(rotateAbout(start, pivot, angle * Easing.inOut(Easing.cubic)(t)));
       turning.current = t < 1 ? requestAnimationFrame(step) : null;
     };
@@ -230,7 +427,10 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
       beginTurn: () => {
         const start = camera.current;
         const pivot = unproject3d(start, middleRef.current());
-        return (angle) => setCam(rotateAbout(start, pivot, angle));
+        return (angle) => {
+          moving();
+          setCam(rotateAbout(start, pivot, angle));
+        };
       },
       watchYaw: (watch) => {
         watchers.current.add(watch);
@@ -261,6 +461,7 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
     const mix = (x: number, y: number, t: number) => x + (y - x) * t;
     const step = () => {
       const t = Easing.inOut(Easing.cubic)(Math.min(1, (Date.now() - began) / FLY_MS));
+      moving();
       setCam({
         ...goal, yaw: from.yaw + turnBy * t, target: [mix(from.target[0], goal.target[0], t), mix(from.target[1], goal.target[1], t)],
         distance: mix(from.distance, goal.distance, t), scale: mix(from.scale, goal.scale, t), ox: mix(from.ox, goal.ox, t),
@@ -301,6 +502,7 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
       const dy = event.clientY - drag.y;
       if (Math.abs(dx) + Math.abs(dy) > TAP_SLOP_PX) drag.moved = true;
       if (!drag.moved) return;
+      moving();
       if (drag.mode === 'turn') setCam(orbit(drag.start, drag.pivot, dx * DRAG_TURN, drag.start.tilt - dy * DRAG_TILT));
       else setCam(moveCamera(drag.start, 1, dx, dy, size.current.width, size.current.height));
     };
@@ -326,7 +528,10 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
         return;
       }
       if (!twist) twist = { angle: touchAngle(event), start: camera.current, pivot: pivotOf(camera.current) };
-      else setCam(rotateAbout(twist.start, twist.pivot, twist.angle - touchAngle(event)));
+      else {
+        moving();
+        setCam(rotateAbout(twist.start, twist.pivot, twist.angle - touchAngle(event)));
+      }
     };
     node.addEventListener('pointerdown', onDown);
     node.addEventListener('pointermove', onMove);
@@ -398,12 +603,26 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
       }),
     };
 
+    const view = cameraView(cam);
+    const seen = (p: Point) => depthOf(cam, p) > cam.distance * 0.3;
     const tiles = spaces.map((space) => {
       const closed = changes.closedSpaces.has(space.id);
       const style = roomStyle(space);
       return { id: space.id, d: flat(space.polygon), closed, fill: closed ? mapColours.closedFaint : style.fill,
                edge: closed ? colours.closed : style.edge };
     }).filter((tile) => tile.d);
+
+    // The floor finishes, close up: lines (and a checkerboard's dark squares) clipped to the room.
+    const tileOf = new Map(tiles.map((tile) => [tile.id, tile.d!]));
+    const floorings = finishes.flatMap((finish) => {
+      const room = tileOf.get(finish.id);
+      if (!room || !seen(finish.anchor) || pixelsPerMetre(cam, finish.anchor) < FINISH_PX) return [];
+      const lines = finish.lines.filter(([a, b]) => seen(a) && seen(b))
+        .map(([a, b]) => path([project3d(cam, a, 0.005), project3d(cam, b, 0.005)], false)).join(' ');
+      const squares = finish.squares.filter((square) => square.every(seen))
+        .map((square) => path(square.map((p) => project3d(cam, p, 0.005)))).join(' ');
+      return [{ id: finish.id, clip: room, lines, squares, kind: finish.kind }];
+    });
 
     const lit = highlight && highlight.length > 1 ? flat(ribbon(highlight, 0.5), 0.035) : null;
     const routes = pieces.map((piece) => ({
@@ -412,81 +631,169 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
       line: path(piece.points.filter((p) => depthOf(cam, p) > cam.distance * 0.3).map((p) => project3d(cam, p, 0.04)), false),
     }));
 
-    // Walls far to near; lit from one side so their direction reads.
-    const light: Point = [0.6, -0.8];
-    const turnedLit = ([ex, ey]: Point) => {
-      const c = Math.cos(cam.yaw);
-      const s = Math.sin(cam.yaw);
-      return Math.abs((ex * c - ey * s) * light[0] + (ex * s + ey * c) * light[1]); // turned like the view
-    };
     const solids: Solid[] = [];
-    for (const [a, b] of walls) {
-      const side = clipNear(cam, [a, b], WALL_M);
-      if (side.length < 2) continue;
-      const [p, q] = side;
-      const quad = [project3d(cam, p, 0), project3d(cam, q, 0), project3d(cam, q, WALL_M), project3d(cam, p, WALL_M)];
-      if (!onScreen(quad)) continue;
-      const length = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1;
-      const shine = turnedLit([-(q[1] - p[1]) / length, (q[0] - p[0]) / length]); // by the wall's normal
-      solids.push({ faces: [{ d: path(quad), fill: wallShade(shine), stroke: mapColours.slabEdge }],
-                    rim: path([quad[3], quad[2]], false), depth: depthOf(cam, p) + depthOf(cam, q) });
+    const facesOf = (faces: ReturnType<typeof modelFaces>) => faces.map(({ d, fill, stroke, opacity }) => ({ d, fill, stroke, opacity }));
+    const nearPpm = pixelsPerMetre(cam, cam.target);
+    const wallDetail = nearPpm < DETAIL_PX[1] ? 0 : nearPpm < DETAIL_PX[2] ? 1 : 2;
+
+    // Walls: full height on the far side of the building (with its windows), cut down elsewhere, far to near.
+    for (const wall of walls) {
+      if (!seen(wall.a) || !seen(wall.b)) continue;
+      const tall = wallHeight(wall, view.toViewer(wall.centre), wallMode, storey);
+      const ends = [project3d(cam, wall.a, 0), project3d(cam, wall.b, 0), project3d(cam, wall.a, tall), project3d(cam, wall.b, tall)];
+      if (!onScreen(ends)) continue;
+      const key = `${wall.key}|${tall.toFixed(2)}`;
+      let parts = wallCache.get(key);
+      if (!parts) {
+        parts = wallParts(wall, tall);
+        wallCache.set(key, parts);
+      }
+      solids.push({ faces: facesOf(modelFaces(`wall|${wall.length.toFixed(2)}|${wall.outer}|${key}`, parts,
+                                               { at: wall.centre, angle: wall.angle }, view, wallDetail)),
+                    depth: depthOf(cam, wall.a) + depthOf(cam, wall.b) });
     }
 
-    // Things in the rooms: flat ones lie on the floor, the rest are boxes standing among the walls.
+    // Open doors, cut at the walls' height, and the arc each swings through.
+    const swings: string[] = [];
+    const leafHeight = wallMode === 'low' ? 0.4 : wallMode === 'full' ? Math.min(2.1, storey - 0.2) : 1.2;
+    for (const leaf of leaves) {
+      if (!seen(leaf.centre)) continue;
+      const ppm = pixelsPerMetre(cam, leaf.centre);
+      if (ppm * leaf.width < 6) continue;
+      if (ppm >= DETAIL_PX[1]) swings.push(path(leaf.arc.map((p) => project3d(cam, p, 0.01)), false) +
+        ` L${n(project3d(cam, leaf.centre, 0.01)[0])} ${n(project3d(cam, leaf.centre, 0.01)[1])}`);
+      const key = `${leaf.key}|${leafHeight}`;
+      let parts = wallCache.get(key);
+      if (!parts) {
+        parts = leafParts(leaf, leafHeight);
+        wallCache.set(key, parts);
+      }
+      solids.push({ faces: facesOf(modelFaces(`leaf|${leaf.width.toFixed(2)}|${leafHeight}`, parts,
+                                               { at: leaf.centre, angle: leaf.angle }, view, 1)),
+                    depth: 2 * depthOf(cam, leaf.centre) - 0.01 });
+    }
+
+    // Stairs: the steps, the opening going down, and what is drawn over them (outlines above the cut, rails, arrows).
+    const voids: string[] = [];
+    const stairLines: { d: string; kind: 'ghost' | 'rail' | 'break' | 'arrow' }[] = [];
+    const stairTags: { id: string; x: number; y: number; text: string }[] = [];
+    const line3 = (points: Point3[], close = false) => path(points.map(([x, y, z]) => project3d(cam, [x, y], z)), close);
+    for (const stair of stairs) {
+      if (!seen(stair.centre)) continue;
+      const ppm = pixelsPerMetre(cam, stair.centre);
+      for (const hole of stair.voids) {
+        const d = flat(hole, 0.004);
+        if (d) voids.push(d);
+      }
+      solids.push({ faces: facesOf(modelFaces(stair.key, stair.parts, { at: stair.centre, angle: stair.angle }, view, 2)),
+                    depth: 2 * depthOf(cam, stair.centre) });
+      if (ppm < DETAIL_PX[0]) continue;
+      for (const ring of stair.ghosts) stairLines.push({ d: line3(ring, true), kind: 'ghost' });
+      for (const rail of stair.rails) stairLines.push({ d: line3(rail), kind: 'rail' });
+      for (const cut of stair.breaks) stairLines.push({ d: line3(cut), kind: 'break' });
+      for (const arrow of stair.arrows) {
+        stairLines.push({ d: line3(arrow.points), kind: 'arrow' });
+        const [a, b] = arrow.points.slice(-2);
+        const [p, q] = [project3d(cam, [a[0], a[1]], a[2]), project3d(cam, [b[0], b[1]], b[2])];
+        const l = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1;
+        const [ux, uy] = [(q[0] - p[0]) / l, (q[1] - p[1]) / l];
+        const head = Math.min(9, Math.max(4, ppm * 0.25));
+        stairLines.push({ d: `M${n(q[0] - ux * head - uy * head * 0.6)} ${n(q[1] - uy * head + ux * head * 0.6)} L${n(q[0])} ${n(q[1])} ` +
+                             `L${n(q[0] - ux * head + uy * head * 0.6)} ${n(q[1] - uy * head - ux * head * 0.6)}`, kind: 'arrow' });
+        if (ppm >= DETAIL_PX[1]) {
+          const [x, y] = project3d(cam, [arrow.points[0][0], arrow.points[0][1]], arrow.points[0][2]);
+          stairTags.push({ id: `${stair.id}-${arrow.up ? 'up' : 'dn'}`, x, y, text: arrow.up ? 'UP' : 'DN' });
+        }
+      }
+    }
+
+    // Things in the rooms: each a small model of what it is, more detailed the closer you are.
     const flats: { id: string; d: string; fill: string; stroke: string; opacity: number }[] = [];
+    const shadows: string[] = [];
+    const glows: string[] = [];
     const tags: { id: string; x: number; y: number; text: string; target: boolean }[] = [];
     const routed = pieces.length > 0;
-    for (const asset of assets) {
+    const wanted = assets.map((asset) => {
+      if (!seen(asset.position)) return -2;
+      const ppm = pixelsPerMetre(cam, asset.position);
+      if (Math.min(asset.footprint.width_m, asset.footprint.depth_m) * ppm < MIN_ASSET_PX) return -2;
+      const tier = ppm < DETAIL_PX[0] ? -1 : ppm < DETAIL_PX[1] ? 0 : ppm < DETAIL_PX[2] ? 1 : 2;
+      return busy.current && tier > 0 ? tier - 1 : tier;
+    });
+    // Too many detailed things at once (a big floor seen whole): the detail steps down, so it stays smooth.
+    let cap = 2;
+    while (cap > 0 && wanted.filter((tier) => tier >= cap).length > DETAIL_BUDGET[cap]) cap -= 1;
+    const shadowAt: Point = [0.07 * Math.cos(cam.yaw) + 0.07 * Math.sin(cam.yaw), 0.07 * Math.sin(cam.yaw) - 0.07 * Math.cos(cam.yaw)];
+    assets.forEach((asset, i) => {
       const isTarget = map?.target?.asset_id === asset.id;
-      const base = assetStyle(asset.category ?? '');
-      const style = isTarget ? { ...base, top: colours.accent, edge: '#FFFFFF', height_m: Math.max(base.height_m, 0.6) } : base;
-      const opacity = routed && !onWay.has(asset.space_id) ? OFF_ROUTE : 1;
-      if ((isTarget || named.has(asset.name)) && depthOf(cam, asset.position) > cam.distance * 0.3) {
-        const [x, y] = project3d(cam, asset.position, style.height_m + 0.4);
+      const where = placed.get(asset.id) ?? { angle: (asset.footprint.rotation_deg * Math.PI) / 180, z: 0 };
+      const model = modelOf(asset.type, asset.category, asset.footprint.width_m, asset.footprint.depth_m,
+                            { room: roomOf.get(asset.space_id), ceiling: storey });
+      const opacity = routed && !onWay.has(asset.space_id) && !isTarget ? OFF_ROUTE : 1;
+      if ((isTarget || named.has(asset.name)) && seen(asset.position)) {
+        const [x, y] = project3d(cam, asset.position, where.z + model.height + 0.4);
         tags.push({ id: asset.id, x, y, text: asset.name, target: isTarget });
       }
-      const rect = assetRect(asset.position, asset.footprint);
-      if (depthOf(cam, asset.position) < cam.distance * 0.3) continue;
-      const ppm = pixelsPerMetre(cam, asset.position);
-      if (Math.min(asset.footprint.width_m, asset.footprint.depth_m) * ppm < MIN_ASSET_PX) continue;
-      if (style.height_m === 0) {
-        const d = flat(rect, 0.02);
-        if (d) flats.push({ id: asset.id, d, fill: style.top, stroke: style.edge, opacity });
-        continue;
+      const tier = Math.min(wanted[i], cap);
+      if (tier === -2) return;
+      const rect = assetRect(asset.position, { ...asset.footprint, rotation_deg: (where.angle * 180) / Math.PI });
+      if (isTarget) {
+        const glow = flat(grow4(rect, 0.25), 0.015);
+        if (glow) glows.push(glow);
       }
-      const top = flat(rect, style.height_m);
-      if (!top) continue;
-      const faces: Solid['faces'] = [];
-      const ring = signedArea(rect) >= 0 ? rect : [...rect].reverse();
-      ring.forEach((a, i) => {
-        const b = ring[(i + 1) % ring.length];
-        const outward: Point = [b[1] - a[1], -(b[0] - a[0])];
-        if (forward(cam.yaw, outward) >= 0) return; // faces away from the viewer
-        const side = clipNear(cam, [a, b], style.height_m);
-        if (side.length < 2) return;
-        const quad = [project3d(cam, side[0], 0), project3d(cam, side[1], 0), project3d(cam, side[1], style.height_m),
-                      project3d(cam, side[0], style.height_m)];
-        const length = Math.hypot(outward[0], outward[1]) || 1;
-        const shine = turnedLit([outward[0] / length, outward[1] / length]);
-        faces.push({ d: path(quad), fill: shade(style.top, 0.45 + 0.3 * shine), stroke: shade(style.top, 0.35) });
-      });
-      faces.push({ d: top, fill: style.top, stroke: style.edge });
-      solids.push({ faces, depth: 2 * depthOf(cam, asset.position), opacity });
-    }
+      if (tier === -1 && !isTarget) { // far away: its footprint, in its main colour
+        const d = flat(rect, 0.02);
+        const top = colourOf(model.parts[0]?.mat ?? 'steel');
+        if (d) flats.push({ id: asset.id, d, fill: top, stroke: top, opacity });
+        return;
+      }
+      if (model.height > 0.3 && where.z === 0) {
+        const shadow = flat(rect.map(([x, y]) => [x + shadowAt[0], y + shadowAt[1]] as Point), 0.01);
+        if (shadow) shadows.push(shadow);
+      }
+      const faces = facesOf(modelFaces(model.key, model.parts, { at: asset.position, angle: where.angle, z: where.z }, view,
+                                       Math.max(0, isTarget ? Math.max(tier, 1) : tier)));
+      if (faces.length) solids.push({ faces, depth: 2 * depthOf(cam, asset.position) - where.z * 0.01, opacity });
+    });
     solids.sort((x, y) => y.depth - x.depth);
+    const drawn = drawSolids(solids, busy.current ? FACE_BUDGET_BUSY : FACE_BUDGET);
+    // the far things' footprints, one path per colour
+    const flatGroups = new Map<string, { key: string; d: string; fill: string; opacity: number }>();
+    for (const thing of flats) {
+      const key = `${thing.fill}|${thing.opacity}`;
+      const group = flatGroups.get(key);
+      if (group) group.d += ` ${thing.d}`;
+      else flatGroups.set(key, { key, d: thing.d, fill: thing.fill, opacity: thing.opacity });
+    }
 
-    const labels = spaces.flatMap((space) => {
+    // Room names: the ones people look for first (with a small sign), then the big rooms; a name that would
+    // overlap one already placed is left out, so they never pile up.
+    const candidates = spaces.flatMap((space) => {
       if (space.type === 'outdoor' || depthOf(cam, space.anchor) < cam.distance * 0.3) return [];
       const ppm = pixelsPerMetre(cam, space.anchor);
       const side = Math.sqrt(space.area_m2) * ppm;
-      if (side < MIN_LABEL_PX) return [];
+      const icon = signOf(space);
+      if (side < (icon ? MIN_LABEL_PX * 0.6 : MIN_LABEL_PX)) return [];
       const [x, y] = project3d(cam, space.anchor);
       if (x < -40 || x > width + 40 || y < -20 || y > height + 20) return [];
       const text = side > 110 || !space.ref ? space.name : space.ref;
-      return [{ id: space.id, x, y, text, size: Math.min(13, Math.max(8.5, ppm * 0.9)) }];
+      const size = Math.min(13, Math.max(8.5, ppm * 0.9));
+      const rank = (map?.target?.space_id === space.id ? 4 : 0) + (icon ? 2 : 0) + Math.min(1.9, space.area_m2 / 200);
+      return [{ id: space.id, x, y, text, size, icon, rank }];
+    }).sort((a, b) => b.rank - a.rank);
+    const placedBoxes: [number, number, number, number][] = [];
+    const labels = candidates.filter((label) => {
+      const w = label.text.length * label.size * 0.56 + (label.icon ? label.size * 1.6 : 0) + 6;
+      const h = label.size * 1.5;
+      const box: [number, number, number, number] = [label.x - w / 2, label.y - h / 2, label.x + w / 2, label.y + h / 2];
+      if (placedBoxes.some((b) => box[0] < b[2] && b[0] < box[2] && box[1] < b[3] && b[1] < box[3])) return false;
+      placedBoxes.push(box);
+      return true;
     });
-    return { slabSides, slabTops, grid, near, tiles, flats, routes, solids, labels, lit, tags };
-  }, [cam, footprints, around, spaces, assets, pieces, walls, width, height, changes, highlight, map, onWay, named]);
+    return { slabSides, slabTops, grid, near, tiles, floorings, voids, swings, shadows, glows, flats: [...flatGroups.values()], routes,
+             drawn, stairLines, stairTags, labels, lit, tags };
+  }, [cam, footprints, around, spaces, assets, pieces, walls, width, height, changes, highlight, map, onWay, named, finishes,
+      leaves, stairs, placed, roomOf, storey, wallMode, wallCache, sharp]);
 
   // The route fades in; arrows flow along it.
   const flow = useLoop(900);
@@ -527,14 +834,29 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
                 <Path key={tile.id} d={tile.d!} fill={tile.fill} testID={tile.closed ? 'closed-space' : undefined}
                       stroke={tile.edge} strokeOpacity={tile.closed ? 1 : 0.55} strokeWidth={tile.closed ? 1.5 : 0.8} />
               ))}
-              {scene.flats.map((thing) => (
-                <Path key={thing.id} d={thing.d} fill={thing.fill} stroke={thing.stroke} strokeWidth={0.5} opacity={thing.opacity} />
+              {scene.floorings.length > 0 && (
+                <Defs>
+                  {scene.floorings.map((floor) => (
+                    <ClipPath key={floor.id} id={`floor-${floor.id}`}><Path d={floor.clip} /></ClipPath>
+                  ))}
+                </Defs>
+              )}
+              {scene.floorings.map((floor) => (
+                <G key={`finish-${floor.id}`} clipPath={`url(#floor-${floor.id})`}>
+                  {floor.squares ? <Path d={floor.squares} fill={mapColours.label} fillOpacity={0.13} /> : null}
+                  {floor.lines ? <Path d={floor.lines} stroke={mapColours.label} strokeOpacity={floor.kind === 'panels' ? 0.18 : 0.22}
+                                       strokeWidth={floor.kind === 'panels' ? 0.8 : 0.5} fill="none" /> : null}
+                </G>
               ))}
-              {scene.labels.map((label) => (
-                <SvgText key={`label-${label.id}`} x={label.x} y={label.y + label.size / 3} fill={mapColours.label}
-                         fontSize={label.size} fontFamily={LABEL_FONT} textAnchor="middle">
-                  {label.text}
-                </SvgText>
+              {scene.voids.length > 0 && <Path d={scene.voids.join(' ')} fill={colourOf('void')} testID="stair-opening" />}
+              {scene.swings.length > 0 && (
+                <Path d={scene.swings.join(' ')} stroke={mapColours.label} strokeOpacity={0.45} strokeWidth={0.7} fill="none"
+                      strokeDasharray={[3, 2]} />
+              )}
+              {scene.glows.length > 0 && <Path d={scene.glows.join(' ')} fill={colours.accentSoft} />}
+              {scene.shadows.length > 0 && <Path d={scene.shadows.join(' ')} fill={mapColours.shadow} fillOpacity={0.55} />}
+              {scene.flats.map((thing) => (
+                <Path key={thing.key} d={thing.d} fill={thing.fill} opacity={thing.opacity} />
               ))}
             </G>
             {scene.routes.map((route, i) => (
@@ -546,14 +868,34 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
               </G>
             ))}
             {scene.lit && <Path d={scene.lit} fill="#B54F00" fillOpacity={0.6} testID="route-highlight" />}
-            {scene.solids.map((solid, i) => (
-              <G key={`solid-${i}`} opacity={dim * (solid.opacity ?? 1)}>
-                {solid.faces.map((face, j) => (
-                  <Path key={j} d={face.d} fill={face.fill} stroke={face.stroke} strokeWidth={0.6} strokeLinejoin="round" />
-                ))}
-                {solid.rim && <Path d={solid.rim} stroke={mapColours.wallTop} strokeWidth={1} strokeLinecap="round" fill="none" />}
-              </G>
+            {scene.drawn.map((face) => (
+              <Path key={face.key} d={face.d} fill={face.fill} fillOpacity={face.fillOpacity} stroke={face.stroke} strokeWidth={0.5}
+                    strokeOpacity={face.fillOpacity >= 1 ? 1 : 0.5} strokeLinejoin="round" opacity={dim * face.opacity} />
             ))}
+            <G opacity={safety ? 1 : dim} testID="stairs">
+              {scene.stairLines.map((line, i) => (
+                <Path key={`stair-${i}`} d={line.d} fill="none" strokeLinejoin="round" strokeLinecap="round"
+                      stroke={line.kind === 'rail' ? colourOf('steel') : line.kind === 'arrow' ? mapColours.chromeText : mapColours.label}
+                      strokeOpacity={line.kind === 'ghost' ? 0.5 : line.kind === 'rail' ? 0.8 : 0.95}
+                      strokeWidth={line.kind === 'rail' ? 1.1 : line.kind === 'arrow' ? 1.6 : 0.8}
+                      strokeDasharray={line.kind === 'ghost' ? [3, 2.5] : undefined} />
+              ))}
+              {scene.stairTags.map((tag) => (
+                <Halo key={tag.id} x={tag.x} y={tag.y + 3} size={9} bold fill={mapColours.chromeText} text={tag.text} />
+              ))}
+            </G>
+            <G opacity={dim}>
+              {scene.labels.map((label) => {
+                const shift = label.icon ? label.size * 0.8 : 0;
+                return (
+                  <G key={`label-${label.id}`}>
+                    {label.icon && <Sign kind={label.icon} x={label.x - (label.text.length * label.size * 0.28) - shift + 2} y={label.y}
+                                         size={label.size * 1.35} />}
+                    <Halo x={label.x + shift} y={label.y + label.size / 3} size={label.size} fill={mapColours.label} text={label.text} />
+                  </G>
+                );
+              })}
+            </G>
             {/* the route seen through the walls, faintly, so it never disappears behind one */}
             {scene.routes.map((route, i) => (
               <Path key={`ghost-${i}`} d={route.line} stroke={colours.accent} strokeOpacity={0.35} strokeWidth={2.5}

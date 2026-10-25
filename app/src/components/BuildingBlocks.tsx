@@ -1,10 +1,13 @@
-/** The building as a floor stack: every floor a thin slab with its own rooms drawn on it, the slabs pulled apart
- * so each one shows, drawn as an isometric view with SVG (no 3D engine, so it runs the same on every phone and
- * on the web). A route runs across the slabs, up the stairs from one to the next. Drag to turn it all the way
- * round (it also turns slowly by itself until touched); the floor under the cursor turns grey with its name,
- * and a click (tap) opens it. When a floor is chosen (by the agent or a click) the view zooms onto it, the
- * floors above fade away, and onArrived() hands over to the floor view. Under it, on the ground, the real
- * neighbourhood from OpenStreetMap when the building has one: land use, streets, trees and the buildings next door. */
+/** The building in 3D, drawn as an isometric view with SVG (no 3D engine, so it runs the same on every phone and
+ * on the web). Left alone it stands assembled, the real building: every floor at its real height, window bands
+ * along the outside walls and the entrances where the data has them. Touch it (or hover, or ask for a route) and
+ * it opens up into a floor stack: every floor a thin slab with its rooms and low walls on it, the slabs pulled
+ * apart so each one shows, joined by the real stairs (flights of steps from one slab to the next) and glass lift
+ * shafts. A route runs across the slabs, up the stairs from one to the next. Drag to turn it all the way round (it
+ * also turns slowly by itself until touched); the floor under the cursor turns grey with its name, and a click
+ * (tap) opens it. When a floor is chosen (by the agent or a click) the view zooms onto it, the floors above fade
+ * away, and onArrived() hands over to the floor view. Under it, on the ground, the real neighbourhood from
+ * OpenStreetMap when the building has one: land use, streets, trees and the buildings next door. */
 import { type ComponentRef, type MutableRefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, PanResponder, Platform, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Defs, G, Path, RadialGradient, Rect, Stop, Text as SvgText } from 'react-native-svg';
@@ -12,8 +15,12 @@ import Svg, { Circle, Defs, G, Path, RadialGradient, Rect, Stop, Text as SvgText
 import type { BuildingDetail, Context, MapView, Outline, Point, Space } from '../api';
 import {
   boundsOf, centre as centreOf, grow, ISO_PITCH, isoDepth, isoProject, nearby, pointInPolygon, segmentDistance, signedArea,
-  type Iso, zigzag,
+  type Iso, wallSegments,
 } from '../geometry';
+import { box, type Part } from '../models/kit';
+import { colourOf } from '../models/materials';
+import { isoView, modelFaces } from '../models/render';
+import { storeyStairs } from '../stairs';
 import { colours, map as mapColours, nearStyle, roomStyle } from '../theme';
 import type { MapHandle } from '../ui/MapControls';
 import { type Inset, LABEL_FONT, NO_INSET, SAFETY_DIM, wrapAngle } from './FloorScene';
@@ -40,6 +47,10 @@ const GRID_REACH_M = 25; // how far the ground grid reaches beyond the building
 const NEAR_REACH_M = 120; // how much of the neighbourhood is drawn (it is redrawn as the building turns)
 
 const STACK_GAP = 0.2; // the slabs are this share of the building's width apart
+const EXPLODE_MS = 650; // the assembled building opening up into the floor stack, and back
+const SLAB_WALL_M = 1.2; // the low walls on each slab (cut like the floor view's)
+const WINDOW_W = 1.4;
+const WINDOW_EVERY = 2.8;
 const SLAB = 0.1; // a slab's thickness, as a share of the gap
 const LABEL_PX = 84; // room kept on the right for the floor names
 
@@ -161,6 +172,65 @@ function floorFaces(iso: Iso, footprints: Point[][], bottom: number, top: number
   return [...walls, ...tops];
 }
 
+/** Window bands along a floor's outside walls facing the viewer, and its entrances (doors where the data has
+ * them): what makes the assembled building read as a building. */
+function facade(iso: Iso, footprints: Point[][], bottom: number, height: number, toScreen: (p: Point) => Point,
+                entrances: { position: Point; width_m?: number }[]): { windows: string; doors: string } {
+  const windows: string[] = [];
+  const doors: string[] = [];
+  const tall = height > 5; // a hall: one high band of windows
+  const sill = tall ? height * 0.55 : Math.min(0.9, height * 0.25);
+  const head = tall ? height * 0.85 : Math.min(height - 0.5, Math.max(sill + 0.6, 2.1));
+  const quad = (a: Point, b: Point, t0: number, t1: number, z0: number, z1: number) => {
+    const at = (t: number): Point => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    return path([isoProject(iso, at(t0), z0), isoProject(iso, at(t1), z0), isoProject(iso, at(t1), z1), isoProject(iso, at(t0), z1)]
+      .map(toScreen));
+  };
+  for (const raw of footprints) {
+    const ring = signedArea(raw) >= 0 ? raw : [...raw].reverse();
+    ring.forEach((a, i) => {
+      const b = ring[(i + 1) % ring.length];
+      const nx = b[1] - a[1];
+      const ny = -(b[0] - a[0]);
+      const rx = nx * Math.cos(iso.angle) - ny * Math.sin(iso.angle);
+      const ry = nx * Math.sin(iso.angle) + ny * Math.cos(iso.angle);
+      if (rx + ry >= 0) return; // turned away
+      const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const count = Math.floor((length - 1) / WINDOW_EVERY);
+      const span = (count - 1) * WINDOW_EVERY;
+      for (let k = 0; k < count && head > sill; k += 1) {
+        const mid = length / 2 - span / 2 + k * WINDOW_EVERY;
+        windows.push(quad(a, b, (mid - WINDOW_W / 2) / length, (mid + WINDOW_W / 2) / length, bottom + sill, bottom + head));
+      }
+      for (const entrance of entrances) {
+        if (segmentDistance(entrance.position, a, b) > 0.6) continue;
+        const t = ((entrance.position[0] - a[0]) * (b[0] - a[0]) + (entrance.position[1] - a[1]) * (b[1] - a[1])) / (length * length);
+        const half = Math.max(0.6, entrance.width_m ?? 1.2) / 2 / length;
+        doors.push(quad(a, b, t - half, t + half, bottom, bottom + Math.min(2.4, height * 0.8)));
+      }
+    });
+  }
+  return { windows: windows.join(' '), doors: doors.join(' ') };
+}
+
+/** A floor's walls standing low on its slab (no thickness at this size): one path per shade, and their tops. */
+function slabWalls(iso: Iso, segments: [Point, Point][], z: number, h: number, toScreen: (p: Point) => Point) {
+  const lit: string[] = [];
+  const dark: string[] = [];
+  const rims: string[] = [];
+  for (const [a, b] of segments) {
+    const nx = b[1] - a[1];
+    const ny = -(b[0] - a[0]);
+    let rx = nx * Math.cos(iso.angle) - ny * Math.sin(iso.angle);
+    let ry = nx * Math.sin(iso.angle) + ny * Math.cos(iso.angle);
+    if (rx + ry > 0) [rx, ry] = [-rx, -ry]; // the side you see
+    const [p, q, r, t] = [isoProject(iso, a, z), isoProject(iso, b, z), isoProject(iso, b, z + h), isoProject(iso, a, z + h)].map(toScreen);
+    (rx < ry ? lit : dark).push(path([p, q, r, t]));
+    rims.push(`M${t[0].toFixed(1)} ${t[1].toFixed(1)} L${r[0].toFixed(1)} ${r[1].toFixed(1)}`);
+  }
+  return { lit: lit.join(' '), dark: dark.join(' '), rims: rims.join(' ') };
+}
+
 export function BuildingBlocks({ outline, context, spaces = [], map = null, focusFloorId, onArrived, onPickFloor, spin = false,
                                width, height, inset = NO_INSET, handleRef, detail = null, safety = false }: Props) {
   const marksOn = useMemo(() => {
@@ -175,11 +245,26 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
   const [angle, setAngle] = useState(VIEW_ANGLE);
   const [pitch, setPitch] = useState(ISO_PITCH);
   const iso: Iso = { angle, centre, pitch };
+  // 0: the building assembled, every floor at its real height; 1: opened up into the floor stack.
+  const [explode, setExplode] = useState(spin ? 0 : 1);
+  const explodeRef = useRef(explode);
+  explodeRef.current = explode;
 
   // Pulled apart: each floor a thin slab, one gap above the other, whatever their real heights.
   const gap = Math.min(28, Math.max(5, Math.max(plan.maxX - plan.minX, plan.maxY - plan.minY) * STACK_GAP));
   const slab = Math.max(0.4, gap * SLAB);
-  const stacked = useMemo(() => floors.map((floor, i) => ({ ...floor, z: i * gap, top: i * gap + slab })), [floors, gap, slab]);
+  const lowest = floors[0]?.elevation_m ?? 0;
+  const stacked = useMemo(() => floors.map((floor, i) => {
+    const real = floor.elevation_m - lowest;
+    const tall = Math.max(slab, floor.height_m);
+    const z = real + (i * gap - real) * explode;
+    return { ...floor, z, top: z + tall + (slab - tall) * explode };
+  }), [floors, gap, slab, lowest, explode]);
+  // Sized for both shapes, so it never jumps while it opens up or turns.
+  const sized = useMemo(() => [
+    ...floors.map((floor, i) => ({ elevation_m: i * gap, height_m: slab, footprints: floor.footprints })),
+    ...floors.map((floor) => ({ elevation_m: floor.elevation_m - lowest, height_m: floor.height_m, footprints: floor.footprints })),
+  ], [floors, gap, slab, lowest]);
   const level = (floorId: string | undefined) => stacked.find((floor) => floor.id === floorId);
   // The stairs and lifts as shafts joining the slabs: red when out of service (reported, or closed here).
   const shafts = useMemo(() => (detail ? shaftStops(detail, stacked.map((floor) => floor.id)) : []), [detail, stacked]);
@@ -189,10 +274,9 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
   const labels = width < 600 ? LABEL_PX * 0.75 : LABEL_PX;
   const free = { w: width - inset.left - inset.right - labels, h: height - inset.top - inset.bottom };
   const scale = useMemo(
-    () => fitScale(stacked.map((floor) => ({ elevation_m: floor.z, height_m: slab, footprints: floor.footprints })), centre,
-                   free.w, free.h, 0.86, 0.72, pitch),
-    [stacked, slab, centre[0], centre[1], free.w, free.h, pitch]);
-  const top = stacked.length ? stacked[stacked.length - 1].top : 0;
+    () => fitScale(sized, centre, free.w, free.h, 0.86, 0.72, pitch),
+    [sized, centre[0], centre[1], free.w, free.h, pitch]);
+  const top = stacked.reduce((highest, floor) => Math.max(highest, floor.top), 0);
   const middle = isoProject(iso, centre, top / 2); // the stack's middle: the turning axis
   const mid: Point = [inset.left + free.w / 2, inset.top + free.h / 2];
   const toScreen = ([x, y]: Point): Point => [mid[0] + (x - middle[0]) * scale, mid[1] + (y - middle[1]) * scale];
@@ -243,6 +327,23 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
   }, [spaces]);
   const pieces = map?.route?.pieces ?? [];
   const routeFloors = new Set(pieces.map((piece) => piece.floor_id));
+  // Each floor's walls (with gaps at its doors), standing low on its slab once the building opens up.
+  const wallsOn = useMemo(() => {
+    const byFloor = new Map<string, [Point, Point][]>();
+    if (!detail) return byFloor;
+    for (const floor of detail.floors) {
+      const polygons = detail.spaces.filter((space) => space.floor_id === floor.id && space.type !== 'outdoor').map((space) => space.polygon);
+      byFloor.set(floor.id, wallSegments(polygons, detail.openings.filter((opening) => opening.floor_id === floor.id)));
+    }
+    return byFloor;
+  }, [detail]);
+  const entrancesOn = useMemo(() => {
+    const byFloor = new Map<string, { position: Point; width_m?: number }[]>();
+    for (const opening of detail?.openings ?? []) {
+      if (opening.kind === 'entrance') byFloor.set(opening.floor_id, [...(byFloor.get(opening.floor_id) ?? []), opening]);
+    }
+    return byFloor;
+  }, [detail]);
 
   const focus = floors.find((floor) => floor.id === focusFloorId);
   const zoom = useRef(new Animated.Value(0)).current;
@@ -371,6 +472,7 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
       const box = node.getBoundingClientRect();
       const point: Point = [event.clientX - box.left, event.clientY - box.top];
       const id = floorAt(blocksRef.current, point);
+      if (id) touched.current = Date.now(); // looked at: stays open a while after the pointer leaves
       node.style.cursor = id ? 'pointer' : 'grab';
       setHover((current) => (id ? { id, at: point } : current ? null : current));
       // Near a staircase or lift between the floors: say which, and which floors it joins.
@@ -390,6 +492,23 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
   }, []);
   const hovered = hover && !focus ? floors.find((floor) => floor.id === hover.id) : undefined;
 
+  // Open up when looked at (hovered, touched, a route, safety mode, a floor chosen); left alone, it closes again.
+  const open = !spin || !!focus || !!hover || pieces.length > 0 || safety || Date.now() - touched.current < SPIN_PAUSE_MS;
+  useEffect(() => {
+    const goal = open ? 1 : 0;
+    const from = explodeRef.current;
+    if (from === goal) return;
+    const began = Date.now();
+    let raf = 0;
+    const step = () => {
+      const t = Math.min(1, (Date.now() - began) / EXPLODE_MS);
+      setExplode(from + (goal - from) * Easing.inOut(Easing.cubic)(t));
+      if (t < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [open]);
+
   // Zoom towards the chosen floor's top face.
   const goal = focus ? at(iso.centre, level(focus.id)!.top) : mid;
   const scaleAnim = zoom.interpolate({ inputRange: [0, 1], outputRange: [1, ZOOM_SCALE] });
@@ -406,6 +525,43 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
     return { id: `${shaft.id}-${k}`, shaft, from, to, out: broken.has(shaft.id) };
   }));
   shaftsRef.current = shaftLines;
+  // The stairs and lifts as they are, between each slab and the next: flights of steps, glass shafts.
+  const view = isoView(iso, toScreen);
+  const between = new Map<string, { id: string; testID: string; faces: ReturnType<typeof modelFaces> }[]>();
+  if (detail && explode > 0.15) {
+    for (const shaft of shafts) {
+      const out = broken.has(shaft.id);
+      const connector = detail.vertical_connectors.find((item) => item.id === shaft.id);
+      shaft.stops.slice(1).forEach((upperStop, k) => {
+        const lowerStop = shaft.stops[k];
+        const lower = level(lowerStop.floorId);
+        const upper = level(upperStop.floorId);
+        const space = detail.spaces.find((item) => item.floor_id === lowerStop.floorId && connector?.space_ids.includes(item.id));
+        if (!lower || !upper || !space) return;
+        const height = upper.z - lower.top;
+        const ring = signedArea(space.polygon) >= 0 ? space.polygon : [...space.polygon].reverse();
+        const tint = out ? { tint: () => colours.closed } : {};
+        let faces: ReturnType<typeof modelFaces> = [];
+        if (shaft.kind === 'lift') {
+          const middle = centreOf(ring);
+          const local = ring.map(([x, y]) => [x - middle[0], y - middle[1]] as Point);
+          const parts: Part[] = [{ base: local, z0: 0, z1: height, mat: 'glass', detail: 0 }];
+          if (k === 0) parts.unshift({ base: local.map(([x, y]) => [x * 0.75, y * 0.75] as Point), z0: 0, z1: Math.min(2.4, height * 0.4), mat: 'lift', detail: 0 });
+          faces = modelFaces(`lift|${shaft.id}|${k}|${height.toFixed(2)}`, parts, { at: middle, angle: 0, z: lower.top }, view, 2, tint);
+        } else {
+          const rise = Math.max(2, upper.elevation_m - lower.elevation_m);
+          const doors = detail.openings.filter((opening) => opening.space_ids.includes(space.id)).map((opening) => opening.position);
+          const stair = storeyStairs(ring, doors, rise, height);
+          const parts = stair?.parts ?? [box(-0.5, -0.5, 0.5, 0.5, 0, height, 'stair', 0)];
+          faces = modelFaces(stair?.key ?? `stairbox|${height}`, parts, { at: stair?.centre ?? space.anchor, angle: stair?.angle ?? 0, z: lower.top },
+                             view, 2, tint);
+        }
+        const list = between.get(lowerStop.floorId) ?? [];
+        list.push({ id: `${shaft.id}-${k}`, testID: out ? 'shaft-broken' : shaft.kind === 'lift' ? 'shaft-lift' : 'shaft-stairs', faces });
+        between.set(lowerStop.floorId, list);
+      });
+    }
+  }
   const climbs = pieces.flatMap((piece, i) => {
     const next = pieces[i + 1];
     const a = level(piece.floor_id);
@@ -454,11 +610,32 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
                           stroke={lit ? colours.accent : onRoute ? '#F3B27A' : mapColours.blockEdge} strokeWidth={lit ? 1.2 : 0.7}
                           strokeLinejoin="round" />
                   ))}
+                  {explode < 0.7 && (() => {
+                    const marks = facade(iso, floor.footprints, floor.z, floor.top - floor.z, toScreen, entrancesOn.get(floor.id) ?? []);
+                    const fade = 1 - explode / 0.7;
+                    return (
+                      <G opacity={fade} testID="facade">
+                        {marks.windows ? <Path d={marks.windows} fill={mapColours.window} stroke={mapColours.blockEdge} strokeWidth={0.4} /> : null}
+                        {marks.doors ? <Path d={marks.doors} fill={colourOf('black')} stroke={colours.added} strokeWidth={1} /> : null}
+                      </G>
+                    );
+                  })()}
                   {(rooms.get(floor.id) ?? []).map((space) => (
-                    <Path key={space.id} d={path(space.polygon.map((p) => at(p, floor.top)))} opacity={safety ? SAFETY_DIM : 1}
+                    <Path key={space.id} d={path(space.polygon.map((p) => at(p, floor.top)))}
+                          opacity={(safety ? SAFETY_DIM : 1) * Math.min(1, 0.15 + explode * 1.5)}
                           fill={lit ? 'transparent' : roomStyle(space).fill} stroke={roomStyle(space).edge} strokeOpacity={0.5}
                           strokeWidth={0.5} />
                   ))}
+                  {explode > 0.3 && !lit && (() => {
+                    const walls = slabWalls(iso, wallsOn.get(floor.id) ?? [], floor.top, Math.min(SLAB_WALL_M, gap * 0.3) * explode, toScreen);
+                    return (
+                      <G opacity={(safety ? SAFETY_DIM : 1) * Math.min(1, (explode - 0.3) / 0.4)}>
+                        <Path d={walls.dark} fill={mapColours.blockDark} />
+                        <Path d={walls.lit} fill={mapColours.block} />
+                        <Path d={walls.rims} stroke={mapColours.blockEdge} strokeWidth={0.6} strokeOpacity={0.7} fill="none" />
+                      </G>
+                    );
+                  })()}
                   {routeOn(floor.id, floor.top + 0.05).map((d, k) => (
                     <Path key={`r${k}`} d={d} stroke={colours.accent} strokeWidth={3} strokeLinecap="round" strokeLinejoin="round"
                           fill="none" testID="stack-route" />
@@ -475,7 +652,7 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
                     <SafetyMarks marks={marksOn.get(floor.id) ?? []} project={(p) => at(p, floor.top + 0.05)}
                                  fontFamily={LABEL_FONT} size={0.55} />
                   )}
-                  {label && (
+                  {label && explode > 0.5 && (
                     <SvgText x={label[0] + 12} y={label[1] + 4} fontSize={12} fontWeight="700" fontFamily={LABEL_FONT}
                              fill={lit || onRoute ? colours.accent : mapColours.label}>
                       {floor.name}
@@ -483,25 +660,29 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
                   )}
                 </>
               );
-              return above ? (
-                <AnimatedG key={floor.id} opacity={fadeAbove}>{content}</AnimatedG>
-              ) : (
-                <G key={floor.id} testID={`block-${floor.level}`}>{content}</G>
-              );
-            })}
-            {shaftLines.map((line) => {
-              const colour = line.out ? colours.closed : line.shaft.kind === 'lift' ? '#60A5FA' : '#34D399';
-              const lit = shaftHover?.id === line.shaft.id;
-              return line.shaft.kind === 'lift' ? (
-                <G key={line.id} testID={line.out ? 'shaft-broken' : 'shaft-lift'}>
-                  <Path d={`M${line.from[0]} ${line.from[1]} L${line.to[0]} ${line.to[1]}`} stroke={colour}
-                        strokeOpacity={lit ? 0.6 : 0.35} strokeWidth={9} strokeLinecap="round" />
-                  <Path d={`M${line.from[0]} ${line.from[1]} L${line.to[0]} ${line.to[1]}`} stroke={colour} strokeWidth={1.5} />
+              // Assembled, a floor inside another one (offices on a mezzanine in a tall hall) stays hidden in it.
+              const box = boundsOf(floor.footprints.flat());
+              const inside = explode < 0.5 && stacked.some((other) => {
+                if (other === floor || other.z > floor.z + 1e-6 || other.top < floor.top - 1e-6) return false;
+                const b = boundsOf(other.footprints.flat());
+                return b.minX <= box.minX + 1e-6 && b.minY <= box.minY + 1e-6 && b.maxX >= box.maxX - 1e-6 && b.maxY >= box.maxY - 1e-6;
+              });
+              if (inside) return null;
+              const upper = stacked[i + 1];
+              const climbing = (between.get(floor.id) ?? []).map((item) => (
+                <G key={item.id} testID={item.testID} opacity={shaftHover && item.id.startsWith(shaftHover.id) ? 1 : 0.95}>
+                  {item.faces.map((face, j) => (
+                    <Path key={j} d={face.d} fill={face.fill} fillOpacity={face.opacity} stroke={face.stroke} strokeWidth={0.5}
+                          strokeOpacity={face.opacity < 1 ? 0.6 : 1} strokeLinejoin="round" />
+                  ))}
                 </G>
-              ) : (
-                <Path key={line.id} testID={line.out ? 'shaft-broken' : 'shaft-stairs'} fill="none" stroke={colour}
-                      strokeWidth={lit ? 2.6 : 1.8} strokeLinejoin="round"
-                      d={zigzag(line.from, line.to).map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ')} />
+              ));
+              const stairsFade = !!focus && !!upper && upper.elevation_m > focus.elevation_m;
+              return (
+                <G key={floor.id}>
+                  {above ? <AnimatedG opacity={fadeAbove}>{content}</AnimatedG> : <G testID={`block-${floor.level}`}>{content}</G>}
+                  {stairsFade ? <AnimatedG opacity={fadeAbove}>{climbing}</AnimatedG> : climbing}
+                </G>
               );
             })}
             {climbs.map((d, k) => (

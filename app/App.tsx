@@ -22,6 +22,7 @@ import { flushSync } from 'react-dom';
 
 import { colours, isWide, map as mapColours, setTheme, startTheme, type ThemeName } from './src/theme';
 import { MapControls, type MapHandle, type ViewMode } from './src/ui/MapControls';
+import type { WallMode } from './src/walls';
 import { OrbMark } from './src/ui/OrbMark';
 import { Panel, type PanelMode, sheetHeight, type Snap } from './src/ui/Panel';
 import { SearchBar } from './src/ui/SearchBar';
@@ -65,6 +66,7 @@ export default function App() {
 function Guide() {
   const [state, dispatch] = useReducer(reduce, initial);
   const [view, setView] = useState<ViewMode>('3d');
+  const [walls, setWalls] = useState<WallMode>('cutaway');
   // Dark (the digital twin) or light: the map's colours switch, the page's too (the "dark" class on <html>).
   const [theme, setThemeState] = useState<ThemeName>(() => {
     const first = startTheme(globalThis.location?.search ?? '', savedTheme());
@@ -456,7 +458,7 @@ function Guide() {
           view !== 'plan' ? (
             <FloorScene tilt={view === 'top' ? TOP_TILT : TILT} detail={state.detail} floorId={state.floorId} map={drawn} footprints={footprints} safety={safety}
                         context={context} width={window.width} height={window.height} onTapFloor={tapHere} controls={false}
-                        handleRef={handle} inset={inset} highlight={highlight} focus={focusPath} />
+                        handleRef={handle} inset={inset} highlight={highlight} focus={focusPath} walls={walls} />
           ) : (
             <FloorPlan detail={state.detail} floorId={state.floorId} map={drawn} safety={safety} width={window.width} height={window.height}
                        onTapFloor={tapHere} controls={false} handleRef={handle} inset={inset} highlight={highlight}
@@ -500,7 +502,8 @@ function Guide() {
                    onBuilding={() => dispatch({ type: 'back' })} onHere={openHere} bottom={controlsBottom}
                    safety={safety} onSafety={safetyChoices.length ? toggleSafety : undefined}
                    mapKey={`${state.view}:${state.floorId}:${view}:${theme}`} theme={theme} onTheme={toggleTheme}
-                   compact={!wide} />}
+                   compact={!wide} walls={walls}
+                   onWalls={() => setWalls((now) => (now === 'cutaway' ? 'low' : now === 'low' ? 'full' : 'cutaway'))} />}
       {walking && (
         <WalkBanner steps={steps} index={state.walk!} left={wide ? mapLeft : 12} right={wide ? 88 : 12}
                     onNext={() => walkTo(Math.min(steps.length - 1, state.walk! + 1))}

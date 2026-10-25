@@ -5,7 +5,8 @@ import { type PointerEvent as ReactPointerEvent, type RefObject, useEffect, useR
 
 import type { Floor } from '../api';
 import type { ThemeName } from '../theme';
-import { Building, Locate } from './icons';
+import type { WallMode } from '../walls';
+import { Building, Locate, Walls } from './icons';
 import { ThemeToggle } from './ThemeToggle';
 
 /** What the open floor view lets the buttons do. */
@@ -108,9 +109,14 @@ interface Props {
   /** Safety mode (shield): on or off, and whether this building has anything to show for it. */
   safety: boolean;
   onSafety?: () => void;
+  /** How the floor's walls stand (3D and top views): cut away to see in, all low, or all full height. */
+  walls?: WallMode;
+  onWalls?: () => void;
 }
 
-export function MapControls({ inside, view, onView, handle, floors, floorId, onFloor, onBuilding, onHere, bottom, mapKey, theme, onTheme, compact = false, safety, onSafety }: Props) {
+const WALL_NAMES: Record<WallMode, string> = { cutaway: 'Walls: cut away', low: 'Walls: low', full: 'Walls: full height' };
+
+export function MapControls({ inside, view, onView, handle, floors, floorId, onFloor, onBuilding, onHere, bottom, mapKey, theme, onTheme, compact = false, safety, onSafety, walls = 'cutaway', onWalls }: Props) {
   const [yaw, setYaw] = useState(0);
   const [tip, setTip] = useState<{ name: string; y: number } | null>(null);
   const turns = !inside || view !== 'plan'; // the building and the 3D / top views turn; the flat plan stays north up
@@ -173,6 +179,14 @@ export function MapControls({ inside, view, onView, handle, floors, floorId, onF
               {option.label}
             </button>
           ))}
+        </div>
+      )}
+      {inside && view !== 'plan' && onWalls && (
+        <div className="fi-group">
+          <button type="button" aria-label={`${WALL_NAMES[walls]} (click to change)`} title={WALL_NAMES[walls]} data-testid="walls-toggle"
+                  onClick={onWalls}>
+            <Walls mode={walls} />
+          </button>
         </div>
       )}
       {turns && (
