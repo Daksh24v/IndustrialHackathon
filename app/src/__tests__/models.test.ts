@@ -128,3 +128,15 @@ describe('drawing models', () => {
       .toBeLessThan(modelFaces(stove.key, stove.parts, { at: [0, 0], angle: 0 }, view, 2).length);
   });
 });
+
+describe('one model name, two sets of parts', () => {
+  it('never draws from the order kept for the other set (the floor view and the building view both draw the stairs)', () => {
+    const view = isoView({ angle: 0.3, centre: [0, 0] }, (p) => p);
+    const many = [0, 1, 2, 3, 4, 5].map((i) => box(i, 0, i + 1, 1, 0, 0.2 * (i + 1), 'stair', 0));
+    const few = [box(0, 0, 1, 1, 0, 3, 'stair', 0)];
+    const place = { at: [0, 0] as Point, angle: 0 };
+    expect(modelFaces('stairs|same', many, place, view, 2).length).toBeGreaterThan(0);
+    expect(() => modelFaces('stairs|same', few, place, view, 2)).not.toThrow();
+    expect(modelFaces('stairs|same', few, place, view, 2).length).toBeGreaterThan(0);
+  });
+});

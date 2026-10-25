@@ -156,10 +156,12 @@ export function paintOrder(parts: Part[], v: Point): number[] {
 const BUCKETS = 32;
 const orders = new Map<string, number[]>();
 
-/** paintOrder, kept for each model and each of 32 directions it is seen from (identical chairs share it). */
-function cachedOrder(key: string, parts: Part[], v: Point): number[] {
+/** paintOrder, kept for each model and each of 32 directions it is seen from (identical chairs share it). The
+ * number of parts is part of the name: two views may give one model (a staircase) a different set of parts, and an
+ * order kept for the other set would point at parts that aren't there. */
+export function cachedOrder(key: string, parts: Part[], v: Point): number[] {
   const bucket = Math.round(((Math.atan2(v[1], v[0]) + Math.PI) / (2 * Math.PI)) * BUCKETS) % BUCKETS;
-  const id = `${key}#${bucket}`;
+  const id = `${key}#${parts.length}#${bucket}`;
   let order = orders.get(id);
   if (!order) {
     const a = (bucket / BUCKETS) * 2 * Math.PI - Math.PI;
@@ -186,7 +188,7 @@ export function modelFaces(key: string, parts: Part[], place: Placement, view: V
   const faces: Face[] = [];
   for (const index of cachedOrder(key, parts, v)) {
     const part = parts[index];
-    if (part.detail > detail) continue;
+    if (!part || part.detail > detail) continue;
     if (part.on && part.on[0] * v[0] + part.on[1] * v[1] <= 0) continue; // on a face turned away
     const colour = look.tint ? look.tint(part.mat) : colourOf(part.mat);
     const opacity = alphaOf(part.mat);
