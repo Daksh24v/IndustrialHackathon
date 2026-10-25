@@ -17,6 +17,13 @@ export const Mic = () => (
     <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3.5M8.5 21.5h7" {...line} />
   </svg>
 );
+/** The microphone struck through: muted. */
+export const MicOff = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <rect x="8.5" y="2.5" width="7" height="12" rx="3.5" fill="currentColor" />
+    <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3.5M8.5 21.5h7M3.5 3.5l17 17" {...line} />
+  </svg>
+);
 export const Send = () => (
   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" {...line} /></svg>
 );

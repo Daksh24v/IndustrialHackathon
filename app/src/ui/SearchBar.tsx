@@ -1,4 +1,4 @@
-/** The search card at the top: FINNI's orb, "Search or ask FINNI…", the mic; under it the building (a menu of
+/** The search card at the top: FINNI's orb, "Search or ask FINNI…", the mic (starts and ends a spoken conversation); under it the building (a menu of
  * every building) and quick searches made from what this building has. Enter asks, Escape drops a question
  * that is still being answered. */
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from 'react';

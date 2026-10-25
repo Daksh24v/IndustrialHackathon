@@ -73,7 +73,7 @@ describe('ChatCard microphone', () => {
     expect(screen.getByText('Listening… pause when you are done')).toBeTruthy();
     await view.rerender(<ChatCard messages={[]} question={null} busy={false} onSend={jest.fn()} onMic={onMic}
                                   mic="speaking" />);
-    expect(screen.getByText('Speaking… talk to interrupt, tap the mic to stop')).toBeTruthy();
+    expect(screen.getByText('Speaking… tap the mic to stop')).toBeTruthy();
     await view.rerender(<ChatCard messages={[]} question={null} busy={false} onSend={jest.fn()} onMic={onMic}
                                   mic="thinking" />);
     expect(screen.queryByTestId('mic')).toBeNull(); // a spinner while it works

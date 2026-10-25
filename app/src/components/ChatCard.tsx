@@ -1,5 +1,5 @@
 /** The conversation at the top, under the logo (so the keyboard never covers it): the "Talk to FINNI…" field
- * with an orange mic (src/useVoice.ts: tap once to talk, again to stop; talk over it to interrupt), and under it a card with
+ * with an orange mic (src/useVoice.ts: tap once to talk, again to stop), and under it a card with
  * the replies and the agent's question as tappable chips. The card folds away to give the map more room.
  * On a wide screen (side) it is a full-height panel beside the map instead, and the messages fill it. */
 import { useEffect, useRef, useState } from 'react';
@@ -39,7 +39,8 @@ const MIC_HINT: Record<MicState, string> = {
   off: '',
   listening: 'Listening… pause when you are done',
   thinking: '',
-  speaking: 'Speaking… talk to interrupt, tap the mic to stop',
+  speaking: 'Speaking… tap the mic to stop',
+  muted: 'Muted',
 };
 
 export function ChatCard({ messages, question, busy, onSend, onMic, mic = 'off', side = false, note }: Props) {

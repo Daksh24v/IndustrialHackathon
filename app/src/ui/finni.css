@@ -415,6 +415,24 @@
 }
 .fi-voice canvas { width: 140px; height: 140px; filter: drop-shadow(0 10px 30px rgba(255, 122, 0, 0.25)); }
 .fi-voice span { background: var(--bg); box-shadow: var(--shadow); border-radius: 14px; padding: 6px 12px; font-size: 13px; font-weight: 600; }
+.fi-mute {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  border-radius: 18px;
+  padding: 7px 14px 7px 10px;
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.fi-mute svg { width: 18px; height: 18px; }
+.fi-mute[aria-pressed='true'] { background: var(--accent); color: #fff; }
 
 @keyframes fi-in { from { opacity: 0; transform: translateY(-6px); } }
 @keyframes fi-up { from { transform: translateY(40px); opacity: 0; } }

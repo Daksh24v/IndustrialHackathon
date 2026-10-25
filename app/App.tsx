@@ -22,6 +22,7 @@ import { flushSync } from 'react-dom';
 
 import { colours, isWide, map as mapColours, setTheme, startTheme, type ThemeName } from './src/theme';
 import { HoverGlowButton } from './src/ui/HoverGlowButton';
+import { Mic, MicOff } from './src/ui/icons';
 import { MapControls, type MapHandle, type ViewMode } from './src/ui/MapControls';
 import { mapKey } from './src/legend';
 import { straightenMap, straightRoute } from './src/routeShape';
@@ -522,8 +523,12 @@ function Guide() {
       {talking && (
         <div className="fi fi-voice" style={{ left: wide ? mapLeft + (window.width - mapLeft - 72) / 2 : '50%', top: wide ? 40 : 150 }}
              data-testid="voice-orb">
-          <OrbMark size={140} mode={voice.mic === 'listening' ? 'listen' : voice.mic === 'speaking' ? 'speak' : 'think'} />
+          <OrbMark size={140} mode={voice.mic === 'listening' ? 'listen' : voice.mic === 'speaking' ? 'speak' : voice.mic === 'muted' ? 'rest' : 'think'} />
           <span>{VOICE_LINE[voice.mic]}</span>
+          <button type="button" className="fi-mute" data-testid="voice-mute" aria-pressed={voice.muted}
+                  aria-label={voice.muted ? 'Unmute your microphone' : 'Mute your microphone'} onClick={voice.toggleMute}>
+            {voice.muted ? <MicOff /> : <Mic />}{voice.muted ? 'Unmute' : 'Mute'}
+          </button>
         </div>
       )}
       {toast && <div className="fi fi-toast" style={{ bottom: controlsBottom + 4 }} role="status" data-testid="toast">{toast}</div>}
@@ -552,7 +557,8 @@ const REPORTS_POLL_MS = 8000; // how soon a colleague's report shows up
 const COLUMN_PX = 400; // FINNI's column on laptops: the search card and the answer under it
 const SESSION_WAIT_MS = 8000; // a question asked while the building still loads waits this long
 const DONE_MS = 1300; // the orb stays green this long after an answer
-const VOICE_LINE = { off: '', listening: "Listening… pause when you're done", thinking: 'Thinking…', speaking: 'Speaking… talk to interrupt, tap the mic to stop' };
+const VOICE_LINE = { off: '', listening: "Listening… pause when you're done", thinking: 'Thinking…', speaking: 'Speaking… tap the mic to stop',
+                     muted: "You're muted. Unmute to talk, or type" };
 
 /** The value once it's there (polled), or null after a while. */
 async function until<T>(get: () => T | null, timeoutMs = 20000): Promise<T | null> {
