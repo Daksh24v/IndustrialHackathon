@@ -183,3 +183,40 @@ def test_real_procedural_buildings_rebuild_exactly(building_id):
     assert scores["connectors_found"] == scores["connectors"]
     assert scores["floors_aligned"] == scores["floors_to_align"]
     assert scores["routes_right"] == scores["routes"] and scores["walls_right"] == scores["walls"]
+
+
+def test_stair_halls_join_floors_when_no_shafts_are_drawn(tmp_path):
+    # Swiss Dwellings style: no stair shafts, the stair hall is a corridor that repeats on every floor and opens
+    # onto the flats; a flat's hallway (many doors into its rooms) repeats too but isn't stairs.
+    def floor(level, entrance):
+        rooms = [([(0, 0), (4, 0), (4, 4), (0, 4)], CORRIDOR),    # stair hall
+                 ([(4, 0), (12, 0), (12, 2), (4, 2)], CORRIDOR),   # the flat's hallway
+                 *[([(x, 2), (x + 2, 2), (x + 2, 6), (x, 6)], ROOM) for x in (4, 6, 8, 10)]]
+        markers = [((4, 1), DOOR), *[((x + 1, 2), DOOR) for x in (4, 6, 8, 10)]]
+        if entrance:
+            markers.append(((0, 2), ENTRANCE))
+        labels = [(f"{level}.01", (2, 2)), (f"{level}.02", (8, 1))]
+        path = tmp_path / f"floor_{level}.svg"
+        path.write_text(svg(rooms, markers, labels, width_m=12, height_m=6), encoding="utf-8")
+        return path
+
+    building, notes = import_plans([floor(0, True), floor(1, False), floor(2, False)], building_id="hall")
+    (stairs,) = building["vertical_connectors"]
+    names = {space["id"]: space["name"] for space in building["spaces"]}
+    assert stairs["kind"] == "stairs" and not stairs["step_free"]
+    assert [names[space_id] for space_id in stairs["space_ids"]] == ["Stair hall 0.01", "Stair hall 1.01",
+                                                                    "Stair hall 2.01"]
+    assert any("stair landings were recognised" in note for note in notes)
+    by_ref = {space["ref"]: space["id"] for space in building["spaces"]}
+    assert Building(building).route(by_ref["0.02"], by_ref["2.02"]).length_m > 0  # hallway to hallway, upstairs
+
+
+@pytest.mark.parametrize("building_id", ["swiss-1883", "swiss-5462"])
+def test_real_swiss_buildings_rebuild_with_their_stair_halls(building_id):
+    (path,) = [DATA / split / building_id for split in ("train", "dev") if (DATA / split / building_id).is_dir()]
+    truth = Building.load(path)
+    imported, _ = import_plans(sorted(path.glob("floor_*.svg"), key=lambda p: int(p.stem.split("_")[1])),
+                               building_id="imp", floor_heights_m=told_heights(truth))
+    scores = compare(truth, imported)
+    assert scores["connectors_found"] == scores["connectors"] > 0
+    assert scores["routes_right"] == scores["routes"]

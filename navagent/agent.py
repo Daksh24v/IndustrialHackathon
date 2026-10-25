@@ -125,7 +125,9 @@ corridors, stairs and lifts, doors and entrances, overall size. Then work throug
 don't mark stairs. Ask about these with ask_user, one question at a time, with 2-4 concrete options built \
 from the draft (e.g. "Rooms 0.20-0.33 along the corridor: offices / labs / meeting rooms?", "Floor height: \
 3.5 m / 4 m / 8 m?", "Which space is the staircase: Corridor 1.01 (3.2 m²) / ...?"). For stairs, \
-stair_candidates suggests likely spaces.
+plan_summary's open points list the stair halls found where the plans draw no shafts (corridors that repeat floor to \
+floor and open onto the flats): show them on the map and ask "Are these the stairs? Is there a lift too?"; \
+stair_candidates suggests other likely spaces.
 - Apply every answer with the edit tools, then say briefly what changed. Show a floor on the map when it \
 helps the person check (show_on_map with floor).
 - Only call save_building when the person says it's right. Never invent rooms, doors or numbers."""

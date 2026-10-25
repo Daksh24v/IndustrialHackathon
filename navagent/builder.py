@@ -9,7 +9,7 @@ from pathlib import Path
 from shapely.geometry import Polygon
 
 from navcore.engine import Building, EngineError
-from navcore.plans import assemble, describe, level_from_filename, link_floors, parse_svg, scale
+from navcore.plans import assemble, describe, level_from_filename, link_floors, parse_svg, scale, stair_halls
 from navcore.resolve import find_floor, find_space, normalise
 
 IMPORTED = Path(__file__).resolve().parent.parent / "data" / "imported"
@@ -179,7 +179,9 @@ class Draft:
         return {"scaled_by": round(factor, 4), "summary": describe(self.building)}
 
     def relink_floors(self) -> dict:
-        self.building["vertical_connectors"] = link_floors(self.building["floors"], self.building["spaces"])
+        floors, spaces = self.building["floors"], self.building["spaces"]
+        halls = stair_halls(floors, spaces, self.building["openings"])  # plans without shafts: the stair halls again
+        self.building["vertical_connectors"] = link_floors(floors, spaces, halls)
         return {"stairs_and_lifts": [c["name"] for c in self.building["vertical_connectors"]]}
 
     def save(self, name: str | None = None, directory: Path | None = None) -> Path:

@@ -378,7 +378,14 @@ def assemble(
                      f"{DEFAULT_DOOR_WIDTH_M} m and step-free. Ask about wide doors and steps.")
     notes.append("Room types are not in the plans (one colour for every kind of room); rooms are 'generic room' "
                  "until the person says what they are.")
-    connectors = link_floors(floors, spaces)
+    halls = stair_halls(floors, spaces, openings)
+    if halls:
+        landings = sorted({space["name"] for chain in halls for space in chain})
+        notes.append(f"No stair or lift shafts are drawn; {len(landings)} stair landings were recognised (corridors "
+                     f"that open onto other corridors and lie over each other floor to floor), joined by "
+                     f"{len(halls)} flight(s) of stairs: {', '.join(landings[:12])}{' …' if len(landings) > 12 else ''}"
+                     f". Show them and ask if those are the stairs, and whether there is a lift.")
+    connectors = link_floors(floors, spaces, halls)
     return {
         "building": {"id": building_id, "name": name or next((p.building_name for _, p in plans if p.building_name),
                                                              building_id),
@@ -391,8 +398,92 @@ def assemble(
     }, notes
 
 
-def link_floors(floors: list[dict], spaces: list[dict]) -> list[dict]:
-    """Stair and lift spaces stacked on consecutive floors become one connector each (stairs not step-free)."""
+HALL_MAX_DOORS = 4  # a stair landing has few doors (to the flats and the next landing), a flat's hallway many
+HALL_FEW_DOORS = 2  # ... and a landing at the end of the stairs opens only to a flat or two
+HALL_OVERLAP = 0.4  # a landing lies over the one below: their overlap covers this share of the smaller one
+
+
+def stair_halls(floors: list[dict], spaces: list[dict], openings: list[dict]) -> list[list[dict]]:
+    """Plans that draw no stair or lift shafts (Swiss Dwellings: the stairs are corridor-coloured landings,
+    "Landing 0.11", often without a label): the landings are the corridors that open into two or more other
+    corridors (the next landing, the flats' hallways) through at most HALL_MAX_DOORS doors, that have only one
+    or two doors, or that have the building's entrance. A flat's own hallway opens into its rooms instead. Landings on consecutive floors that lie over each other are joined by stairs (floors where none do,
+    by their two nearest landings: the stairs must reach every floor): one stack when the
+    stair core repeats one to one, otherwise a flight per pair (a ground-floor hall can lead up to several
+    cores). Their spaces are marked as stairwells (they stay corridors). Nothing when the plans draw any stair
+    or lift."""
+    if any(space["type"] in ("stair", "lift") for space in spaces):
+        return []
+    by_id = {space["id"]: space for space in spaces}
+    neighbours: dict[str, list[dict | None]] = {}
+    entrances = set()
+    for opening in openings:
+        if opening["kind"] == "entrance":
+            entrances.update(opening["space_ids"])
+        for space_id in opening["space_ids"]:
+            neighbours.setdefault(space_id, []).extend(by_id.get(other) for other in opening["space_ids"]
+                                                       if other != space_id)
+
+    def corridor_neighbours(space: dict) -> list[dict]:
+        return [other for other in neighbours.get(space["id"], []) if other and other["type"] == "corridor"]
+
+    corridors = [space for space in spaces if space["type"] == "corridor"]
+    landings = {space["id"] for space in corridors if space["id"] in entrances
+                or len(neighbours.get(space["id"], [])) <= HALL_FEW_DOORS
+                or (len(corridor_neighbours(space)) >= 2 and len(neighbours.get(space["id"], [])) <= HALL_MAX_DOORS)}
+    order = sorted(floors, key=lambda floor: floor["level"])
+    on_floor = {floor["id"]: [s for s in corridors if s["floor_id"] == floor["id"] and s["id"] in landings]
+                for floor in order}
+    shapes = {space_id: Polygon(by_id[space_id]["polygon"]).buffer(0) for space_id in landings}
+
+    def over(a: dict, b: dict) -> float:
+        one, two = shapes[a["id"]], shapes[b["id"]]
+        if not one.intersects(two):
+            return 0.0
+        return one.intersection(two).area / min(one.area, two.area)
+
+    up: dict[str, list[dict]] = {}
+    down: dict[str, list[dict]] = {}
+    for lower_floor, upper_floor in zip(order, order[1:]):
+        if upper_floor["level"] != lower_floor["level"] + 1:
+            continue
+        lower, upper = on_floor[lower_floor["id"]], on_floor[upper_floor["id"]]
+        pairs = set()
+        for space, others, flip in [(a, upper, False) for a in lower] + [(b, lower, True) for b in upper]:
+            score, best = max(((over(space, other), index) for index, other in enumerate(others)), default=(0, -1))
+            if score >= HALL_OVERLAP:
+                pairs.add((others[best]["id"], space["id"]) if flip else (space["id"], others[best]["id"]))
+        if not pairs and lower and upper:  # every floor is reached somehow: the two nearest landings
+            a, b = min(itertools.product(lower, upper),
+                       key=lambda pair: shapes[pair[0]["id"]].distance(shapes[pair[1]["id"]]))
+            pairs.add((a["id"], b["id"]))
+        for a, b in sorted(pairs):
+            up.setdefault(a, []).append(by_id[b])
+            down.setdefault(b, []).append(by_id[a])
+    halls, done = [], set()
+    for floor in order:
+        for space in on_floor[floor["id"]]:
+            for above in up.get(space["id"], []):
+                if (space["id"], above["id"]) in done:
+                    continue
+                chain = [space, above]
+                done.add((space["id"], above["id"]))
+                # one to one: the same core goes on up
+                while len(up.get(chain[-1]["id"], [])) == 1 and len(down.get(chain[-1]["id"], [])) == 1 \
+                        and len(down.get(up[chain[-1]["id"]][0]["id"], [])) == 1:
+                    nxt = up[chain[-1]["id"]][0]
+                    done.add((chain[-1]["id"], nxt["id"]))
+                    chain.append(nxt)
+                halls.append(chain)
+    for space_id in {space["id"] for chain in halls for space in chain}:
+        by_id[space_id]["room_type"] = "stairwell"
+        by_id[space_id]["name"] = f"Stair hall {by_id[space_id]['ref']}"
+    return halls
+
+
+def link_floors(floors: list[dict], spaces: list[dict], halls: list[list[dict]] | None = None) -> list[dict]:
+    """Stair and lift spaces stacked on consecutive floors become one connector each (stairs not step-free);
+    so do stair halls found by stair_halls (already stacked, lowest floor first)."""
     order = sorted(floors, key=lambda floor: floor["level"])
     shafts_by_floor = {floor["id"]: [s for s in spaces if s["floor_id"] == floor["id"] and s["type"] in ("stair", "lift")]
                        for floor in order}
@@ -421,12 +512,13 @@ def link_floors(floors: list[dict], spaces: list[dict]) -> list[dict]:
                 chains.append(chain)
                 next_open.append(chain)
         open_chains = next_open
+    chains += halls or []
     connectors = []
     counters = {"stair": 0, "lift": 0}
     for chain in chains:
         if len(chain) < 2:
             continue
-        kind = chain[0]["type"]
+        kind = "lift" if chain[0]["type"] == "lift" else "stair"
         counters[kind] += 1
         connectors.append({
             "id": f"{chain[0]['floor_id'].rsplit('-F', 1)[0]}-V{len(connectors) + 1:02d}",
