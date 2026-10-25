@@ -1,4 +1,4 @@
-/** Optional: the venue in Google's photorealistic 3D, flown round once behind "Find using FINNI". Only with
+/** Optional: the venue in Google's photorealistic 3D, flown round once behind the FINNI title. Only with
  * EXPO_PUBLIC_GOOGLE_MAPS_KEY (a key with the Maps JavaScript API and the Map Tiles API on, see the README).
  * Google's 3D models can be shown live like this but not downloaded, so the routes stay on our own building.
  * Not drawn in 5 s (wrong key, no WebGL): onFail, and the intro falls back to our building. */

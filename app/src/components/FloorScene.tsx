@@ -72,6 +72,18 @@ export function orbit(cam: Camera, pivot: Point, angle: number, tilt: number): C
   const [x1, y1] = project3d(leaned, pivot);
   return { ...leaned, ox: leaned.ox + x0 - x1, oy: leaned.oy + y0 - y1 };
 } // a click that moves less than this is a tap ("I'm here")
+const ROUTE_HALF_M = 0.22; // the route band is 44 cm wide on the floor
+const ROUTE_GLOW_HALF_M = 0.6;
+const DISC_SIDES = 14;
+
+/** A round disc on the floor, as a polygon (the route's round ends and corners). */
+function disc([x, y]: Point, r: number): Point[] {
+  return Array.from({ length: DISC_SIDES }, (_, k) => {
+    const a = (2 * Math.PI * k) / DISC_SIDES;
+    return [x + r * Math.cos(a), y + r * Math.sin(a)] as Point;
+  });
+}
+
 const FLY_MS = 700; // walking through the steps: the camera moves to the next one
 const STEP_MARGIN_M = 3;
 export const SAFETY_DIM = 0.28; // how much of the map stays visible in safety mode
@@ -788,18 +800,34 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
       return [{ id: finish.id, clip: room, lines, squares, kind: finish.kind }];
     });
 
-    const lit = highlight && highlight.length > 1 ? flat(ribbon(highlight, 0.5), 0.035) : null;
+    // The route painted on the floor: a band with round ends and round corners (a strip per stretch and a disc at
+    // every corner, one shape, so the see-through glow doesn't darken where they overlap).
+    const band = (points: Point3[], half: number, lift: number) => {
+      const parts: string[] = [];
+      const add = (polygon: Point[], z: number) => {
+        const clipped = clipNear(cam, polygon, z);
+        if (clipped.length < 3) return;
+        const screen = clipped.map((p) => project3d(cam, p, z));
+        if (!onScreen(screen)) return;
+        parts.push(path(signedArea(screen) < 0 ? screen.reverse() : screen)); // all one way round: they add up
+      };
+      points.forEach(([x, y, z], i) => {
+        add(disc([x, y], half), z + lift);
+        const next = points[i + 1];
+        if (next) add(ribbon([[x, y], [next[0], next[1]]], half), Math.max(z, next[2]) + lift);
+      });
+      return parts.length ? parts.join(' ') : null;
+    };
+    const onFloor = (points: Point[]): Point3[] => points.map(([x, y]) => [x, y, 0]);
+    const lit = highlight && highlight.length > 1 ? band(onFloor(highlight), ROUTE_HALF_M + 0.06, 0.035) : null;
     const routes = ways.map((way) => ({
-      glow: flat(ribbon(way.flat, 1.1), 0.02),
-      band: flat(ribbon(way.flat, 0.42), 0.03),
+      glow: band(onFloor(way.flat), ROUTE_GLOW_HALF_M, 0.02),
+      band: band(onFloor(way.flat), ROUTE_HALF_M, 0.03),
       line: path(way.flat.filter((p) => depthOf(cam, p) > cam.distance * 0.3).map((p) => project3d(cam, p, 0.04)), false),
     }));
     // On the stairs: the band step by step at each tread's height, drawn over the steps.
     const climbs = ways.flatMap((way) => way.climbs).map((climb) => {
-      const steps = climb.slice(1).map((b, i) => {
-        const a = climb[i];
-        return flat(ribbon([[a[0], a[1]], [b[0], b[1]]], 0.42), Math.max(a[2], b[2]) + 0.03);
-      }).filter(Boolean).join(' ');
+      const steps = band(climb, ROUTE_HALF_M, 0.03) ?? '';
       const line = path(climb.filter(([x, y]) => depthOf(cam, [x, y]) > cam.distance * 0.3)
         .map(([x, y, z]) => project3d(cam, [x, y], z + 0.04)), false);
       return { steps, line };
@@ -1078,7 +1106,7 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
               <G key={`route-${i}`} testID="route-line">
                 {route.glow && <Path d={route.glow} fill={colours.accentFaint} />}
                 {route.band && <Path d={route.band} fill={colours.accent} />}
-                <AnimatedPath d={route.line} stroke="#FFFFFF" strokeOpacity={0.85} strokeWidth={2} strokeLinecap="round"
+                <AnimatedPath d={route.line} stroke="#FFFFFF" strokeOpacity={0.85} strokeWidth={1.5} strokeLinecap="round"
                               strokeLinejoin="round" fill="none" strokeDasharray={[6, 18]} strokeDashoffset={dashOffset} />
               </G>
             ))}
@@ -1090,7 +1118,7 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
             {scene.climbs.map((climb, i) => (
               <G key={`climb-${i}`} testID="route-on-stairs">
                 {climb.steps ? <Path d={climb.steps} fill={colours.accent} /> : null}
-                <AnimatedPath d={climb.line} stroke="#FFFFFF" strokeOpacity={0.85} strokeWidth={2} strokeLinecap="round"
+                <AnimatedPath d={climb.line} stroke="#FFFFFF" strokeOpacity={0.85} strokeWidth={1.5} strokeLinecap="round"
                               strokeLinejoin="round" fill="none" strokeDasharray={[6, 18]} strokeDashoffset={dashOffset} />
               </G>
             ))}

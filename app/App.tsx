@@ -24,6 +24,7 @@ import { colours, isWide, map as mapColours, setTheme, startTheme, type ThemeNam
 import { MapControls, type MapHandle, type ViewMode } from './src/ui/MapControls';
 import { MapKey } from './src/ui/MapKey';
 import { mapKey } from './src/legend';
+import { straightenMap, straightRoute } from './src/routeShape';
 import type { WallMode } from './src/walls';
 import { OrbMark } from './src/ui/OrbMark';
 import { Panel, type PanelMode, sheetHeight, type Snap } from './src/ui/Panel';
@@ -276,7 +277,8 @@ function Guide() {
   }, [state.map]); // eslint-disable-line react-hooks/exhaustive-deps
   const quick = useMemo(() => categories(state.detail, mobility), [state.detail, mobility]);
   const safetyChoices = useMemo(() => safetyButtons(state.detail), [state.detail]);
-  const drawn = useMemo(() => withReports(state.map, reports), [state.map, reports]); // the map with reports in red
+  // the map with reports in red, its route drawn straight down the corridors
+  const drawn = useMemo(() => withReports(straightenMap(state.map, state.detail), reports), [state.map, state.detail, reports]);
   const steps = useMemo(() => routeSteps(state.map, state.detail), [state.map, state.detail]);
   const sum = useMemo(() => summary(state.map, state.detail), [state.map, state.detail]);
 
@@ -297,7 +299,9 @@ function Guide() {
     return at && at.floorId === state.floorId ? at.path : null;
   }, [shownStep, steps, state.floorId]);
   const lit = hoverStep !== null ? steps[hoverStep] : shownStep !== null ? steps[shownStep] : null;
-  const highlight = lit && lit.floorId === state.floorId && lit.path.length > 1 ? lit.path : null;
+  const highlight = useMemo(() => (lit && lit.floorId === state.floorId && lit.path.length > 1
+    ? straightRoute(lit.path, (state.detail?.spaces ?? []).filter((space) => space.floor_id === lit.floorId)) : null),
+  [lit, state.floorId, state.detail]);
 
   // The map fills the screen; FINNI's column (laptops) or bar and sheet (phones) cover part of it.
   const showPanel = panelOpen && (panelMode !== 'answer' || state.messages.length > 0 || state.busy || !!state.error)

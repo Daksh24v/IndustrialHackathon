@@ -10,7 +10,7 @@ cd app && npx expo start --web          # opens http://localhost:8081
 Or build once and use one address: `cd app && npm run build`, then open http://localhost:8000 (the backend serves
 the site).
 
-**Map-first, like a map app:** "Find using FINNI" shrinks into the search bar and the building is already there as
+**Map-first, like a map app:** FINNI ("Finni, find it") shrinks into the search bar and the building is already there as
 a floor stack (every floor a slab with its rooms; hover one, it turns grey; click it to fly in). The search card
 (top left on a laptop, top on a phone) is where you ask: type, the mic, or a quick search made from what this
 building has ("Toilets", "Exit", "Coffee"…). FINNI's answer opens under it (a bottom sheet on a phone): its

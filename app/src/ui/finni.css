@@ -398,7 +398,7 @@
   .fi *, .fi-panel, .fi-walk, .fi-voice { animation: none !important; transition: none !important; }
 }
 
-/* the opening: "Find using FINNI" over the building, then it shrinks into the search bar (Intro.tsx) */
+/* the opening: FINNI with "Finni, find it" under it, over the building, then it shrinks into the search bar (Intro.tsx) */
 .mo-intro {
   position: fixed;
   inset: 0;
@@ -431,7 +431,10 @@
   top: 42%;
   transform: translate(-50%, -50%);
   white-space: nowrap;
-  font-size: clamp(34px, 6.5vw, 64px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
   font-weight: 800;
   letter-spacing: -0.01em;
   color: #111114;
@@ -440,7 +443,8 @@
     transform 0.8s cubic-bezier(0.65, 0, 0.35, 1), opacity 0.45s ease 0.35s;
 }
 .mo-intro[data-google="on"] .mo-intro-words { color: #fff; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.45); }
-.mo-intro-name { color: #ff7a00; }
+.mo-intro-name { color: #ff7a00; font-size: clamp(64px, 13vw, 132px); line-height: 0.95; letter-spacing: 0.02em; }
+.mo-intro-tag { font-size: clamp(20px, 3vw, 30px); font-weight: 600; letter-spacing: 0; }
 .mo-intro[data-stage="leave"] .mo-intro-veil,
 .mo-intro[data-stage="leave"] .mo-intro-google { opacity: 0; }
 .mo-intro[data-stage="leave"] .mo-intro-words {
