@@ -1,9 +1,10 @@
 /** The microphone and the guide's voice. Tap the mic once: it listens, stops when you pause and hands over
- * what you said; the answer is read out and it listens again. Talk over it to interrupt (web: it hears you
- * start and goes quiet at once, then listens); say "stop" and the conversation ends. Tap while it talks or works
- * on an answer to stop it (the answer still arrives as text); tap while it listens to send what it has (or stop,
- * if nothing was recorded yet). It also stops by itself when nobody speaks for a while, and whenever the
- * browser refuses to play the answer it listens again instead of hanging. */
+ * what you said; the answer is read out and it listens again. Mute to close the mic without ending the
+ * conversation (answers are still read out, it just doesn't listen afterwards); unmute and it listens again.
+ * Say "stop" and the conversation ends. Tap while it talks or works on an answer to stop it (the answer still
+ * arrives as text); tap while it listens to send what it has (or stop, if nothing was recorded yet). It also
+ * stops by itself when nobody speaks for a while, and whenever the browser refuses to play the answer it
+ * listens again instead of hanging. */
 import {
   requestRecordingPermissionsAsync,
   RecordingPresets,
@@ -16,9 +17,10 @@ import {
 import { useEffect, useRef, useState } from 'react';
 
 import type { ChatReply } from './api';
-import { audioUrl, isStopCommand, recordingType, SILENCE, SilenceDetector, type Spoken, voiceApi, watchForBargeIn } from './voice';
+import { audioUrl, isStopCommand, recordingType, SilenceDetector, type Spoken, voiceApi } from './voice';
 
-export type MicState = 'off' | 'listening' | 'thinking' | 'speaking';
+/** muted: a spoken conversation is going, but the person closed the mic; answers are still read out. */
+export type MicState = 'off' | 'listening' | 'thinking' | 'speaking' | 'muted';
 
 const FILLER = 'One moment.';
 const FILLER_AFTER_MS = 1200;
@@ -27,7 +29,6 @@ const RECORDING = { ...RecordingPresets.HIGH_QUALITY, numberOfChannels: 1, isMet
 const MIN_RECORDING_MS = 600; // a tap after this long sends what was recorded, even if it sounded quiet
 const NOTHING_HEARD = "I didn't hear anything, so I stopped listening. Tap the mic to try again.";
 const NOT_NOW = "I couldn't take that just now. Tap the mic and say it again.";
-const AFTER_BARGE_IN_WAIT_MS = 3500; // talked over it and then said nothing more ("stop!"): close the mic quietly
 
 interface Options {
   buildingId: string | null;
@@ -43,19 +44,25 @@ export function useVoice({ buildingId, onHeard, onError }: Options) {
   const playing = useAudioPlayerStatus(player);
   const [mic, setMicState] = useState<MicState>('off');
   const [notice, setNotice] = useState<string | null>(null); // a friendly line about the mic, not an error
+  const [muted, setMutedState] = useState(false);
   const state = useRef<MicState>('off');
   const on = useRef(false); // a spoken conversation is going: answers are read out, then it listens again
   const detector = useRef(new SilenceDetector());
   const filler = useRef<Spoken | null>(null);
   const fillerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const turns = useRef(0);
-  const quietIfNothing = useRef(false); // this turn began by talking over Finni: silence just ends it
+  const mutedRef = useRef(false); // the person closed the mic: don't listen until they unmute
   const latest = useRef({ buildingId, onHeard, onError });
   latest.current = { buildingId, onHeard, onError };
 
   function setMic(next: MicState) {
     state.current = next;
     setMicState(next);
+  }
+
+  function setMuted(next: boolean) {
+    mutedRef.current = next;
+    setMutedState(next);
   }
 
   function fail(error: unknown) {
@@ -76,8 +83,12 @@ export function useVoice({ buildingId, onHeard, onError }: Options) {
     return true;
   }
 
-  async function listen(afterBargeIn = false) {
+  async function listen() {
     const turn = ++turns.current; // a stop or a newer listen while we wait makes this one stale
+    if (mutedRef.current) {
+      setMic('muted'); // wait for unmute (or a typed question)
+      return;
+    }
     try {
       const permission = await requestRecordingPermissionsAsync();
       if (!on.current || turn !== turns.current) return;
@@ -91,8 +102,7 @@ export function useVoice({ buildingId, onHeard, onError }: Options) {
       await recorder.prepareToRecordAsync();
       if (!on.current || turn !== turns.current) return;
       recorder.record();
-      detector.current = new SilenceDetector(afterBargeIn ? { ...SILENCE, waitMs: AFTER_BARGE_IN_WAIT_MS } : SILENCE);
-      quietIfNothing.current = afterBargeIn;
+      detector.current = new SilenceDetector();
       setMic('listening');
     } catch (error) {
       fail(error);
@@ -133,6 +143,7 @@ export function useVoice({ buildingId, onHeard, onError }: Options) {
     if (fillerTimer.current) clearTimeout(fillerTimer.current);
     if (recorder.isRecording) recorder.stop().catch(() => {});
     player.pause();
+    setMuted(false);
     setMic('off');
   }
 
@@ -143,6 +154,7 @@ export function useVoice({ buildingId, onHeard, onError }: Options) {
       case 'off':
         if (on.current) return; // already starting (waiting for the permission prompt)
         on.current = true;
+        setMuted(false);
         if (!filler.current) voiceApi.speakText(FILLER).then((clip) => (filler.current = clip)).catch(() => {});
         void listen();
         break;
@@ -151,11 +163,26 @@ export function useVoice({ buildingId, onHeard, onError }: Options) {
         else stop();
         break;
       case 'speaking':
-        stop(); // stop talking (to say something instead, just talk over it)
+      case 'thinking': // stop talking; the answer still arrives as text
+      case 'muted':
+        stop();
         break;
-      case 'thinking':
-        stop(); // stop talking; the answer still arrives as text
-        break;
+    }
+  }
+
+  /** The mute button: close the mic (the conversation goes on) or open it again. */
+  function toggleMute() {
+    if (!on.current) return;
+    setNotice(null);
+    if (!mutedRef.current) {
+      setMuted(true);
+      if (state.current !== 'listening') return; // talking or thinking: it just won't listen afterwards
+      turns.current += 1; // drop what was being recorded
+      recorder.stop().catch(() => {});
+      setMic('muted');
+    } else {
+      setMuted(false);
+      if (state.current === 'muted') void listen();
     }
   }
 
@@ -189,19 +216,9 @@ export function useVoice({ buildingId, onHeard, onError }: Options) {
     if (decision === 'done') void finishTurn();
     else if (decision === 'nothing') {
       stop();
-      if (!quietIfNothing.current) setNotice(NOTHING_HEARD);
+      setNotice(NOTHING_HEARD);
     }
   }, [recording]);
-
-  // speaking: the person talks over it (web): go quiet at once and listen to them
-  useEffect(() => {
-    if (mic !== 'speaking') return;
-    return watchForBargeIn(() => {
-      if (state.current !== 'speaking' || !on.current) return;
-      player.pause();
-      void listen(true);
-    });
-  }, [mic]); // eslint-disable-line react-hooks/exhaustive-deps -- one watch per answer read out
 
   // speaking: when the answer has been read out, listen again
   useEffect(() => {
@@ -214,5 +231,5 @@ export function useVoice({ buildingId, onHeard, onError }: Options) {
     if (playError && state.current === 'speaking' && on.current) void listen();
   }, [playError]);
 
-  return { mic, notice, toggle, waiting, say, stop };
+  return { mic, muted, notice, toggle, toggleMute, waiting, say, stop };
 }

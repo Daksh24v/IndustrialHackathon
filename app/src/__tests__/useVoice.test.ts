@@ -1,9 +1,8 @@
 /** The whole spoken loop with a mockAudio microphone and speaker: listen, pause, words handed over, the answer read
- * out, listening again; interrupting; stopping. */
+ * out, listening again; muting; stopping. */
 import { act, renderHook } from '@testing-library/react-native';
 
 import { useVoice } from '../useVoice';
-import * as voiceModule from '../voice';
 import { voiceApi } from '../voice';
 
 const mockAudio = {
@@ -119,24 +118,57 @@ test('tapping while it talks stops it; tapping before speaking stops', async () 
   expect(hook.result.current.mic).toBe('off');
 });
 
-test('talking over it: goes quiet at once and listens; nothing more said: closes quietly', async () => {
-  let heardOver: (() => void) | null = null;
-  jest.spyOn(voiceModule, 'watchForBargeIn').mockImplementation((onSpeech) => {
-    heardOver = onSpeech;
-    return () => { heardOver = null; };
-  });
-  const { hook, level } = await setup();
+test('mute while listening: drops the recording, stays in the conversation; unmute: listens again', async () => {
+  const { hook, onHeard, level } = await setup();
+  await act(async () => hook.result.current.toggle());
+  await level(-20, 400);                                  // halfway through saying something
+  await act(async () => hook.result.current.toggleMute());
+  expect(hook.result.current.mic).toBe('muted');
+  expect(hook.result.current.muted).toBe(true);
+  expect(mockRecorder.stop).toHaveBeenCalled();
+  await level(-55, 1400);                                 // a late level reading changes nothing
+  expect(onHeard).not.toHaveBeenCalled();
+  expect(voiceApi.transcribe).not.toHaveBeenCalled();
+
+  await act(async () => hook.result.current.toggleMute());
+  expect(hook.result.current.muted).toBe(false);
+  expect(hook.result.current.mic).toBe('listening');
+  expect(mockRecorder.record).toHaveBeenCalledTimes(2);
+});
+
+test('muted: answers are still read out, then it waits instead of listening', async () => {
+  const { hook } = await setup();
+  await act(async () => hook.result.current.toggle());
+  await act(async () => hook.result.current.toggleMute());
+  await act(async () => hook.result.current.waiting());  // a typed question while muted
+  expect(hook.result.current.mic).toBe('thinking');
+  await act(async () => hook.result.current.say({ reply: 'Kitchen 1.27.', question: null, map: null }));
+  expect(hook.result.current.mic).toBe('speaking');
+  mockAudio.playing = { didJustFinish: true };
+  await act(async () => hook.rerender({}));
+  expect(hook.result.current.mic).toBe('muted');
+  expect(mockRecorder.record).toHaveBeenCalledTimes(1);   // only the first listen
+
+  await act(async () => hook.result.current.toggle());   // the mic button still ends the conversation
+  expect(hook.result.current.mic).toBe('off');
+  expect(hook.result.current.muted).toBe(false);
+  await act(async () => hook.result.current.toggle());   // a new conversation starts unmuted
+  expect(hook.result.current.mic).toBe('listening');
+});
+
+test('mute while it talks: it finishes the answer, then waits for unmute', async () => {
+  const { hook } = await setup();
   await act(async () => hook.result.current.toggle());
   await act(async () => hook.result.current.say({ reply: 'Long answer.', question: null, map: null }));
-  expect(hook.result.current.mic).toBe('speaking');
-  expect(heardOver).not.toBeNull();
   const pausedBefore = mockAudio.paused;
-  await act(async () => heardOver!());
-  expect(mockAudio.paused).toBeGreaterThan(pausedBefore);
+  await act(async () => hook.result.current.toggleMute());
+  expect(hook.result.current.mic).toBe('speaking');      // not cut off
+  expect(mockAudio.paused).toBe(pausedBefore);
+  mockAudio.playing = { didJustFinish: true };
+  await act(async () => hook.rerender({}));
+  expect(hook.result.current.mic).toBe('muted');
+  await act(async () => hook.result.current.toggleMute());
   expect(hook.result.current.mic).toBe('listening');
-  await level(-60, 3600);                                 // "stop!" was all: quiet for 3.5 s
-  expect(hook.result.current.mic).toBe('off');
-  expect(hook.result.current.notice).toBeNull();          // no "I didn't hear anything"
 });
 
 test('"stop" ends the conversation without asking the guide', async () => {
