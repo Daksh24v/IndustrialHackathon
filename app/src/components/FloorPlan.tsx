@@ -17,10 +17,10 @@ import { modelOf } from '../models/catalog';
 import { colourOf } from '../models/materials';
 import { doorSymbol, layered, partsFromAbove, type PlanShape, stairPlan, wallBand } from '../plan';
 import { layoutStairs, stairInput } from '../stairs';
-import { assetStyle, colours, map as mapColours, roomStyle } from '../theme';
+import { assetStyle, colours, map as mapColours, roomStyle, shade } from '../theme';
 import type { MapHandle } from '../ui/MapControls';
 import { doorLeaves, floorWalls } from '../walls';
-import { atLeast, type Inset, LABEL_FONT, limitZoom, NO_INSET, placeThings, SAFETY_DIM, styles } from './FloorScene';
+import { atLeast, type Inset, LABEL_FONT, limitMove, limitZoom, NO_INSET, placeThings, SAFETY_DIM, styles } from './FloorScene';
 import { safetyMarks } from '../safety';
 import { routeSpaces } from '../steps';
 import { ChangeMarks, HereMarker, SafetyMarks, TargetPin } from './Markers';
@@ -127,9 +127,10 @@ export function FloorPlan({ detail, floorId, map, footprints = NO_FOOTPRINTS, wi
     : undefined;
   const fittedScale = useRef(fitted.scale);
   fittedScale.current = fitted.scale;
-  const gestures = useMapGestures(width, height, ({ k, tx, ty }) =>
-    setTransform((current) => moveTransform(current, limitZoom(k, current.scale, fittedScale.current), tx, ty, width, height)),
-  tapped, frame);
+  const gestures = useMapGestures(width, height, (move) => setTransform((current) => {
+    const { k, tx, ty } = limitMove(move, current.scale, fittedScale.current);
+    return moveTransform(current, k, tx, ty, width, height);
+  }), tapped, frame);
   const zoomBy = (k: number) =>
     setTransform((current) => moveTransform(current, limitZoom(k, current.scale, fittedScale.current), 0, 0, width, height));
   const zoomRef = useRef(zoomBy);
@@ -244,7 +245,7 @@ export function FloorPlan({ detail, floorId, map, footprints = NO_FOOTPRINTS, wi
             <G testID="plan-stairs">
               {scene.stairs.voids ? <Path d={scene.stairs.voids} fill={colourOf('void')} /> : null}
               {scene.stairs.treads.map((layer) => (
-                <Path key={`tread-${layer.key}`} d={layer.d} fill={layer.fill} stroke={mapColours.label} strokeOpacity={0.55}
+                <Path key={`tread-${layer.key}`} d={layer.d} fill={layer.fill} stroke={shade(layer.fill, 0.4)}
                       strokeWidth={0.6} />
               ))}
               {scene.stairs.above ? <Path d={scene.stairs.above} fill="none" stroke={mapColours.label} strokeOpacity={0.45}
@@ -268,14 +269,14 @@ export function FloorPlan({ detail, floorId, map, footprints = NO_FOOTPRINTS, wi
             ))}
             <G opacity={0.28}>
               {scene.thingsOff.map((layer) => (
-                <Path key={`off-${layer.key}`} d={layer.d} fill={layer.fill} stroke={mapColours.label} strokeOpacity={0.35} strokeWidth={0.5} />
+                <Path key={`off-${layer.key}`} d={layer.d} fill={layer.fill} stroke={shade(layer.fill, 0.6)} strokeWidth={0.5} />
               ))}
               {scene.overheadOff ? <Path d={scene.overheadOff} fill="none" stroke={mapColours.label} strokeOpacity={0.5} strokeWidth={0.6}
                                          strokeDasharray={[3, 2]} /> : null}
             </G>
             <G testID="plan-things">
               {scene.things.map((layer) => (
-                <Path key={`on-${layer.key}`} d={layer.d} fill={layer.fill} stroke={mapColours.label} strokeOpacity={0.35} strokeWidth={0.5} />
+                <Path key={`on-${layer.key}`} d={layer.d} fill={layer.fill} stroke={shade(layer.fill, 0.6)} strokeWidth={0.5} />
               ))}
               {scene.overhead ? <Path d={scene.overhead} fill="none" stroke={mapColours.label} strokeOpacity={0.5} strokeWidth={0.6}
                                       strokeDasharray={[3, 2]} /> : null}

@@ -88,6 +88,15 @@ export function limitZoom(k: number, scale: number, fittedScale: number): number
   return next / scale;
 }
 
+/** A move (zoom about a point, which shifts the view too) with its zoom cut short at the limits: the shift is cut
+ * by as much, so at the limit the wheel stops instead of sliding the map away. */
+export function limitMove({ k, tx, ty }: { k: number; tx: number; ty: number }, scale: number, fittedScale: number) {
+  const limited = limitZoom(k, scale, fittedScale);
+  if (Math.abs(k - 1) < 1e-9 || Math.abs(limited - k) < 1e-9) return { k, tx, ty };
+  const cut = (1 - limited) / (1 - k);
+  return { k: limited, tx: tx * cut, ty: ty * cut };
+}
+
 /** The room under a plan point: the smallest one, so a room inside a hall wins over the hall. */
 export function roomAt<T extends { polygon: Point[]; area_m2: number; type: string }>(spaces: T[], point: Point): T | null {
   const under = spaces.filter((space) => space.type !== 'outdoor' && pointInPolygon(point, space.polygon));
@@ -394,8 +403,10 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
     : undefined;
   const fittedScale = useRef(fitted.scale);
   fittedScale.current = fitted.scale;
-  const gestures = useMapGestures(width, height, ({ k, tx, ty }) =>
-    setCam((current) => moveCamera(current, limitZoom(k, current.scale, fittedScale.current), tx, ty, width, height)), tapped, frame);
+  const gestures = useMapGestures(width, height, (move) => setCam((current) => {
+    const { k, tx, ty } = limitMove(move, current.scale, fittedScale.current);
+    return moveCamera(current, k, tx, ty, width, height);
+  }), tapped, frame);
   const zoomBy = (k: number) =>
     setCam((current) => moveCamera(current, limitZoom(k, current.scale, fittedScale.current), 0, 0, width, height));
 

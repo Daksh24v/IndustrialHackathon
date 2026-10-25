@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react-native';
 
 import type { BuildingDetail, Point, Space } from '../api';
 import { FloorPlan } from '../components/FloorPlan';
-import { drawSolids, limitZoom, placeThings, roomAt, ZOOM_IN, ZOOM_OUT } from '../components/FloorScene';
+import { drawSolids, limitMove, limitZoom, placeThings, roomAt, ZOOM_IN, ZOOM_OUT } from '../components/FloorScene';
 import { box } from '../models/kit';
 import { doorSymbol, layered, OVERHEAD_M, partsFromAbove, stairPlan, wallBand } from '../plan';
 import { layoutStairs } from '../stairs';
@@ -114,6 +114,17 @@ describe('the camera', () => {
     expect(10 * limitZoom(100, 10, 10)).toBeCloseTo(10 * ZOOM_IN);
     expect(10 * limitZoom(0.01, 10, 10)).toBeCloseTo(10 * ZOOM_OUT);
     expect(limitZoom(1.5, 10 * ZOOM_IN, 10)).toBeCloseTo(1); // at the limit, zooming in does nothing
+  });
+
+  it('stops a wheel zoom at the limit instead of sliding the map away', () => {
+    const wheel = { k: 0.5, tx: 60, ty: -30 }; // zoom out about a point off the middle
+    expect(limitMove(wheel, 10, 10)).toEqual(wheel); // room to zoom: as it is
+    const stuck = limitMove(wheel, 10 * ZOOM_OUT, 10);
+    expect(stuck.k).toBeCloseTo(1);
+    expect(stuck.tx).toBeCloseTo(0);
+    expect(stuck.ty).toBeCloseTo(0);
+    const drag = { k: 1, tx: 40, ty: 5 };
+    expect(limitMove(drag, 10 * ZOOM_OUT, 10)).toEqual(drag); // a plain drag still moves
   });
 
   it('finds the room under a point, the smallest when one is inside another', () => {
