@@ -1,4 +1,4 @@
-import { boundsOf, centre, fit, grow, linePath, lineLength, polygonPath, toScreen, toWorld } from '../geometry';
+import { assetRect, boundsOf, centre, fit, grow, linePath, lineLength, polygonPath, signedArea as area, toScreen, toWorld } from '../geometry';
 import type { Point } from '../api';
 
 describe('fit', () => {
@@ -59,5 +59,16 @@ describe('isometric view', () => {
   it('knows the winding of a ring', () => {
     expect(signedArea([[0, 0], [4, 0], [4, 2], [0, 2]])).toBe(8);
     expect(signedArea([[0, 0], [0, 2], [4, 2], [4, 0]])).toBe(-8);
+  });
+});
+
+describe('assetRect', () => {
+  it('turns the footprint about its centre, counter-clockwise', () => {
+    const flat = assetRect([10, 5], { width_m: 4, depth_m: 2, rotation_deg: 0 });
+    expect(flat).toEqual([[8, 4], [12, 4], [12, 6], [8, 6]]);
+    const turned = assetRect([0, 0], { width_m: 4, depth_m: 2, rotation_deg: 90 });
+    expect(turned[1][0]).toBeCloseTo(1); // the +x end of the width now points up
+    expect(turned[1][1]).toBeCloseTo(2);
+    expect(Math.abs(area(turned))).toBeCloseTo(8);
   });
 });

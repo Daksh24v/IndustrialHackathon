@@ -1,4 +1,5 @@
-/** The building from outside, like the block style of a map: each floor a white block, stacked by elevation,
+/** The building from outside, like the block style of a map: each floor a dark block with glowing edges and a lit
+ * band of windows, stacked by elevation,
  * drawn as an isometric view with SVG (no 3D engine, so it runs the same on every phone and on the web).
  * When a floor is chosen (by the agent, or a click on its block) the view zooms onto it, the floors above
  * fade away, and onArrived() hands over to the floor view. */
@@ -7,13 +8,16 @@ import { Animated, Easing, Pressable, View } from 'react-native';
 import Svg, { G, Path } from 'react-native-svg';
 
 import type { Outline, Point } from '../api';
-import { boundsOf, isoDepth, isoProject, pointInPolygon, signedArea, type Iso } from '../geometry';
-import { colours } from '../theme';
+import { boundsOf, grow, isoDepth, isoProject, pointInPolygon, signedArea, type Iso } from '../geometry';
+import { map as mapColours } from '../theme';
 
 const ZOOM_MS = 1300;
 const ZOOM_SCALE = 2.4;
 const FLOOR_GAP = 0.08; // fraction of a floor's height left as a visible seam
 const VIEW_ANGLE = Math.PI / 9; // a slight turn so two sides of the building show
+const WINDOW_ROW_M = 3.5; // one row of windows per this much height
+const GRID_M = 5;
+const GRID_REACH_M = 25; // how far the ground grid reaches beyond the building
 
 interface Props {
   outline: Outline;
@@ -30,6 +34,7 @@ interface Face {
   points: Point[]; // on screen
   fill: string;
   depth: number;
+  bands?: string[]; // lit lines of windows along a wall, one per row
 }
 
 /** The floor whose block is drawn at a screen point: the highest one there, as it is drawn on top. */
@@ -64,11 +69,17 @@ function floorFaces(iso: Iso, footprints: Point[][], bottom: number, top: number
       if (rx + ry >= 0) continue;
       const quad = [isoProject(iso, a, bottom), isoProject(iso, b, bottom), isoProject(iso, b, top), isoProject(iso, a, top)]
         .map(toScreen);
-      const shade = rx < ry ? colours.block : '#E4E4E4'; // left-facing walls lighter, right-facing darker
-      walls.push({ d: path(quad), points: quad, fill: shade, depth: (isoDepth(iso, a) + isoDepth(iso, b)) / 2 });
+      const shade = rx < ry ? mapColours.block : mapColours.blockDark; // left-facing walls lighter, right-facing darker
+      const rows = Math.max(1, Math.round((top - bottom) / WINDOW_ROW_M));
+      const bands = Array.from({ length: rows }, (_, row) => {
+        const z = bottom + ((row + 0.55) * (top - bottom)) / rows;
+        const [w0, w1] = [isoProject(iso, a, z), isoProject(iso, b, z)].map(toScreen);
+        return `M${w0[0].toFixed(1)} ${w0[1].toFixed(1)} L${w1[0].toFixed(1)} ${w1[1].toFixed(1)}`;
+      });
+      walls.push({ d: path(quad), points: quad, fill: shade, depth: (isoDepth(iso, a) + isoDepth(iso, b)) / 2, bands });
     }
     const roof = ring.map((p) => toScreen(isoProject(iso, p, top)));
-    tops.push({ d: path(roof), points: roof, fill: colours.blockTop, depth: Infinity });
+    tops.push({ d: path(roof), points: roof, fill: mapColours.blockTop, depth: Infinity });
   }
   walls.sort((x, y) => x.depth - y.depth);
   return [...walls, ...tops];
@@ -95,6 +106,16 @@ export function BuildingBlocks({ outline, focusFloorId, onArrived, onPickFloor, 
     faces: floorFaces(iso, floor.footprints, floor.elevation_m, floor.elevation_m + floor.height_m * (1 - FLOOR_GAP), toScreen),
   }));
   const frame = useRef<ComponentRef<typeof View>>(null);
+
+  // A faint grid on the ground around the building.
+  const area = grow(plan, GRID_REACH_M);
+  const gridLine = (a: Point, b: Point) => {
+    const [p, q] = [isoProject(iso, a, 0), isoProject(iso, b, 0)].map(toScreen);
+    return `M${p[0].toFixed(1)} ${p[1].toFixed(1)} L${q[0].toFixed(1)} ${q[1].toFixed(1)}`;
+  };
+  const grid: string[] = [];
+  for (let x = Math.ceil(area.minX / GRID_M) * GRID_M; x <= area.maxX; x += GRID_M) grid.push(gridLine([x, area.minY], [x, area.maxY]));
+  for (let y = Math.ceil(area.minY / GRID_M) * GRID_M; y <= area.maxY; y += GRID_M) grid.push(gridLine([area.minX, y], [area.maxX, y]));
 
   const focus = floors.find((floor) => floor.id === focusFloorId);
   const zoom = useRef(new Animated.Value(0)).current;
@@ -124,21 +145,28 @@ export function BuildingBlocks({ outline, focusFloorId, onArrived, onPickFloor, 
     : undefined;
 
   return (
-    <View ref={frame} style={{ width, height, backgroundColor: colours.background, overflow: 'hidden' }} testID="building-blocks">
+    <View ref={frame} style={{ width, height, backgroundColor: mapColours.background, overflow: 'hidden' }} testID="building-blocks">
       <Pressable testID="pick-floor" accessibilityLabel="Open a floor" onPress={pick} disabled={!pick}
                  style={{ width, height }}>
         <Animated.View style={{ width, height, transform: [{ translateX: shiftX }, { translateY: shiftY }, { scale: scaleAnim }] }}>
           <Svg width={width} height={height}>
+            <Path d={grid.join(' ')} stroke={mapColours.slabEdge} strokeOpacity={0.6} strokeWidth={0.6} fill="none" />
             {/* a soft shadow under the building */}
             <Path
               d={path(floors[0]?.footprints[0]?.map((p) => toScreen(isoProject(iso, [p[0] + 1.5, p[1] - 1.5], 0))) ?? [])}
-              fill="#EDEDED"
+              fill={mapColours.shadow}
             />
             {floors.map((floor, i) => {
               const faces = blocks[i].faces;
               const above = !!focus && floor.elevation_m > focus.elevation_m;
               const content = faces.map((face, index) => (
-                <Path key={index} d={face.d} fill={face.fill} stroke={colours.blockEdge} strokeWidth={0.7} strokeLinejoin="round" />
+                <G key={index}>
+                  <Path d={face.d} fill={face.fill} stroke={mapColours.blockEdge} strokeWidth={0.8} strokeLinejoin="round" />
+                  {face.bands?.map((band, row) => (
+                    <Path key={row} d={band} stroke={mapColours.window} strokeWidth={Math.max(1.5, scale * 0.7)}
+                          strokeDasharray={[scale * 0.9, scale * 0.6]} fill="none" />
+                  ))}
+                </G>
               ));
               return above ? (
                 <AnimatedG key={floor.id} opacity={fadeAbove}>{content}</AnimatedG>

@@ -116,6 +116,16 @@ export function isoDepth(iso: Iso, [x, y]: Point): number {
   return -(rx + ry);
 }
 
+/** The rectangle a thing stands on: width along x and depth along y, turned counter-clockwise about its centre. */
+export function assetRect([x, y]: Point, { width_m, depth_m, rotation_deg }: { width_m: number; depth_m: number; rotation_deg: number }): Point[] {
+  const a = (rotation_deg * Math.PI) / 180;
+  const [c, s] = [Math.cos(a), Math.sin(a)];
+  return ([[-1, -1], [1, -1], [1, 1], [-1, 1]] as Point[]).map(([u, v]) => {
+    const [dx, dy] = [(u * width_m) / 2, (v * depth_m) / 2];
+    return [x + dx * c - dy * s, y + dx * s + dy * c];
+  });
+}
+
 /** Signed area (positive = counter-clockwise in plan coordinates). */
 export function signedArea(polygon: Point[]): number {
   let total = 0;

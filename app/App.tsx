@@ -15,7 +15,7 @@ import { FloorScene } from './src/components/FloorScene';
 import MorphOrb, { type OrbAnswer, type OrbHandle } from './src/orb/MorphOrb';
 import { chatTurn, RENEWED_NOTE } from './src/session';
 import { initial, nextStep, reduce } from './src/state';
-import { colours, isWide } from './src/theme';
+import { colours, map as mapColours, isWide } from './src/theme';
 import { useVoice } from './src/useVoice';
 
 /** Shows an error on screen (with what went wrong) instead of a crashed app. */
@@ -308,7 +308,7 @@ async function until<T>(get: () => T | null, timeoutMs = 20000): Promise<T | nul
   return get();
 }
 
-const edge = { borderWidth: StyleSheet.hairlineWidth, borderColor: colours.blockEdge };
+const mapEdge = { borderWidth: StyleSheet.hairlineWidth, borderColor: mapColours.chromeEdge }; // things floating over the map
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colours.background },
   home: { flex: 1, backgroundColor: '#FFFFFF' },
@@ -323,28 +323,28 @@ const styles = StyleSheet.create({
   backText: { fontSize: 32, color: colours.text, marginTop: -4 },
   title: { fontSize: 18, fontWeight: '700', color: colours.text },
   error: { marginHorizontal: 16, marginBottom: 6, color: colours.error },
-  map: { flex: 1 },
+  map: { flex: 1, backgroundColor: mapColours.background },
   topRow: { position: 'absolute', left: 12, right: 12, top: 12, flexDirection: 'row', alignItems: 'flex-start',
             justifyContent: 'space-between' },
   floors: { gap: 6, minWidth: 36 },
   floorChip: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center',
-               backgroundColor: colours.background, ...edge },
+               backgroundColor: mapColours.chrome, ...mapEdge },
   floorChipActive: { backgroundColor: colours.accent, borderColor: colours.accent },
-  floorText: { color: colours.text, fontWeight: '600' },
+  floorText: { color: mapColours.chromeText, fontWeight: '600' },
   floorTextActive: { color: '#FFFFFF' },
-  floorName: { marginTop: 8, color: colours.muted, fontSize: 13, fontWeight: '600', backgroundColor: 'rgba(255,255,255,0.85)',
+  floorName: { marginTop: 8, color: mapColours.chromeMuted, fontSize: 13, fontWeight: '600', backgroundColor: mapColours.chrome,
                paddingHorizontal: 10, paddingVertical: 3, borderRadius: 10, overflow: 'hidden' },
-  toggle: { flexDirection: 'row', backgroundColor: colours.chip, borderRadius: 18, padding: 3 },
+  toggle: { flexDirection: 'row', backgroundColor: mapColours.chrome, borderRadius: 18, padding: 3, ...mapEdge },
   toggleItem: { paddingHorizontal: 12, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
-  toggleActive: { backgroundColor: colours.background, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 3,
+  toggleActive: { backgroundColor: mapColours.chromeEdge, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3,
                   shadowOffset: { width: 0, height: 1 }, elevation: 1 },
-  toggleText: { color: colours.muted, fontWeight: '700', fontSize: 13 },
+  toggleText: { color: mapColours.chromeMuted, fontWeight: '700', fontSize: 13 },
   toggleTextActive: { color: colours.accent },
   retry: { alignSelf: 'flex-start', backgroundColor: colours.accent, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10 },
   step: { position: 'absolute', alignSelf: 'center', backgroundColor: colours.accent, borderRadius: 20,
           paddingHorizontal: 16, paddingVertical: 10 },
   stepText: { color: '#FFFFFF', fontWeight: '600' },
-  distance: { position: 'absolute', right: 12, backgroundColor: colours.background, borderRadius: 14,
-              paddingHorizontal: 10, paddingVertical: 6, ...edge },
+  distance: { position: 'absolute', right: 12, backgroundColor: mapColours.chrome, borderRadius: 14,
+              paddingHorizontal: 10, paddingVertical: 6, ...mapEdge },
   distanceText: { color: colours.accent, fontWeight: '700' },
 });

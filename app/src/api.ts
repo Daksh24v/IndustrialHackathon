@@ -36,9 +36,11 @@ export interface Asset {
   id: string;
   name: string;
   type: string;
+  category?: string; // machine, equipment, fixture or furniture
   space_id: string;
   floor_id: string;
   position: Point;
+  footprint?: { width_m: number; depth_m: number; rotation_deg: number };
 }
 
 export interface BuildingDetail {
