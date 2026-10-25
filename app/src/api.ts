@@ -37,9 +37,11 @@ export interface Asset {
   id: string;
   name: string;
   type: string;
+  category?: string; // machine, equipment, fixture or furniture
   space_id: string;
   floor_id: string;
   position: Point;
+  footprint?: { width_m: number; depth_m: number; rotation_deg: number };
 }
 
 export interface BuildingDetail {
@@ -73,6 +75,18 @@ export interface RoutePiece {
   floor_id: string;
   points: Point[];
   then: null | { kind: string; via?: string; name?: string; to_floor_id?: string };
+}
+
+/** The neighbourhood from OpenStreetMap (GET /buildings/{id}/context), in the building's own metres; empty lists
+ * when it has none. */
+export interface Context {
+  attribution: string;
+  buildings: { polygon: Point[]; height_m: number; kind?: string }[]; // kind: industrial, residential, retail, …
+  roads: { line: Point[]; width_m: number; kind: string }[]; // kind: the highway class, or rail, tram, …
+  green: Point[][];
+  water: Point[][];
+  areas?: { polygon: Point[]; kind: string }[]; // land use: industrial, parking, forest, farmland, …
+  trees?: Point[];
 }
 
 /** Edits a facility manager made to the building in this conversation (absent = none). */
@@ -154,6 +168,7 @@ export const api = {
   buildings: (fetcher?: typeof fetch) => call<BuildingRow[]>('/buildings', undefined, fetcher),
   building: (id: string, fetcher?: typeof fetch) => call<BuildingDetail>(`/buildings/${id}`, undefined, fetcher),
   outline: (id: string, fetcher?: typeof fetch) => call<Outline>(`/buildings/${id}/outline`, undefined, fetcher),
+  context: (id: string, fetcher?: typeof fetch) => call<Context>(`/buildings/${id}/context`, undefined, fetcher),
   startSession: (buildingId: string, fetcher?: typeof fetch) =>
     call<{ session_id: string; building_name: string }>(
       '/sessions',

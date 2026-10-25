@@ -1,5 +1,5 @@
 /** Pure geometry for drawing: metres (x right, y up) to screen pixels (x right, y down). */
-import type { Point } from './api';
+import type { Context, Point } from './api';
 
 export interface Bounds {
   minX: number;
@@ -122,6 +122,34 @@ export function isoDepth(iso: Iso, [x, y]: Point): number {
   const rx = dx * Math.cos(iso.angle) - dy * Math.sin(iso.angle);
   const ry = dx * Math.sin(iso.angle) + dy * Math.cos(iso.angle);
   return -(rx + ry);
+}
+
+/** The rectangle a thing stands on: width along x and depth along y, turned counter-clockwise about its centre. */
+export function assetRect([x, y]: Point, { width_m, depth_m, rotation_deg }: { width_m: number; depth_m: number; rotation_deg: number }): Point[] {
+  const a = (rotation_deg * Math.PI) / 180;
+  const [c, s] = [Math.cos(a), Math.sin(a)];
+  return ([[-1, -1], [1, -1], [1, 1], [-1, 1]] as Point[]).map(([u, v]) => {
+    const [dx, dy] = [(u * width_m) / 2, (v * depth_m) / 2];
+    return [x + dx * c - dy * s, y + dx * s + dy * c];
+  });
+}
+
+/** The part of the neighbourhood within reach (metres) of an area: what is worth drawing around the building. */
+export function nearby(context: Context, area: Bounds, reach: number): Context {
+  const box = grow(area, reach);
+  const near = (points: Point[]) => {
+    const b = boundsOf(points);
+    return b.maxX >= box.minX && b.minX <= box.maxX && b.maxY >= box.minY && b.minY <= box.maxY;
+  };
+  return {
+    attribution: context.attribution,
+    buildings: context.buildings.filter((item) => near(item.polygon)),
+    roads: context.roads.filter((item) => near(item.line)),
+    green: context.green.filter(near),
+    water: context.water.filter(near),
+    areas: (context.areas ?? []).filter((item) => near(item.polygon)),
+    trees: (context.trees ?? []).filter(([x, y]) => x >= box.minX && x <= box.maxX && y >= box.minY && y <= box.maxY),
+  };
 }
 
 /** Signed area (positive = counter-clockwise in plan coordinates). */

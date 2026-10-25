@@ -80,3 +80,13 @@ export function changesOn(detail: BuildingDetail, map: MapView | null, floorId: 
   }
   return result;
 }
+
+/** The things on a floor that have a footprint to draw, where they are now (a moved thing stands at its new place). */
+export function assetsOn(detail: BuildingDetail, map: MapView | null, floorId: string) {
+  const moved = new Map((map?.changes?.moved ?? []).map((thing) => [thing.asset_id, thing]));
+  return detail.assets.flatMap((asset) => {
+    const now = moved.get(asset.id);
+    const placed = now ? { ...asset, floor_id: now.floor_id, position: now.position } : asset;
+    return placed.floor_id === floorId && placed.footprint ? [{ ...placed, footprint: placed.footprint }] : [];
+  });
+}

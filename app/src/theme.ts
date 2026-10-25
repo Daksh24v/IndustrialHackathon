@@ -25,14 +25,136 @@ export const colours = {
   moved: '#2F6FED', // things moved to a new place
 } as const;
 
-export const spaceFill: Record<string, string> = {
-  room: colours.room,
-  corridor: colours.corridor,
-  hall: colours.hall,
-  stair: colours.shaft,
-  lift: colours.shaft,
-  outdoor: colours.outdoor,
+/** The map canvas: a dark "digital twin". Rooms are tinted by what they're for, with a brighter edge; orange
+ * stays for you and your way, red for closed, green and blue for new and moved things. */
+export const map = {
+  background: '#0B1016',
+  slabTop: '#111922',
+  slabSide: '#0A0E13',
+  slabEdge: '#24303E',
+  wallDark: [24, 33, 45], // rgb of a wall facing away from the light
+  wallLit: [46, 62, 82], // and one facing it
+  wallTop: 'rgba(132, 186, 255, 0.55)',
+  wall2d: '#2B3A4C', // walls seen from above
+  label: '#8EA2B8',
+  shadow: 'rgba(0, 0, 0, 0.45)',
+  chrome: 'rgba(17, 25, 34, 0.88)', // buttons and pills floating over the map
+  chromeEdge: '#2A3746',
+  chromeText: '#D6E1EC',
+  chromeMuted: '#7D8FA3',
+  block: '#1F2C3B',
+  blockDark: '#17212D',
+  blockTop: '#283749',
+  blockEdge: 'rgba(79, 195, 247, 0.8)',
+  window: 'rgba(150, 215, 255, 0.6)',
+  closedFaint: 'rgba(229, 57, 53, 0.28)',
+  // the OpenStreetMap neighbourhood: dimmer than the building, so it stays the subject
+  near: '#161E29', // neighbouring buildings' walls
+  nearDark: '#111821',
+  nearTop: '#2A3444',
+  nearEdge: 'rgba(120, 150, 190, 0.35)',
+  road: '#1D2632',
+  roadEdge: 'rgba(110, 140, 175, 0.35)',
+  rail: '#262B36',
+  green: '#16402A',
+  water: '#123454',
+  tree: '#1F5C38',
+  treeEdge: '#2E7D4F',
+} as const;
+
+/** The neighbourhood's land, by its use: dim, so the building stays the subject, but each kind its own hue. */
+const AREA_FILL: Record<string, string> = {
+  industrial: '#2E2752', commercial: '#1C3358', retail: '#40264A', residential: '#33302A', parking: '#2A303A',
+  grass: '#17402A', park: '#1A4A2C', forest: '#11401F', farmland: '#3A3E1A', meadow: '#1F4428', sports: '#164640',
+  construction: '#45391F', brownfield: '#3D3324', cemetery: '#203A2E', allotments: '#26422A', railway: '#272A33',
 };
+export const areaFill = (kind: string) => AREA_FILL[kind] ?? map.green;
+
+/** Next door's buildings, by what they are: a top and the two wall shades. */
+const NEAR_TOP: Record<string, string> = {
+  industrial: '#3C3366', commercial: '#264066', office: '#264066', retail: '#552E5C', residential: '#4A4232',
+  public: '#21504A', religious: '#433D58', parking: '#343A46',
+};
+export function nearStyle(kind?: string): { top: string; wall: string; wallDark: string } {
+  const top = NEAR_TOP[kind ?? ''] ?? map.nearTop;
+  return { top, wall: shade(top, 0.8), wallDark: shade(top, 0.62) };
+}
+
+/** Roads by class: big roads warmer and wider-looking, paths thin and dim, rail dashed. */
+export function roadStyle(kind: string): { fill: string; edge: string; dashed?: boolean } {
+  switch (kind) {
+    case 'motorway': case 'trunk': case 'motorway_link': case 'trunk_link':
+      return { fill: '#4A3B22', edge: 'rgba(230, 180, 90, 0.5)' };
+    case 'primary': case 'primary_link': case 'secondary': case 'secondary_link':
+      return { fill: '#3A3426', edge: 'rgba(215, 190, 130, 0.4)' };
+    case 'tertiary': case 'residential': case 'unclassified': case 'living_street':
+      return { fill: '#252E3B', edge: 'rgba(130, 160, 195, 0.4)' };
+    case 'footway': case 'path': case 'cycleway': case 'pedestrian': case 'steps': case 'track': case 'bridleway':
+      return { fill: '#1F2833', edge: 'rgba(120, 150, 180, 0.25)' };
+    case 'rail': case 'tram': case 'light_rail': case 'subway': case 'narrow_gauge':
+      return { fill: map.rail, edge: 'rgba(170, 180, 200, 0.55)', dashed: true };
+    default: return { fill: map.road, edge: map.roadEdge };
+  }
+}
+
+export interface RoomStyle {
+  fill: string;
+  edge: string;
+}
+
+const room = (fill: string, edge: string): RoomStyle => ({ fill, edge });
+const WORK = room('#13243C', '#4C8DFF');
+const LAB = room('#0D2D33', '#2FD4D9');
+const PRODUCTION = room('#211A3B', '#9A7CFF');
+const LOGISTICS = room('#13291D', '#3FCB7A');
+const AMENITY = room('#271731', '#D27BE8'); // orchid, so it never reads as closed (red)
+const HOME = room('#29231A', '#CDAE72');
+const CORRIDOR = room('#151C26', '#34465B');
+const LOBBY = room('#19212E', '#5A6E88');
+const SHAFT = room('#1D2839', '#8FB3FF');
+const OUTDOOR = room('#0F2219', '#2E7D5B');
+const GENERIC = room('#182029', '#475466');
+
+const byRoomType: Record<string, RoomStyle> = {
+  office: WORK, meeting_room: WORK, seminar_room: WORK, lecture_hall: WORK, library: WORK, print_room: WORK,
+  lab: LAB, quality_lab: LAB, makerspace: LAB, server_room: LAB, technical_room: LAB,
+  production_zone: PRODUCTION, assembly_zone: PRODUCTION, additive_zone: PRODUCTION,
+  warehouse_zone: LOGISTICS, logistics_zone: LOGISTICS, storage: LOGISTICS,
+  kitchen: AMENITY, canteen: AMENITY, toilet: AMENITY, bathroom: AMENITY, locker_room: AMENITY, shop: AMENITY,
+  bedroom: HOME, living_room: HOME,
+  corridor: CORRIDOR, lobby: LOBBY, stairwell: SHAFT, lift: SHAFT, balcony: OUTDOOR,
+};
+const byType: Record<string, RoomStyle> = {
+  corridor: CORRIDOR, hall: LOBBY, stair: SHAFT, lift: SHAFT, outdoor: OUTDOOR,
+};
+
+/** How a space is drawn: by its room type (lab, office, …), else by its kind (corridor, stair, …). */
+export function roomStyle(space: { type: string; room_type?: string }): RoomStyle {
+  return byRoomType[space.room_type ?? ''] ?? byType[space.type] ?? GENERIC;
+}
+
+export interface AssetStyle {
+  top: string;
+  edge: string;
+  height_m: number; // 0 = drawn flat on the floor
+}
+
+/** Things in the rooms: machines stand tall and bright, furniture lies flat and dim. */
+export function assetStyle(category: string): AssetStyle {
+  switch (category) {
+    case 'machine': return { top: '#A9BED6', edge: '#DCE9F8', height_m: 1.6 };
+    case 'equipment': return { top: '#6F9CCB', edge: '#A9CBEE', height_m: 1.0 };
+    case 'fixture': return { top: '#56667A', edge: '#7C8DA1', height_m: 0.4 };
+    default: return { top: '#2A3544', edge: '#3D4B5D', height_m: 0 };
+  }
+}
+
+/** A colour darker (factor < 1) or lighter (> 1), for the sides of boxes. */
+export function shade(hex: string, factor: number): string {
+  const v = parseInt(hex.slice(1), 16);
+  const c = [(v >> 16) & 255, (v >> 8) & 255, v & 255].map((x) => Math.max(0, Math.min(255, Math.round(x * factor))));
+  return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+}
 
 /** Screens at least this wide get the chat as a panel beside the map (desktop); narrower ones the phone layout. */
 export const WIDE_PX = 900;

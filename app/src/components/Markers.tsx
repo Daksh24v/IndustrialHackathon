@@ -7,7 +7,7 @@ import { Circle, Ellipse, G, Line, Path, Text as SvgText } from 'react-native-sv
 
 import type { Point } from '../api';
 import type { FloorChanges } from '../changes';
-import { colours } from '../theme';
+import { colours, map as mapColours } from '../theme';
 
 const AnimatedEllipse = Animated.createAnimatedComponent(Ellipse);
 
@@ -77,12 +77,14 @@ interface HaloProps {
   text: string;
 }
 
-/** Text with a white outline, readable on top of anything. */
+/** Text with an outline in the map's background, readable on top of anything. */
 function Halo({ x, y, size, weight, colour, fontFamily, text }: HaloProps) {
   const common = { x, y, fontSize: size, fontWeight: weight, fontFamily, textAnchor: 'middle' as const };
   return (
     <>
-      <SvgText {...common} fill="#FFFFFF" stroke="#FFFFFF" strokeWidth={3} strokeLinejoin="round">{text}</SvgText>
+      <SvgText {...common} fill={mapColours.background} stroke={mapColours.background} strokeWidth={3} strokeLinejoin="round">
+        {text}
+      </SvgText>
       <SvgText {...common} fill={colour}>{text}</SvgText>
     </>
   );
@@ -106,7 +108,7 @@ export function ChangeMarks({ changes, project, visible = () => true, fontFamily
         const colour = door.kind === 'closed' ? colours.closed : colours.added;
         return (
           <G key={`door-${door.id}`} testID={door.kind === 'closed' ? 'closed-door' : 'new-door'}>
-            <Line x1={ax} y1={ay} x2={bx} y2={by} stroke="#FFFFFF" strokeWidth={8} strokeLinecap="round" />
+            <Line x1={ax} y1={ay} x2={bx} y2={by} stroke={mapColours.background} strokeWidth={8} strokeLinecap="round" />
             <Line x1={ax} y1={ay} x2={bx} y2={by} stroke={colour} strokeWidth={4.5} strokeLinecap="round" />
           </G>
         );

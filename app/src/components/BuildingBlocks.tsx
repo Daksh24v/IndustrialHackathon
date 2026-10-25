@@ -3,16 +3,20 @@
  * on the web). A route runs across the slabs, up the stairs from one to the next. Drag to turn it all the way
  * round (it also turns slowly by itself until touched); the floor under the cursor turns grey with its name,
  * and a click (tap) opens it. When a floor is chosen (by the agent or a click) the view zooms onto it, the
- * floors above fade away, and onArrived() hands over to the floor view. */
+ * floors above fade away, and onArrived() hands over to the floor view. Under it, on the ground, the real
+ * neighbourhood from OpenStreetMap when the building has one: land use, streets, trees and the buildings next door. */
 import { type ComponentRef, type MutableRefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, PanResponder, Platform, StyleSheet, Text, View } from 'react-native';
-import Svg, { Circle, G, Path, Text as SvgText } from 'react-native-svg';
+import Svg, { Circle, Defs, G, Path, RadialGradient, Rect, Stop, Text as SvgText } from 'react-native-svg';
 
-import type { MapView, Outline, Point, Space } from '../api';
-import { boundsOf, ISO_PITCH, isoDepth, isoProject, pointInPolygon, signedArea, type Iso } from '../geometry';
-import { colours, spaceFill } from '../theme';
+import type { Context, MapView, Outline, Point, Space } from '../api';
+import {
+  boundsOf, centre as centreOf, grow, ISO_PITCH, isoDepth, isoProject, nearby, pointInPolygon, signedArea, type Iso,
+} from '../geometry';
+import { colours, map as mapColours, nearStyle, roomStyle } from '../theme';
 import type { MapHandle } from '../ui/MapControls';
 import { type Inset, LABEL_FONT, NO_INSET, wrapAngle } from './FloorScene';
+import { GroundLayers, groundOf } from './Neighbourhood';
 
 const ZOOM_MS = 1300;
 const ZOOM_SCALE = 2.4;
@@ -27,8 +31,11 @@ const SPIN_PER_S = (2 * Math.PI) / 90; // the idle turn: once round in 90 s
 const SPIN_PAUSE_MS = 5000; // after a touch the building holds still this long
 const TAP_SLOP_PX = 5;
 const TURN_MS = 450;
-const HOVER_TOP = '#E4E4E8';
-const HOVER_WALL = '#D6D6DB';
+const HOVER_TOP = '#34465C';
+const HOVER_WALL = '#2B3A4C';
+const GRID_M = 5;
+const GRID_REACH_M = 25; // how far the ground grid reaches beyond the building
+const NEAR_REACH_M = 120; // how much of the neighbourhood is drawn (it is redrawn as the building turns)
 
 const STACK_GAP = 0.2; // the slabs are this share of the building's width apart
 const SLAB = 0.1; // a slab's thickness, as a share of the gap
@@ -36,6 +43,8 @@ const LABEL_PX = 84; // room kept on the right for the floor names
 
 interface Props {
   outline: Outline;
+  /** The OpenStreetMap neighbourhood, drawn on the ground around the stack. */
+  context?: Context | null;
   /** The rooms, drawn on each slab. */
   spaces?: Space[];
   /** The route across the floors, you and the target. */
@@ -89,8 +98,17 @@ function path(points: Point[]): string {
   return points.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`).join(' ') + ' Z';
 }
 
+interface Look {
+  wall: string;
+  wallDark: string;
+  top: string;
+}
+
+const SLABS: Look = { wall: mapColours.block, wallDark: mapColours.blockDark, top: mapColours.blockTop };
+
 /** Faces of one floor block in drawing order: the walls facing the viewer (far to near), then the top. */
-function floorFaces(iso: Iso, footprints: Point[][], bottom: number, top: number, toScreen: (p: Point) => Point): Face[] {
+function floorFaces(iso: Iso, footprints: Point[][], bottom: number, top: number, toScreen: (p: Point) => Point,
+                    look: Look = SLABS): Face[] {
   const walls: Face[] = [];
   const tops: Face[] = [];
   for (const raw of footprints) {
@@ -107,17 +125,17 @@ function floorFaces(iso: Iso, footprints: Point[][], bottom: number, top: number
       if (rx + ry >= 0) continue;
       const quad = [isoProject(iso, a, bottom), isoProject(iso, b, bottom), isoProject(iso, b, top), isoProject(iso, a, top)]
         .map(toScreen);
-      const shade = rx < ry ? colours.block : '#E4E4E4'; // left-facing walls lighter, right-facing darker
+      const shade = rx < ry ? look.wall : look.wallDark; // left-facing walls lighter, right-facing darker
       walls.push({ d: path(quad), points: quad, fill: shade, depth: (isoDepth(iso, a) + isoDepth(iso, b)) / 2 });
     }
     const roof = ring.map((p) => toScreen(isoProject(iso, p, top)));
-    tops.push({ d: path(roof), points: roof, fill: colours.blockTop, depth: Infinity });
+    tops.push({ d: path(roof), points: roof, fill: look.top, depth: Infinity });
   }
   walls.sort((x, y) => x.depth - y.depth);
   return [...walls, ...tops];
 }
 
-export function BuildingBlocks({ outline, spaces = [], map = null, focusFloorId, onArrived, onPickFloor, spin = false,
+export function BuildingBlocks({ outline, context, spaces = [], map = null, focusFloorId, onArrived, onPickFloor, spin = false,
                                width, height, inset = NO_INSET, handleRef }: Props) {
   const floors = useMemo(() => [...outline.floors].sort((a, b) => a.elevation_m - b.elevation_m), [outline]);
   const all = useMemo(() => floors.flatMap((floor) => floor.footprints.flat()), [floors]);
@@ -150,6 +168,38 @@ export function BuildingBlocks({ outline, spaces = [], map = null, focusFloorId,
   const blocksRef = useRef(blocks);
   blocksRef.current = blocks;
   const frame = useRef<ComponentRef<typeof View>>(null);
+
+  // The ground under the stack: a faint grid and the neighbourhood, next door's buildings far to near.
+  const ground = -slab;
+  const near = useMemo(() => (context && all.length ? nearby(context, plan, NEAR_REACH_M) : null), [context, all]); // eslint-disable-line react-hooks/exhaustive-deps -- plan follows from all
+  const area = grow(plan, GRID_REACH_M);
+  const gridLine = (a: Point, b: Point) => {
+    const [p, q] = [at(a, ground), at(b, ground)];
+    return `M${p[0].toFixed(1)} ${p[1].toFixed(1)} L${q[0].toFixed(1)} ${q[1].toFixed(1)}`;
+  };
+  const grid: string[] = [];
+  for (let x = Math.ceil(area.minX / GRID_M) * GRID_M; x <= area.maxX; x += GRID_M) grid.push(gridLine([x, area.minY], [x, area.maxY]));
+  for (let y = Math.ceil(area.minY / GRID_M) * GRID_M; y <= area.maxY; y += GRID_M) grid.push(gridLine([area.minX, y], [area.maxX, y]));
+  const onScreen = (points: Point[]) => {
+    const b = boundsOf(points);
+    return b.maxX > 0 && b.minX < width && b.maxY > 0 && b.minY < height;
+  };
+  const around = near && {
+    ground: groundOf(near, (polygon) => {
+      const screen = polygon.map((p) => at(p, ground));
+      return screen.length > 2 && onScreen(screen) ? path(screen) : null;
+    }, (p) => {
+      const point = at(p, ground);
+      return onScreen([point]) ? { at: point, ppm: scale } : null;
+    }),
+    buildings: near.buildings
+      .map((item) => ({ item, depth: isoDepth(iso, centreOf(item.polygon)) }))
+      .sort((a, b) => a.depth - b.depth)
+      .flatMap(({ item }) => {
+        const faces = floorFaces(iso, [item.polygon], ground, ground + item.height_m, toScreen, nearStyle(item.kind));
+        return faces.some((face) => onScreen(face.points)) ? [faces] : [];
+      }),
+  };
 
   // What is drawn on the slabs: the rooms, the route (up the stairs between slabs), you and the target.
   const rooms = useMemo(() => {
@@ -320,13 +370,26 @@ export function BuildingBlocks({ outline, spaces = [], map = null, focusFloorId,
   const target = map?.target;
 
   return (
-    <View ref={frame} style={{ width, height, backgroundColor: colours.background, overflow: 'hidden' }} testID="building-blocks"
+    <View ref={frame} style={{ width, height, backgroundColor: mapColours.background, overflow: 'hidden' }} testID="building-blocks"
           {...responder.panHandlers}>
       <View testID="pick-floor" accessibilityLabel="Turn the building, or open a floor" style={{ width, height }}>
         <Animated.View style={{ width, height, transform: [{ translateX: shiftX }, { translateY: shiftY }, { scale: scaleAnim }] }}>
           <Svg width={width} height={height}>
+            <Path d={grid.join(' ')} stroke={mapColours.slabEdge} strokeOpacity={0.6} strokeWidth={0.6} fill="none" />
+            {around && (
+              <AnimatedG opacity={fadeAbove}>
+                <GroundLayers ground={around.ground} flatten={Math.sin(pitch)} />
+                {around.buildings.map((faces, i) => (
+                  <G key={`near-${i}`}>
+                    {faces.map((face, j) => (
+                      <Path key={j} d={face.d} fill={face.fill} stroke={mapColours.nearEdge} strokeWidth={0.5} strokeLinejoin="round" />
+                    ))}
+                  </G>
+                ))}
+              </AnimatedG>
+            )}
             {/* a soft shadow under the stack */}
-            <Path d={path(floors[0]?.footprints[0]?.map((p) => at([p[0] + 1.5, p[1] - 1.5], -slab)) ?? [])} fill="#F0F0F2" />
+            <Path d={path(floors[0]?.footprints[0]?.map((p) => at([p[0] + 1.5, p[1] - 1.5], -slab)) ?? [])} fill={mapColours.shadow} />
             {stacked.map((floor, i) => {
               const faces = blocks[i].faces;
               const above = !!focus && floor.elevation_m > focus.elevation_m;
@@ -338,13 +401,14 @@ export function BuildingBlocks({ outline, spaces = [], map = null, focusFloorId,
                 <>
                   {faces.map((face, index) => (
                     <Path key={index} d={face.d}
-                          fill={lit ? (face.depth === Infinity ? HOVER_TOP : HOVER_WALL) : face.depth === Infinity ? '#FFFFFF' : face.fill}
-                          stroke={lit ? colours.accent : onRoute ? '#F3B27A' : colours.blockEdge} strokeWidth={lit ? 1.2 : 0.7}
+                          fill={lit ? (face.depth === Infinity ? HOVER_TOP : HOVER_WALL) : face.fill}
+                          stroke={lit ? colours.accent : onRoute ? '#F3B27A' : mapColours.blockEdge} strokeWidth={lit ? 1.2 : 0.7}
                           strokeLinejoin="round" />
                   ))}
                   {(rooms.get(floor.id) ?? []).map((space) => (
                     <Path key={space.id} d={path(space.polygon.map((p) => at(p, floor.top)))}
-                          fill={lit ? 'transparent' : spaceFill[space.type] ?? colours.room} stroke="#DCDCE0" strokeWidth={0.5} />
+                          fill={lit ? 'transparent' : roomStyle(space).fill} stroke={roomStyle(space).edge} strokeOpacity={0.5}
+                          strokeWidth={0.5} />
                   ))}
                   {routeOn(floor.id, floor.top + 0.05).map((d, k) => (
                     <Path key={`r${k}`} d={d} stroke={colours.accent} strokeWidth={3} strokeLinecap="round" strokeLinejoin="round"
@@ -360,7 +424,7 @@ export function BuildingBlocks({ outline, spaces = [], map = null, focusFloorId,
                   })()}
                   {label && (
                     <SvgText x={label[0] + 12} y={label[1] + 4} fontSize={12} fontWeight="700" fontFamily={LABEL_FONT}
-                             fill={lit || onRoute ? colours.accent : '#8A8A92'}>
+                             fill={lit || onRoute ? colours.accent : mapColours.label}>
                       {floor.name}
                     </SvgText>
                   )}
@@ -375,6 +439,18 @@ export function BuildingBlocks({ outline, spaces = [], map = null, focusFloorId,
             {climbs.map((d, k) => (
               <Path key={`c${k}`} d={d} stroke={colours.accent} strokeWidth={2} strokeDasharray={[4, 4]} fill="none" />
             ))}
+            {/* the neighbourhood fades into the dark at the edges */}
+            {around && (
+              <>
+                <Defs>
+                  <RadialGradient id="vignette" cx="50%" cy="50%" r="60%">
+                    <Stop offset="0.7" stopColor={mapColours.background} stopOpacity={0} />
+                    <Stop offset="1" stopColor={mapColours.background} stopOpacity={1} />
+                  </RadialGradient>
+                </Defs>
+                <Rect x={0} y={0} width={width} height={height} fill="url(#vignette)" pointerEvents="none" />
+              </>
+            )}
           </Svg>
         </Animated.View>
       </View>
@@ -389,8 +465,8 @@ export function BuildingBlocks({ outline, spaces = [], map = null, focusFloorId,
 }
 
 const styles = StyleSheet.create({
-  hint: { position: 'absolute', backgroundColor: '#FFFFFF', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5,
-          borderWidth: StyleSheet.hairlineWidth, borderColor: colours.blockEdge, shadowColor: '#000', shadowOpacity: 0.08,
+  hint: { position: 'absolute', backgroundColor: mapColours.chrome, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5,
+          borderWidth: StyleSheet.hairlineWidth, borderColor: mapColours.chromeEdge, shadowColor: '#000', shadowOpacity: 0.3,
           shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
-  hintText: { fontSize: 12, fontWeight: '600', color: colours.text },
+  hintText: { fontSize: 12, fontWeight: '600', color: mapColours.chromeText },
 });

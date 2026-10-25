@@ -1,0 +1,20 @@
+{
+  "osm-way360544293": {
+    "lat": 48.3542192,
+    "lon": 11.7915557,
+    "rotation_deg": 359.85,
+    "fit": {
+      "osm": "way360544293",
+      "method": "as_projected",
+      "iou": 0.29,
+      "iou_principal_axes": 0.249,
+      "iou_ceiling": 0.306
+    }
+  },
+  "proc-factory-dev-003": {
+    "lat": 48.136427,
+    "lon": 11.6543913,
+    "rotation_deg": 122.0,
+    "note": "Hand-picked: the empty brownfield lot (OSM way651482687) at Am Moosfeld, Trudering-Riem, between two industrial areas; 37 m clear of the lot edge"
+  }
+}
