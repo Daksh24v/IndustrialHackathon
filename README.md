@@ -8,8 +8,9 @@
 > **The website (FINNI).** Put `ANTHROPIC_API_KEY` and `ELEVENLABS_API_KEY` in `.env` (see `.env.example`), then
 > `cd app && npm install && npm run build`, and from the repo root
 > `uv run --env-file .env uvicorn server.app:app --host 0.0.0.0 --port 8000`; open http://localhost:8000. It opens
-> with "Find using FINNI" over the 3D building, then one screen: ask FINNI (typing or the mic) and the route opens
-> beside the answer; hover a floor of the building and click it to look inside; drag to turn it all the way round.
+> map-first, like a map app: the building as a floor stack from the first second, a search bar to ask FINNI (typing,
+> the mic or a quick search such as "Toilets"), the route with what FINNI understood and steps to follow, and
+> **Start** to walk it step by step; views in 3D, bird's eye or flat 2D, turned all the way round.
 > To share it with a public HTTPS link (QR code, mic on phones): `scripts/share.sh`. Details: `app/README.md`,
 > the demo script: [DEMO.md](DEMO.md).
 >

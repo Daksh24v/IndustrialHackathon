@@ -2,22 +2,33 @@
 
 Expo (React Native) app for phones and the web. It talks to the backend in `../server` (see `../server/README.md`).
 
-**One screen** (`App.tsx`): the map fills it and FINNI sits on top. It opens with "Find using FINNI" over the 3D
-building (`src/orb/Intro.tsx`, once per visit, a click or key skips it, `?intro=1` shows it again), which shrinks
-into the "Ask FINNI" label above the orange dotted orb (`src/orb/MorphOrb.tsx`, styles `src/orb/orb.css`,
-timelines `src/orb/motion.ts`); the "Ask FINNI…" pill (with the orange mic) is at the bottom, the building picker at
-the top. Send a question: the pill shrinks into a ball, flies into the orb, the orb thinks ("Searching the
-building…"), turns green and unfolds into the answer card; when FINNI asks back, the options are chips in the
-card. When an answer has a route, the floor opens and FINNI moves beside it (a 400 px column on a laptop, the
-bottom of the screen on a phone); "Earlier" in the card shows the whole conversation. No modes to switch.
+**Map-first** (`App.tsx`, styles `src/ui/finni.css`): the map fills the screen from the start, like a map app.
+It opens with "Find using FINNI" (`src/orb/Intro.tsx`, once per visit, a click or key skips it, `?intro=1` shows it
+again), which shrinks into the search bar.
 
-The building: seen from outside as white blocks, turning slowly; drag to turn it all the way round. Hover a floor
-and it turns grey ("Floor 1 · click to open"); click (or tap) it to fly into that floor. "‹ Building" goes back
-out. Inside a floor:
+- **Search card** (`src/ui/SearchBar.tsx`, top left on a laptop, top on a phone): FINNI's dotted orb as its mark
+  (`src/ui/OrbMark.tsx`, `src/orb/sphere.ts`: it turns, spins while FINNI looks, flashes green with the answer),
+  "Search or ask FINNI…", the mic, the building (a menu of every building) and quick searches made from what the
+  building has (`src/categories.ts`: Toilets, Exit, Coffee, Kitchen, Meeting rooms, Lift…). Escape drops a
+  question still being answered.
+- **Answer panel** (`src/ui/Panel.tsx`, under the search card; a bottom sheet with three heights on phones):
+  FINNI's words, its question with options to tap, and for a route what it understood (**From → To**), metres,
+  minutes, floors, "step-free", the steps (`src/steps.ts`: one per door into another space and per stair or lift,
+  with the turn and a landmark, the same rules as the agent) and **Start**.
+- **Start** (`src/ui/WalkBanner.tsx`): one step at a time in an orange banner; the map flies to each step, turned so
+  you walk up the screen; Next at the stairs goes to the next floor; read out in a spoken conversation.
+- **Map buttons** (`src/ui/MapControls.tsx`, bottom right): I'm here, the floor stack (the open floor orange; the
+  top button shows the whole building), 3D / Top (bird's eye, straight down) / 2D, the compass and zoom.
+- **Voice:** while you talk to FINNI its orb grows big over the map ("Listening…", "Speaking…").
+
+The building (`src/components/BuildingBlocks.tsx`): a floor stack, every floor a slab with its rooms drawn on it,
+pulled apart so each shows; a route runs across the slabs and up the stairs between them. It turns slowly; drag to
+turn it all the way round. Hover a floor and it turns grey ("Floor 1 · click to open"); click (or tap) it to fly
+into that floor. Inside a floor:
 a tilted 3D view with low walls and door gaps, an orange band for the route with arrows flowing along it, a
 pin on the target and an orange disc with a spreading ring where you are. Drag to move, pinch, wheel or +/− to
 zoom; turn it all the way round like a map app with right-drag or Shift/Alt+drag (two fingers on a phone), ⟳ for a
-quarter turn and the compass to put north up again; the 2D/3D switch shows the flat plan instead. Routes over several floors show "Take Lift 1 to
+quarter turn and the compass to put north up again; Top looks straight down (bird's eye) and 2D shows the flat plan. Routes over several floors show "Take Lift 1 to
 Floor 2".
 
 Where you are: **tap the floor ("I'm here")** and the dot moves there (`api.setPositionAt(sessionId, floorId,
@@ -82,8 +93,9 @@ node e2e/run.cjs       # screenshots in e2e/screenshots
 - `src/components/BuildingBlocks.tsx`: the outside view: floors as white isometric blocks, drawn with SVG.
 - `src/components/FloorScene.tsx`: the 3D floor (default); `src/components/FloorPlan.tsx`: the 2D floor.
 - `src/components/Markers.tsx`: you-are-here and the target pin; `src/gestures.ts`: drag and pinch.
-- `src/orb/`: FINNI (the orb, its card and pill), the opening (`Intro.tsx`) and the optional Google 3D opening.
+- `src/orb/`: the dotted sphere (`sphere.ts`, `motion.ts`), the opening (`Intro.tsx`) and the optional Google 3D opening.
 - `src/components/ChatCard.tsx`: `plain()` (answer text without markdown) and the older chat card.
-- The FINNI wordmark on the website is in `src/orb/MorphOrb.tsx` (`mo-logo`); `src/components/FinniLogo.tsx` is the native one.
+- `src/ui/`: the website's FINNI layer (search card, panel, map buttons, walk banner, orb mark) and `finni.css`.
+- `src/steps.ts`, `src/categories.ts`: directions from the route geometry, quick searches from the building.
 - `src/useVoice.ts`, `src/voice.ts`: the microphone and the spoken answers (expo-audio, the backend's /voice).
 - `src/api.ts`, `src/geometry.ts`, `src/theme.ts`: server client, drawing maths, colours.

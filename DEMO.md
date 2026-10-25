@@ -10,12 +10,15 @@ cd app && npx expo start --web          # opens http://localhost:8081
 Or build once and use one address: `cd app && npm run build`, then open http://localhost:8000 (the backend serves
 the site).
 
-**One screen:** the website opens with "Find using FINNI" over the slowly turning 3D building, which shrinks into
-the "Ask FINNI" label above the orange orb. Step 1 is asked there; FINNI's options appear as chips in its card, and
-when the answer has a route the floor opens beside it (a column on a laptop, the top of the screen on a phone):
-no switching between asking and the map. "‹ Building" goes back out; hover a floor of the building (it turns
-grey) and click it to open that floor. Turn the map all the way round with Shift+drag or right-drag (two fingers
-on a phone); the compass puts north up again. "Earlier" in FINNI's card shows the whole conversation.
+**Map-first, like a map app:** "Find using FINNI" shrinks into the search bar and the building is already there as
+a floor stack (every floor a slab with its rooms; hover one, it turns grey; click it to fly in). The search card
+(top left on a laptop, top on a phone) is where you ask: type, the mic, or a quick search made from what this
+building has ("Toilets", "Exit", "Coffee"…). FINNI's answer opens under it (a bottom sheet on a phone): its
+question with options to tap, or for a route **From → To**, the metres and minutes, the steps ("Turn right into
+Office corridor 0.16, by the Coordinate measuring machine") and **Start**, which walks the route one step at a time
+(Next goes up the stairs to the next floor). Hover a step and it lights up on the map. The buttons bottom right:
+I'm here, the floor stack (the whole building on top), 3D / Top (bird's eye) / 2D, the compass and zoom. Turn the
+map all the way round with Shift+drag or right-drag (two fingers on a phone).
 
 **Optional, the real venue:** with `EXPO_PUBLIC_GOOGLE_MAPS_KEY` in `app/.env` (see app/README.md) the opening flies
 round Munich Urban Colab in Google's photorealistic 3D before our building takes over. Add `?intro=1` to the
