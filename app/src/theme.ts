@@ -51,29 +51,29 @@ export const map = {
   // the OpenStreetMap neighbourhood: dimmer than the building, so it stays the subject
   near: '#161E29', // neighbouring buildings' walls
   nearDark: '#111821',
-  nearTop: '#1B2531',
+  nearTop: '#2A3444',
   nearEdge: 'rgba(120, 150, 190, 0.35)',
   road: '#1D2632',
   roadEdge: 'rgba(110, 140, 175, 0.35)',
   rail: '#262B36',
-  green: '#0F2018',
-  water: '#0D1D2D',
+  green: '#16402A',
+  water: '#123454',
   tree: '#1F5C38',
   treeEdge: '#2E7D4F',
 } as const;
 
 /** The neighbourhood's land, by its use: dim, so the building stays the subject, but each kind its own hue. */
 const AREA_FILL: Record<string, string> = {
-  industrial: '#1C1830', commercial: '#132037', retail: '#271A2D', residential: '#1E1C17', parking: '#191D24',
-  grass: '#11261A', park: '#12301E', forest: '#0C2614', farmland: '#202310', meadow: '#15281A', sports: '#0F2A27',
-  construction: '#272216', brownfield: '#241F17', cemetery: '#14241C', allotments: '#18281A', railway: '#1A1C22',
+  industrial: '#2E2752', commercial: '#1C3358', retail: '#40264A', residential: '#33302A', parking: '#2A303A',
+  grass: '#17402A', park: '#1A4A2C', forest: '#11401F', farmland: '#3A3E1A', meadow: '#1F4428', sports: '#164640',
+  construction: '#45391F', brownfield: '#3D3324', cemetery: '#203A2E', allotments: '#26422A', railway: '#272A33',
 };
 export const areaFill = (kind: string) => AREA_FILL[kind] ?? map.green;
 
 /** Next door's buildings, by what they are: a top and the two wall shades. */
 const NEAR_TOP: Record<string, string> = {
-  industrial: '#2A2440', commercial: '#1D2C45', office: '#1D2C45', retail: '#38213C', residential: '#2F2A21',
-  public: '#183530', religious: '#2E2A3A', parking: '#23272E',
+  industrial: '#3C3366', commercial: '#264066', office: '#264066', retail: '#552E5C', residential: '#4A4232',
+  public: '#21504A', religious: '#433D58', parking: '#343A46',
 };
 export function nearStyle(kind?: string): { top: string; wall: string; wallDark: string } {
   const top = NEAR_TOP[kind ?? ''] ?? map.nearTop;

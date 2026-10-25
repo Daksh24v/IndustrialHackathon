@@ -198,14 +198,15 @@ def outline(building_id: str) -> dict:
 @app.get("/buildings/{building_id}/context")
 def context(building_id: str) -> dict:
     """The neighbourhood from OpenStreetMap (ODbL), baked by scripts/osm_context.py into
-    data/context/<id>.json: buildings with heights, roads and rail with widths, green and water, in the
-    building's own frame (metres). A building without one gets the same shape with empty lists."""
+    data/context/<id>.json: buildings with heights and kinds, roads and rail with widths and classes, green,
+    water, land-use areas and trees, in the building's own frame (metres). A building without one gets the
+    same shape with empty lists."""
     building_path(building_id)  # 404 for an unknown building
     path = DATA / "context" / f"{building_id}.json"
     if path.is_file():
         return json.loads(path.read_text(encoding="utf-8"))
     return {"attribution": "© OpenStreetMap contributors", "license": "ODbL-1.0", "placement": None,
-            "radius_m": 0, "buildings": [], "roads": [], "green": [], "water": []}
+            "radius_m": 0, "buildings": [], "roads": [], "green": [], "water": [], "areas": [], "trees": []}
 
 
 class RouteRequest(BaseModel):

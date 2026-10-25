@@ -444,7 +444,7 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
               <>
                 <Defs>
                   <RadialGradient id="vignette" cx="50%" cy="50%" r="60%">
-                    <Stop offset="0.55" stopColor={mapColours.background} stopOpacity={0} />
+                    <Stop offset="0.7" stopColor={mapColours.background} stopOpacity={0} />
                     <Stop offset="1" stopColor={mapColours.background} stopOpacity={1} />
                   </RadialGradient>
                 </Defs>

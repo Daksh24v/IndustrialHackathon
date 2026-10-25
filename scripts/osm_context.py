@@ -1,6 +1,6 @@
-"""Bake a building's OpenStreetMap surroundings (neighbouring buildings, roads, rail, green, water) into
-data/context/<building_id>.json, in the building's own frame (x right, y up, metres), so the map can draw
-the neighbourhood without fetching anything at run time.
+"""Bake a building's OpenStreetMap surroundings (neighbouring buildings by kind, roads and rail by class,
+green, water, land-use areas and trees) into data/context/<building_id>.json, in the building's own frame
+(x right, y up, metres), so the map can draw the neighbourhood without fetching anything at run time.
 
   uv run python scripts/osm_context.py proc-factory-dev-003 osm-way360544293
   uv run python scripts/osm_context.py --all
@@ -54,14 +54,50 @@ ROAD_WIDTH_M = {
     "motorway": 14.0, "trunk": 12.0, "primary": 10.0, "secondary": 8.0, "tertiary": 7.0,
     "motorway_link": 6.0, "trunk_link": 6.0, "primary_link": 6.0, "secondary_link": 5.5, "tertiary_link": 5.5,
     "unclassified": 6.0, "residential": 6.0, "living_street": 5.0, "road": 5.0, "busway": 4.0,
-    "service": 4.0, "track": 3.0, "pedestrian": 4.0, "cycleway": 2.0, "footway": 2.0, "path": 1.5,
-    "bridleway": 1.5, "steps": 2.0,
+    "service": 4.0, "track": 3.0, "pedestrian": 4.0, "cycleway": 2.0, "footway": 2.0, "path": 2.0,
+    "bridleway": 2.0, "steps": 2.0,
 }
 RAIL_WIDTH_M = {"rail": 3.0, "light_rail": 3.0, "subway": 3.0, "narrow_gauge": 2.5, "tram": 2.5}
 WATERWAY_WIDTH_M = {"river": 12.0, "canal": 8.0, "stream": 2.5, "ditch": 1.5, "drain": 1.5}
 GREEN_LANDUSE = "grass|meadow|forest|recreation_ground|village_green|allotments|orchard|cemetery|greenfield"
 GREEN_LEISURE = "park|garden|pitch|playground|golf_course|nature_reserve"
 GREEN_NATURAL = "wood|scrub|grassland|heath|wetland"
+TREE_ROW_SPACING_M = 8.0
+MAX_TREES = 2000
+
+BUILDING_KIND = {
+    "industrial": "warehouse factory manufacture industrial hangar storage_tank",
+    "office": "office",
+    "retail": "retail supermarket kiosk shop",
+    "commercial": "commercial hotel",
+    "residential": "apartments house residential detached semidetached_house terrace dormitory bungalow",
+    "public": "school university college kindergarten hospital civic public government train_station "
+              "transportation fire_station",
+    "religious": "church chapel mosque cathedral temple synagogue shrine",
+    "parking": "parking garage garages carport",
+}
+BUILDING_KIND = {value: kind for kind, values in BUILDING_KIND.items() for value in values.split()}
+# building=yes: what the building's own amenity/shop says, else the landuse it stands in
+AMENITY_BUILDING_KIND = {
+    "school": "public", "university": "public", "college": "public", "kindergarten": "public",
+    "hospital": "public", "townhall": "public", "fire_station": "public", "police": "public",
+    "place_of_worship": "religious", "parking": "parking",
+}
+LANDUSE_BUILDING_KIND = {"industrial": "industrial", "commercial": "commercial", "retail": "retail",
+                         "residential": "residential"}
+# (key, value) -> area kind; leisure and amenity are more specific than landuse, so they are asked first
+AREA_KIND = {
+    "leisure": {"park": "park", "garden": "grass", "golf_course": "grass", "pitch": "sports",
+                "sports_centre": "sports", "playground": "sports", "stadium": "sports", "track": "sports"},
+    "amenity": {"parking": "parking", "grave_yard": "cemetery"},
+    "landuse": {"industrial": "industrial", "commercial": "commercial", "retail": "retail",
+                "residential": "residential", "grass": "grass", "village_green": "grass", "forest": "forest",
+                "farmland": "farmland", "farmyard": "farmland", "orchard": "farmland", "meadow": "meadow",
+                "greenfield": "meadow", "recreation_ground": "park", "construction": "construction",
+                "brownfield": "brownfield", "cemetery": "cemetery", "allotments": "allotments",
+                "railway": "railway"},
+    "natural": {"wood": "forest", "scrub": "forest", "grassland": "meadow", "heath": "meadow"},
+}
 
 
 # ---------- Overpass ----------
@@ -218,22 +254,69 @@ def osm_placement(footprint: BaseGeometry, osm_ref: str, cache: Path | None) -> 
 
 def neighbourhood_query(lat: float, lon: float, radius_m: float) -> str:
     around = f"(around:{radius_m:.0f},{lat:.7f},{lon:.7f})"
+    values = {
+        "landuse": {*GREEN_LANDUSE.split("|"), *AREA_KIND["landuse"], "basin", "reservoir"},
+        "leisure": {*GREEN_LEISURE.split("|"), *AREA_KIND["leisure"]},
+        "natural": {*GREEN_NATURAL.split("|"), *AREA_KIND["natural"], "water"},
+        "amenity": set(AREA_KIND["amenity"]),
+    }
+    areas = "".join(f'\n  {kind}["{key}"~"^({"|".join(sorted(names))})$"]{around};'
+                    for key, names in values.items() for kind in ("way", "relation"))
     return f"""[out:json][timeout:120];
 (
   way["building"]{around};
   relation["building"]["type"="multipolygon"]{around};
   way["highway"]{around};
-  way["railway"~"^({'|'.join(RAIL_WIDTH_M)})$"]{around};
-  way["landuse"~"^({GREEN_LANDUSE})$"]{around};
-  relation["landuse"~"^({GREEN_LANDUSE})$"]{around};
-  way["leisure"~"^({GREEN_LEISURE})$"]{around};
-  relation["leisure"~"^({GREEN_LEISURE})$"]{around};
-  way["natural"~"^({GREEN_NATURAL}|water)$"]{around};
-  relation["natural"~"^({GREEN_NATURAL}|water)$"]{around};
+  way["railway"~"^({'|'.join(RAIL_WIDTH_M)})$"]{around};{areas}
   way["waterway"~"^({'|'.join(WATERWAY_WIDTH_M)}|riverbank)$"]{around};
-  way["landuse"~"^(basin|reservoir)$"]{around};
+  node["natural"="tree"]{around};
+  way["natural"="tree_row"]{around};
 );
 out tags geom;"""
+
+
+def is_green(tags: dict) -> bool:
+    return (tags.get("landuse") in GREEN_LANDUSE.split("|") or tags.get("leisure") in GREEN_LEISURE.split("|")
+            or tags.get("natural") in GREEN_NATURAL.split("|"))
+
+
+def is_water(tags: dict) -> bool:
+    return (tags.get("natural") == "water" or tags.get("waterway") == "riverbank"
+            or tags.get("landuse") in ("basin", "reservoir"))
+
+
+def area_kind(tags: dict) -> str | None:
+    if tags.get("amenity") == "parking" and tags.get("parking") in ("underground", "multi-storey", "rooftop"):
+        return None  # under or inside a building, not a surface
+    for key, kinds in AREA_KIND.items():
+        if tags.get(key) in kinds:
+            return kinds[tags[key]]
+    return None
+
+
+def building_kind(tags: dict, centre: Point, landuses: list[tuple[BaseGeometry, str]]) -> str:
+    value = tags.get("building", "yes")
+    if value in BUILDING_KIND:
+        return BUILDING_KIND[value]
+    if value != "yes":
+        return "other"
+    if tags.get("amenity") in AMENITY_BUILDING_KIND:
+        return AMENITY_BUILDING_KIND[tags["amenity"]]
+    if "shop" in tags:
+        return "retail"
+    if "office" in tags:
+        return "office"
+    around = [(area.area, kind) for area, kind in landuses if area.contains(centre)]
+    return min(around)[1] if around else "other"  # the smallest landuse it stands in
+
+
+def trees_along(line: BaseGeometry) -> list[tuple[float, float]]:
+    points = []
+    for part in getattr(line, "geoms", [line]):
+        if isinstance(part, LineString) and part.length > 0:
+            steps = int(part.length // TREE_ROW_SPACING_M)
+            points += [part.interpolate(step * TREE_ROW_SPACING_M).coords[0] for step in range(steps + 1)]
+    return points
 
 
 def area_of(element: dict, frame: Frame) -> BaseGeometry | None:
@@ -299,22 +382,30 @@ def neighbourhood(footprint: BaseGeometry, placement: dict, radius_m: float, cac
     elements = overpass(neighbourhood_query(center_lat, center_lon, radius_m), cache)
     circle = Point(center.x, center.y).buffer(radius_m, quad_segs=32)
     ours = footprint.buffer(OWN_BUFFER_M)
-    buildings, roads, green, water = [], [], [], []
-    seen = set()
+    buildings, roads, green, water, areas, trees = [], [], [], [], [], []
+    elements = list({(element["type"], element["id"]): element for element in elements}.values())
+    shapes = {}  # (type, id) -> area, for everything that isn't a node, line or building
+    landuses = []  # landuse areas a building=yes can borrow its kind from
     for element in elements:
-        key = (element["type"], element["id"])
-        if key in seen:
-            continue
-        seen.add(key)
         tags = element.get("tags", {})
-        if "building" in tags and tags["building"] != "no":
+        if element["type"] != "node" and "building" not in tags and tags.get("landuse") in LANDUSE_BUILDING_KIND:
+            shapes[element["type"], element["id"]] = area = area_of(element, frame)
+            if area is not None:
+                landuses.append((area, LANDUSE_BUILDING_KIND[tags["landuse"]]))
+    for element in elements:
+        tags = element.get("tags", {})
+        if element["type"] == "node":
+            if tags.get("natural") == "tree":
+                trees.append(frame.local(element["lat"], element["lon"]))
+        elif "building" in tags and tags["building"] != "no":
             if underground(tags):
                 continue
             area = area_of(element, frame)
             if area is None or area.intersects(ours) or not area.intersects(circle):
                 continue
-            height = height_of(tags)
-            buildings += [{"polygon": polygon, "height_m": height} for polygon in polygons_of(area.intersection(circle))]
+            height, kind = height_of(tags), building_kind(tags, area.representative_point(), landuses)
+            buildings += [{"polygon": polygon, "height_m": height, "kind": kind}
+                          for polygon in polygons_of(area.intersection(circle))]
         elif "highway" in tags or "railway" in tags:
             kind = tags.get("highway") or tags.get("railway")
             width = ROAD_WIDTH_M.get(kind) if "highway" in tags else RAIL_WIDTH_M.get(kind)
@@ -325,6 +416,10 @@ def neighbourhood(footprint: BaseGeometry, placement: dict, radius_m: float, cac
                 continue
             line = LineString(points).intersection(circle).difference(footprint)
             roads += [{"line": part, "width_m": width, "kind": kind} for part in lines_of(line)]
+        elif tags.get("natural") == "tree_row":
+            points = frame.line(element.get("geometry", []))
+            if len(points) >= 2:
+                trees += trees_along(LineString(points).intersection(circle).difference(footprint))
         elif tags.get("waterway") in WATERWAY_WIDTH_M and element["type"] == "way":
             if underground(tags):
                 continue
@@ -333,18 +428,29 @@ def neighbourhood(footprint: BaseGeometry, placement: dict, radius_m: float, cac
                 band = LineString(points).buffer(WATERWAY_WIDTH_M[tags["waterway"]] / 2, cap_style="flat")
                 water += polygons_of(band.intersection(circle).difference(footprint))
         else:
-            area = area_of(element, frame)
-            if area is None:
+            key = (element["type"], element["id"])
+            area = shapes[key] if key in shapes else area_of(element, frame)
+            if area is None or underground(tags):
                 continue
-            area = area.intersection(circle).difference(footprint)
-            is_water = (tags.get("natural") == "water" or tags.get("waterway") == "riverbank"
-                        or tags.get("landuse") in ("basin", "reservoir"))
-            (water if is_water else green).extend(polygons_of(area, minimum_m2=10.0))
+            if is_water(tags) or is_green(tags):
+                (water if is_water(tags) else green).extend(
+                    polygons_of(area.intersection(circle).difference(footprint), minimum_m2=10.0))
+            kind = area_kind(tags)
+            if kind is not None:
+                # may overlap our lot, but never drawn as a sheet over the whole building
+                for outline in polygons_of(area.intersection(circle), minimum_m2=10.0):
+                    if not Polygon(outline).covers(footprint):
+                        areas.append((Polygon(outline).area, outline, kind))
     buildings.sort(key=lambda item: (item["polygon"][0][0], item["polygon"][0][1]))
+    areas.sort(key=lambda item: -item[0])  # biggest first, so the smaller ones are drawn on top
+    inside = [(x, y) for x, y in trees if Point(x, y).within(circle) and not Point(x, y).within(footprint)]
+    inside.sort(key=lambda point: math.dist(point, (center.x, center.y)))
     return {
         "attribution": ATTRIBUTION, "license": LICENSE,
         "placement": {key: placement[key] for key in ("lat", "lon", "rotation_deg")}, "radius_m": radius_m,
         "buildings": buildings, "roads": roads, "green": green, "water": water,
+        "areas": [{"polygon": polygon, "kind": kind} for _, polygon, kind in areas],
+        "trees": [[round(x, 1), round(y, 1)] for x, y in inside[:MAX_TREES]],
     }
 
 
@@ -377,7 +483,8 @@ def bake(building_id: str, directory: Path, placements: dict, radius_m: float, c
     path = CONTEXT / f"{building_id}.json"
     path.write_text(json.dumps(context, separators=(",", ":"), ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"{building_id}: {len(context['buildings'])} buildings, {len(context['roads'])} roads, "
-          f"{len(context['green'])} green, {len(context['water'])} water -> {path.relative_to(ROOT)} "
+          f"{len(context['green'])} green, {len(context['water'])} water, {len(context['areas'])} areas, "
+          f"{len(context['trees'])} trees -> {path.relative_to(ROOT)} "
           f"({path.stat().st_size // 1024} KB)")
 
 
