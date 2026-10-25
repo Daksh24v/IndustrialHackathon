@@ -1,4 +1,4 @@
-/** The opening (web, once per visit): "FINNI," big and orange, with "find it" under it, over the turning building, then it shrinks into the
+/** The opening (web, once per visit): "FINNI" big and orange, with "find it" under it, over the turning building, then it shrinks into the
  * search bar while the floor stack is already there. A click, a tap or a key skips it; reduced motion only fades. With
  * EXPO_PUBLIC_GOOGLE_MAPS_KEY set, the backdrop is a live Google 3D fly-around of the venue (GoogleIntro);
  * without it, or if Google doesn't load in time, our own building shows through. */
@@ -55,7 +55,7 @@ export default function Intro({ onDone }: { onDone?: () => void }) {
       )}
       <div className="mo-intro-veil" />
       <div className="mo-intro-words">
-        <span className="mo-intro-name">FINNI,</span>
+        <span className="mo-intro-name">FINNI</span>
         <span className="mo-intro-tag">find it</span>
       </div>
     </div>

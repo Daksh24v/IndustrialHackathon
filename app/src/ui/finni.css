@@ -398,7 +398,7 @@
   .fi *, .fi-panel, .fi-walk, .fi-voice { animation: none !important; transition: none !important; }
 }
 
-/* the opening: "FINNI," with "find it" under it, over the building, then it shrinks into the search bar (Intro.tsx) */
+/* the opening: "FINNI" with "find it" under it, over the building, then it shrinks into the search bar (Intro.tsx) */
 .mo-intro {
   position: fixed;
   inset: 0;
