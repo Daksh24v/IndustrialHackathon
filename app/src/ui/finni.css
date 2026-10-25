@@ -330,19 +330,33 @@
 .fi-floor > * { position: relative; } /* above the sheen */
 .fi-back {
   height: 32px;
-  padding: 0 12px;
-  border: 1px solid rgba(255, 190, 130, 0.45);
+  padding: 0 14px;
+  border: 1px solid rgba(255, 122, 0, 0.35);
   border-radius: 16px;
-  position: relative;
-  background: linear-gradient(180deg, rgba(255, 160, 70, 0.42), rgba(255, 122, 0, 0.2));
-  box-shadow: var(--glass-rim), 0 2px 8px rgba(255, 122, 0, 0.25);
-  transition: transform 0.3s var(--ease), filter 0.2s, box-shadow 0.3s;
-  color: var(--accent-ink) !important;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
   font-weight: 700;
   font-size: 13px;
 }
-.fi-back:hover { transform: scale(1.05); filter: brightness(1.08); box-shadow: var(--glass-rim), 0 4px 14px rgba(255, 122, 0, 0.35); }
-.fi-back:active { transform: scale(0.97); filter: brightness(0.95); }
+/* HoverGlowButton.tsx: a glow that follows the mouse inside the button */
+.fi-glow {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+  transition: color 0.3s, transform 0.2s var(--ease);
+}
+.fi-glow:active { transform: scale(0.97); }
+.fi-glow-light {
+  position: absolute;
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  opacity: 0.55;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scale(0);
+  transition: transform 0.4s ease-out;
+}
+.fi-glow[data-hovered] .fi-glow-light { transform: translate(-50%, -50%) scale(1.2); }
+.fi-glow-text { position: relative; z-index: 1; }
 .fi-toast {
   position: fixed;
   z-index: 11;
@@ -542,7 +556,6 @@
   border-color: rgba(255, 150, 70, 0.3);
 }
 :root.dark .fi-floor::before { background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0)); }
-:root.dark .fi-back { color: #ffb36b !important; }
 :root.dark .fi-tag { color: #4fd1a0; background: rgba(79, 209, 160, 0.12); }
 :root.dark .mo-intro-veil { background: rgba(11, 16, 22, 0.86); }
 :root.dark .mo-intro-words { color: #f2f6fa; }

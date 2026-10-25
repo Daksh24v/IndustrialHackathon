@@ -21,6 +21,7 @@ import { bare, routeSteps, summary } from './src/steps';
 import { flushSync } from 'react-dom';
 
 import { colours, isWide, map as mapColours, setTheme, startTheme, type ThemeName } from './src/theme';
+import { HoverGlowButton } from './src/ui/HoverGlowButton';
 import { MapControls, type MapHandle, type ViewMode } from './src/ui/MapControls';
 import { mapKey } from './src/legend';
 import { straightenMap, straightRoute } from './src/routeShape';
@@ -492,10 +493,10 @@ function Guide() {
 
       {inside && !walking && (
         <div className="fi fi-floor" style={wide ? { left: mapLeft + (window.width - mapLeft - 72) / 2 } : { left: 12, top: 200, transform: 'none' }}>
-          <button type="button" className="fi-back" data-testid="building" aria-label="Back to the whole building (Escape)"
-                  title="Back to the whole building (Esc)" onClick={() => dispatch({ type: 'back' })}>
+          <HoverGlowButton className="fi-back" data-testid="building" aria-label="Back to the whole building (Escape)"
+                           title="Back to the whole building (Esc)" onClick={() => dispatch({ type: 'back' })}>
             ‹ Building
-          </button>
+          </HoverGlowButton>
           {floorName && <span data-testid="floor-name">{floorName}</span>}
         </div>
       )}
