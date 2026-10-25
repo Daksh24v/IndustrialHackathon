@@ -1,0 +1,15 @@
+This is a factory. Two floors, eighty rooms, five hundred machines and things. And the only map is a PDF on a wall. Meet Finni: Google Maps for every building.
+
+Finni opens on the building itself. Every floor is a slab you can turn, tilt and step into.
+
+Just ask. Where's the coffee machine? Finni never asks for room numbers. It asks one thing: what can you see near you? Tap the air compressor, and there's your route, in words people actually follow. Turn right into the main aisle, past the shoe cabinet, the kitchen is on your left. Press Start, and it walks you there, step by step.
+
+Now something breaks. The office lift is broken. Finni reports it for everyone. The lift turns red on every map, maintenance gets the message, and a colleague in a wheelchair hears the honest answer: there is no step-free way up right now.
+
+People aren't the only ones moving. Switch to forklift. Aisle B2 is blocked by a pallet. Finni drives you around it, and tells you why: twenty metres longer, under a minute.
+
+And when it really matters, press the shield. The map dims to exits, fire extinguishers and stairs. Nearest exit: one tap, instantly.
+
+Under the hood, Claude is only the conversation. Every distance comes from a deterministic map of rooms, doors, stairs and lifts. That's why Finni got thirty-five of thirty-six right on buildings it had never seen. Give it nothing but floor plans, and it builds the building itself, stairs included.
+
+Any building. Any person. Any vehicle. Finni.
