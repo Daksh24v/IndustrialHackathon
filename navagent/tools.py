@@ -44,6 +44,8 @@ NO_ROUTE = re.compile(r"\bno\b.*\broute\b|\bunreachable\b|\bnot reachable\b|\bca
 NO_ROUTE_ANSWER = "No route exists."
 MAX_HISTORY = 10
 NEAREST_SPACE_M = 3.0  # a tapped point this close to a space (on a wall, in a doorway) counts as in it
+STEP_OUT_M = 0.8  # "I just left the room": this far past its door; "in front of the WC": this far before it
+ROUTE_SAMPLE_M = 0.1  # how finely the route is walked to find where it leaves or reaches a place
 MAX_LANDMARKS = 8
 LANDMARK_MAX_PER_FLOOR = 2  # a kind of thing that occurs at most this often on a floor is a landmark
 MAX_FLOORS_IN_ONE_QUESTION = 4  # more floors than this: ask the floor first, then landmarks
@@ -109,7 +111,8 @@ def rounded(value: float) -> float:
 def say_duration(seconds: float) -> str:
     """A time as people say it: "about 45 seconds" under a minute and a half, then whole minutes, then hours."""
     if seconds < 90:
-        return f"about {max(1, round(seconds))} seconds"
+        whole = max(1, round(seconds))
+        return f"about {whole} second{'' if whole == 1 else 's'}"
     minutes = round(seconds / 60)
     if minutes < 60:
         return f"about {minutes} minutes"
@@ -147,6 +150,8 @@ class Session:
     last_route: list[Route] | None = None  # legs of the most recent find_route, for show_on_map
     last_how: dict = field(default_factory=dict)  # with a profile: who it's for, why this way, time (how_it_goes)
     map_view: dict | None = None  # what the app should draw after this turn (show_on_map)
+    shown: dict | None = None  # what the map shows now (map_view is only this turn's change)
+    route_mark: float = 0.0  # how far along the route's line the person is (metres), as they tell it
     draft: object | None = None  # navagent.builder.Draft while a building is being set up from plans
     # What people reported broken for the whole building (live app only, server/reports.py), by element id:
     # every route here avoids them. The server fills this before each turn; the benchmark never does.
@@ -435,6 +440,7 @@ class Session:
             spaces += [space for space in leg.space_path if not spaces or spaces[-1] != space]
         self.active_route = {"stops": stops, "spaces": spaces, "destination": stops[-1], "progress": 0,
                              "step_free": step_free, "min_width_m": min_width_m}
+        self.route_mark = 0.0
         how = self.last_how = self.how_it_goes(legs, constraints) if self.profile else \
             self.travel_time(sum(leg.length_m for leg in legs))
         return {
@@ -529,6 +535,7 @@ class Session:
         space_id = self.start_or_here(room)
         route = building.exit_route(space_id, self.constraints(step_free))
         self.last_route, self.last_how = [route], self.travel_time(route.length_m)
+        self.route_mark = 0.0
         return {"from": building.label(space_id), "walk_m": rounded(route.length_m), **self.last_how,
                 "steps": self.directions(route)}
 
@@ -993,6 +1000,132 @@ class Session:
                 "next": building.label(following) if following else None,
                 "spaces_left": len(spaces) - 1 - step}
 
+    # ---------- following the route, as they tell it ----------
+
+    def route_pieces(self) -> list[dict]:
+        """The last route as lines per floor (the same lines the map draws)."""
+        added = tuple(self.new_openings)
+        return [piece for leg in self.last_route
+                for piece in self.building.polyline(leg, through_anchors=False, extra_openings=added)]
+
+    @staticmethod
+    def route_segments(pieces: list[dict]) -> tuple[list[tuple[int, tuple, tuple, float, float]], float]:
+        """The line's straight stretches with where each starts along it: (piece, a, b, from metres, length)."""
+        segments, walked = [], 0.0
+        for index, piece in enumerate(pieces):
+            for a, b in itertools.pairwise(piece["points"]):
+                length = math.dist(a, b)
+                if length > 1e-9:
+                    segments.append((index, tuple(a), tuple(b), walked, length))
+                    walked += length
+        return segments, walked
+
+    @staticmethod
+    def route_point(segments, distance: float) -> tuple[int, tuple[float, float]]:
+        """The piece and the point this far along the line."""
+        for index, a, b, start, length in segments:
+            if distance <= start + length + 1e-9:
+                t = max(0.0, min(1.0, (distance - start) / length))
+                return index, (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+        index, _, b, _, _ = segments[-1]
+        return index, b
+
+    def route_view(self) -> dict:
+        """The route for the map from where the person is along it: the part they have walked is gone, and the
+        metres and the time are what is left."""
+        pieces = self.route_pieces()
+        segments, line = self.route_segments(pieces)
+        mark = min(self.route_mark, line) if segments else 0.0
+        if mark > 0:
+            at, point = self.route_point(segments, mark)
+            first = pieces[at]
+            rest = [p for (index, a, b, start, length) in segments if index == at and start + length > mark + 1e-9
+                    for p in [list(b)]]
+            pieces = [{**first, "points": [list(point), *rest] or [list(point)]}, *pieces[at + 1:]]
+        left = self.metres_left(mark)
+        return {"length_m": rounded(left), "pieces": pieces, **self.last_how,
+                **({**self.travel_time(left)} if mark > 0 else {})}
+
+    def metres_left(self, mark: float) -> float:
+        """The route's length from this far along its line (stairs and lifts already taken don't count again)."""
+        total = sum(leg.length_m for leg in self.last_route)
+        pieces = self.route_pieces()
+        segments, line = self.route_segments(pieces)
+        if not segments or mark <= 0:
+            return total
+        climbs = [index for index, piece in enumerate(pieces) if piece["then"]]
+        at, _ = self.route_point(segments, mark)
+        each = (total - line) / len(climbs) if climbs else 0.0
+        return max(0.0, total - mark - each * sum(1 for index in climbs if index < at))
+
+    def moved_along_route(self, how: str, place: str | None = None) -> dict:
+        """The person tells how far they got on the route they follow: they left a room ("I just left the
+        office"), they are in front of / by / passing a place or a thing ("I'm in front of the WC"), or they
+        arrived. The dot moves to that point on the route, and the map's route starts there."""
+        building = self.building
+        if not self.active_route or not self.last_route:
+            raise EngineError("They are not following a route: use set_my_position, or find_route first.")
+        pieces = self.route_pieces()
+        segments, line = self.route_segments(pieces)
+        if not segments:
+            raise EngineError("The route has no length to walk along.")
+        mark = min(self.route_mark, line)
+
+        def along(start: float):
+            distance = start
+            while distance <= line + 1e-9:
+                at, point = self.route_point(segments, distance)
+                yield distance, pieces[at]["floor_id"], point
+                distance += ROUTE_SAMPLE_M
+
+        how = how.lower().strip().replace(" ", "_")
+        if how == "arrived":
+            distance = line
+        elif how == "left":
+            room = find_space(building, place) if place else (self.position.space_id if self.position
+                                                               else self.active_route["stops"][0])
+            outline, floor_id = building.polygons[room], building.spaces[room]["floor_id"]
+            out = next((d for d, floor, point in along(mark)
+                        if floor != floor_id or not outline.covers(Point(point))), None)
+            if out is None:
+                raise EngineError(f"The route doesn't leave {building.label(room)}.")
+            distance = min(line, out + STEP_OUT_M)
+        elif how in {"in_front_of", "by", "near", "passing", "at"}:
+            if not place:
+                raise EngineError("In front of what? Give the room or the thing.")
+            space_id, thing = self.place_of(place)
+            floor_id = building.spaces[space_id]["floor_id"]
+            target = Point(thing) if thing else building.polygons[space_id]
+            on_route = space_id in self.active_route["spaces"] and not thing
+            enters = next((d for d, floor, point in along(mark)
+                           if floor == floor_id and target.covers(Point(point))), None) if on_route else None
+            if enters is not None and space_id != (self.position.space_id if self.position else None):
+                distance = max(mark, enters - STEP_OUT_M)  # just outside its door
+            else:
+                near = [(target.distance(Point(point)), d) for d, floor, point in along(mark) if floor == floor_id]
+                if not near:
+                    raise EngineError(f"The route doesn't pass {building.label(space_id)}.")
+                distance = min(near)[1]
+        else:
+            raise EngineError("how is 'left', 'in_front_of' or 'arrived'.")
+
+        at, point = self.route_point(segments, distance)
+        floor_id = pieces[at]["floor_id"]
+        space_id = self.space_at(floor_id, point)
+        if self.position and self.position.space_id != space_id:
+            self.history = [*self.history, self.position][-MAX_HISTORY:]
+        self.position = Position(space_id, floor_id, building.label(space_id), point, "route")
+        self.route_mark = distance
+        left = self.metres_left(distance)
+        view = {**(self.shown or {"target": None, "changes": self.changes()}),
+                "you_are_here": {"space_id": space_id, "label": building.label(space_id), "floor_id": floor_id,
+                                 "position": [point[0], point[1]]},
+                "route": self.route_view() if distance < line else None,  # arrived: the way is done
+                "focus_floor_id": floor_id}
+        self.map_view = self.shown = view
+        return {"now_in": building.label(space_id), **self.route_progress(), "metres_left": rounded(left),
+                **self.travel_time(left)}
+
     def position_state(self) -> dict:
         """Everything known about where the person is: now, before, and the route they are following."""
         route = self.active_route
@@ -1110,11 +1243,7 @@ class Session:
         if show_last_route:
             if not self.last_route:
                 raise EngineError("No route computed yet: call find_route first.")
-            added = tuple(self.new_openings)
-            pieces = [piece for leg in self.last_route
-                      for piece in building.polyline(leg, through_anchors=False, extra_openings=added)]
-            view["route"] = {"length_m": rounded(sum(leg.length_m for leg in self.last_route)), "pieces": pieces,
-                             **self.last_how}
+            view["route"] = self.route_view()
         if floor:
             view["focus_floor_id"] = find_floor(building, floor)
         else:
@@ -1122,7 +1251,7 @@ class Session:
                 or view["target"]
             view["focus_floor_id"] = first["floor_id"] if first else None
         view["changes"] = self.changes()
-        self.map_view = view
+        self.map_view = self.shown = view
         return {"shown": True, "focus_floor": building.floor_name(view["focus_floor_id"])
                 if view["focus_floor_id"] else None}
 

@@ -183,3 +183,39 @@ def test_a_failed_route_request_drops_the_old_route():
     with pytest.raises(EngineError):
         session.route(None, "Office 1.04 (Floor 1)", step_free=True)
     assert session.active_route is None
+
+
+def test_walking_the_route_as_they_tell_it_moves_the_dot_and_shortens_the_route():
+    session = Session(Building.load(FACTORY))
+    session.set_position("Office 1.04 (Floor 1)", source="told")
+    route = session.route(None, "Toilet 1.32 (Floor 1)")
+    total = route["length_m"]
+
+    left = session.moved_along_route("left")  # "I just left the office"
+    assert left["now_in"] == "Office corridor 1.01 (Floor 1)" and left["on_route"]
+    assert 0 < left["metres_left"] < total and left["time"].startswith("about")
+    shown = session.map_view
+    assert shown["you_are_here"]["label"] == "Office corridor 1.01 (Floor 1)"
+    assert shown["route"]["pieces"][0]["points"][0] == shown["you_are_here"]["position"]  # the line starts at them
+    assert shown["route"]["length_m"] == left["metres_left"]
+
+    by = session.moved_along_route("in_front_of", "Toilet 1.32 (Floor 1)")  # "I'm in front of the WC"
+    assert by["now_in"] == "Office corridor 1.01 (Floor 1)" and by["metres_left"] < 5
+    assert session.position.source == "route"
+
+    there = session.moved_along_route("arrived")
+    assert there["arrived"] and there["metres_left"] == 0 and there["now_in"] == "Toilet 1.32 (Floor 1)"
+    assert session.map_view["route"] is None and session.map_view["you_are_here"]["label"] == "Toilet 1.32 (Floor 1)"
+    assert session.history[-1].label == "Office corridor 1.01 (Floor 1)"
+
+
+def test_moving_along_needs_a_route_and_a_new_route_starts_from_the_beginning():
+    session = Session(Building.load(FACTORY))
+    with pytest.raises(EngineError, match="not following a route"):
+        session.moved_along_route("left")
+    session.set_position("Office 1.04 (Floor 1)", source="told")
+    session.route(None, "Toilet 1.32 (Floor 1)")
+    session.moved_along_route("in_front_of", "Toilet 1.32 (Floor 1)")
+    fresh = session.route(None, "Kitchen 1.27 (Floor 1)")  # from where they are now: the whole new route is drawn
+    session.show_on_map(show_last_route=True)
+    assert session.map_view["route"]["length_m"] == fresh["length_m"]

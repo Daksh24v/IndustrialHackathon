@@ -70,6 +70,12 @@ from your tools (rooms, things, floors that exist). Examples: where they are whe
 and how far along your route they are. Use it as the start (omit start in the route tools) and don't ask \
 where they are. When they say where they are ("I'm at the lift", "next to the press"), call \
 set_my_position; if they left the route, find a new one from there; "take me back" means the place before.
+- While they follow your route and say how far they got ("I just left the room", "I'm in the corridor now", \
+"I'm in front of the WC", "I'm there"), always call moved_along_route (not set_my_position), every time, \
+also when they arrive ("I'm at the WC" = arrived): their dot only moves when you call it, and the map \
+follows by itself. Answer in one short sentence: what's next and how far ("Good, now straight on for 30 m, \
+the toilet is on your right"). Only if what they say isn't on the route, set_my_position and find a new \
+route.
 - Only when their position is unknown and the answer depends on it: if they just came in, start at the \
 entrance; otherwise call where_am_i_options first (before asking anything) and ask once, "What can you \
 see near you?", with 2-4 of its landmarks as options (things and signs they can see, with their floor when \
@@ -583,6 +589,21 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
             return session.set_position(place, source="told")
 
         @tool
+        def moved_along_route(how: str, place: str | None = None) -> dict:
+            """While they follow your route, they tell how far they got: "I just left the room" (how="left"),
+            "I'm in front of the WC" / "I'm by the fire extinguisher" / "passing the kitchen" (how="in_front_of",
+            place = that room or thing), "I'm there" (how="arrived"). Their dot moves to that point on the route
+            and the map's route starts from there by itself (no show_on_map needed). The result says where they
+            are now, what comes next and the metres and time left.
+
+            Args:
+                how: "left", "in_front_of" or "arrived".
+                place: For "in_front_of": the room or thing they are by. For "left": the room they left, if it
+                    isn't where they were.
+            """
+            return session.moved_along_route(how, place)
+
+        @tool
         def where_am_i_options(floor: str | None = None) -> dict:
             """Landmarks the person could see near them (rare things, stairs and lifts, entrances, rooms with a
             unique name), nearest to where they were last first. Use it before asking where they are, and offer
@@ -633,7 +654,7 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
             return session.block_aisle(space, blocked)
 
         tools += [set_closed, add_door, move_thing, report_problem, set_mobility, block_aisle, set_my_position,
-                  where_am_i_options]
+                  moved_along_route, where_am_i_options]
 
     if mode == BENCHMARK:
 
