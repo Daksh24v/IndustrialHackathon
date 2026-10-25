@@ -21,7 +21,7 @@ from benchmark.score import committed_answer, numbers_in
 DATA = Path(__file__).resolve().parent.parent / "data"
 MAX_BYTES = 5 * 1024 * 1024
 HEADER = ["question_id", "answer"]
-# Tolerances from README section 6: (relative, absolute).
+# Tolerances from CHALLENGE.md section 6: (relative, absolute).
 NUMBER_KINDS = {
     "errand": (0.01, 1.0),
     "floor_area_total": (0.05, 0.0),

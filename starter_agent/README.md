@@ -43,7 +43,7 @@ Routes follow the judges' rules, the same ones behind the dataset's expected ans
 
 ## Check how well it does
 
-These commands use the warm-up set (`questions_basic.jsonl`). The real benchmark is `questions.jsonl`, scored with `benchmark.evaluate`, and the starter agent fails it on purpose. See section 6 of [../README.md](../README.md).
+These commands use the warm-up set (`questions_basic.jsonl`). The real benchmark is `questions.jsonl`, scored with `benchmark.evaluate`, and the starter agent fails it on purpose. See section 6 of [../CHALLENGE.md](../CHALLENGE.md).
 
 ```bash
 # Free: answers every question with the tools directly. Shows the tools can reach 100%.

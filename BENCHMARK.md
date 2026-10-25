@@ -39,7 +39,7 @@ leaves half a file). Each Claude call times out after 180 s and is retried.
 
 - **Claude reads every question** (`navagent/agent.py`, benchmark mode, `claude-opus-5-5`, effort high).
   No templates or word-for-word matching: it decides what is asked and calls tools.
-- **The engine does every calculation** (`navcore/engine.py`): the README's route graph, areas,
+- **The engine does every calculation** (`navcore/engine.py`): the brief's route graph (CHALLENGE.md), areas,
   shared walls, stacking, reachability, what-if doors. The tools return its numbers.
 - **The `Answer:` line is written by code** from Claude's `submit_answer` call (a number copied from a tool
   result, or a room id; room areas come from the engine), so the format the scorer needs never depends on prose.

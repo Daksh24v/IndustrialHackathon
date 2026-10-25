@@ -1,6 +1,6 @@
 """Deterministic building engine: geometry, the route graph and every query the benchmark asks about.
 
-The route model is the one the judges grade with, README section 3 of kit 1.1.0 (and
+The route model is the one the judges grade with, section 3 of the kit 1.1.0 brief (CHALLENGE.md) (and
 starter_agent/building_map.py):
 - one node per space at shapely's representative_point() (of the polygon repaired with buffer(0)), one node
   per opening at its position;
