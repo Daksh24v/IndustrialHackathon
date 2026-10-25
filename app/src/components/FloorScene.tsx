@@ -156,10 +156,10 @@ interface Props {
   walls?: WallMode;
 }
 
-type SignKind = 'wc' | 'kitchen' | 'stairs' | 'lift' | 'meeting' | 'exit';
+export type SignKind = 'wc' | 'kitchen' | 'stairs' | 'lift' | 'meeting' | 'exit';
 
 /** The rooms people look for get a small sign by their name (exit: a room with a way out of the building). */
-function signOf(space: { id: string; type: string; room_type: string }, exits: Set<string>): SignKind | null {
+export function signOf(space: { id: string; type: string; room_type: string }, exits: Set<string>): SignKind | null {
   if (exits.has(space.id)) return 'exit';
   if (space.room_type === 'toilet' || space.room_type === 'bathroom') return 'wc';
   if (space.room_type === 'kitchen' || space.room_type === 'canteen') return 'kitchen';
@@ -169,7 +169,7 @@ function signOf(space: { id: string; type: string; room_type: string }, exits: S
   return null;
 }
 
-const SIGN_COLOURS: Record<SignKind, string> = {
+export const SIGN_COLOURS: Record<SignKind, string> = {
   wc: '#2F80ED', kitchen: '#B565D9', stairs: '#2E9E5B', lift: '#3B82F6', meeting: '#5B6CFF', exit: '#1E8E4E',
 };
 /** Exits and stairs are the way out: their names go first after the target's. */

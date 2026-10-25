@@ -22,6 +22,8 @@ import { flushSync } from 'react-dom';
 
 import { colours, isWide, map as mapColours, setTheme, startTheme, type ThemeName } from './src/theme';
 import { MapControls, type MapHandle, type ViewMode } from './src/ui/MapControls';
+import { MapKey } from './src/ui/MapKey';
+import { mapKey } from './src/legend';
 import type { WallMode } from './src/walls';
 import { OrbMark } from './src/ui/OrbMark';
 import { Panel, type PanelMode, sheetHeight, type Snap } from './src/ui/Panel';
@@ -249,6 +251,7 @@ function Guide() {
   const step = nextStep(state.map, state.floorId);
   const stepFloor = floors.find((floor) => floor.id === step?.to_floor_id);
   const inside = state.view === 'floor';
+  const legend = useMemo(() => mapKey(state.detail), [state.detail, theme]); // eslint-disable-line react-hooks/exhaustive-deps -- the colours follow the look
   const row = buildings.find((item) => item.id === buildingId);
   const current = state.detail?.building ?? (row ? { id: row.id, name: row.name ?? row.id } : null);
   const loadFailed = !!state.error && !state.detail;
@@ -497,6 +500,10 @@ function Guide() {
                    onPress={() => dispatch({ type: 'floor', floorId: stepFloor.id })}>
           <Text style={styles.stepText}>Take {step.name ?? step.kind} to {stepFloor.name} ›</Text>
         </Pressable>
+      )}
+      {!phoneSheetUp && !walking && (
+        <MapKey legend={legend} left={wide ? mapLeft : 12}
+                bottom={controlsBottom + (inside && step && stepFloor ? 52 : 0)} />
       )}
       {!(phoneSheetUp) && <MapControls inside={inside} view={view} onView={setView} handle={handle} floors={floors}
                    floorId={state.floorId} onFloor={(floorId) => dispatch({ type: 'floor', floorId })}

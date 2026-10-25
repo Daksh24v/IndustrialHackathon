@@ -197,7 +197,7 @@ const KINDS = {
   outdoor: [room('#0F2219', '#2E7D5B'), room('#EAF5EE', '#8CC4A3')],
   generic: [room('#182029', '#475466'), room('#F3F4F6', '#C3C9D2')],
 } as const;
-type Kind = keyof typeof KINDS;
+export type Kind = keyof typeof KINDS;
 
 const byRoomType: Record<string, Kind> = {
   office: 'work', meeting_room: 'work', seminar_room: 'work', lecture_hall: 'work', library: 'work', print_room: 'work',
@@ -212,11 +212,31 @@ const byType: Record<string, Kind> = {
   corridor: 'corridor', hall: 'lobby', stair: 'shaft', lift: 'shaft', outdoor: 'outdoor',
 };
 
-/** How a space is drawn: by its room type (lab, office, …), else by its kind (corridor, stair, …). */
-export function roomStyle(space: { type: string; room_type?: string }): RoomStyle {
-  const kind = byRoomType[space.room_type ?? ''] ?? byType[space.type] ?? 'generic';
-  return KINDS[kind][current === 'dark' ? 0 : 1];
+/** What a space is for, as the map colours it: by its room type (lab, office, …), else by its kind (corridor, …). */
+export function roomKind(space: { type: string; room_type?: string }): Kind {
+  return byRoomType[space.room_type ?? ''] ?? byType[space.type] ?? 'generic';
 }
+
+/** How a space is drawn: its kind's colours in the current look. */
+export function roomStyle(space: { type: string; room_type?: string }): RoomStyle {
+  return KINDS[roomKind(space)][current === 'dark' ? 0 : 1];
+}
+
+/** The map key: every room colour, what it means, in the order the key lists them. */
+export const ROOM_KEY: { kind: Kind; label: string }[] = [
+  { kind: 'work', label: 'Offices, meeting rooms, lecture halls' },
+  { kind: 'lab', label: 'Labs, server and technical rooms' },
+  { kind: 'production', label: 'Production and assembly' },
+  { kind: 'logistics', label: 'Warehouse, logistics, storage' },
+  { kind: 'amenity', label: 'Kitchens, toilets, lockers, shops' },
+  { kind: 'home', label: 'Bedrooms and living rooms' },
+  { kind: 'lobby', label: 'Lobbies and halls' },
+  { kind: 'corridor', label: 'Corridors' },
+  { kind: 'shaft', label: 'Stairs and lifts' },
+  { kind: 'outdoor', label: 'Balconies and outside' },
+  { kind: 'generic', label: 'Other rooms (no type in the data)' },
+];
+export const kindStyle = (kind: Kind): RoomStyle => KINDS[kind][current === 'dark' ? 0 : 1];
 
 export interface AssetStyle {
   top: string;
