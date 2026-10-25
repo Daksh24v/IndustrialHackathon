@@ -63,7 +63,7 @@ On a route, the things in the rooms you pass stay bright and the rest fade; the 
 with its name, and the landmarks in the steps ("by the Coordinate measuring machine") are named on the map. First
 aid kits aren't in the data: with a list of them, FINNI routes to them like the extinguishers.
 
-Close with BENCHMARK.md: 145 test answers double-checked, build 114/114 and hold-out 35/36 on the organisers'
+Close with SUBMISSION/BENCHMARK.md: 145 test answers double-checked, build 114/114 and hold-out 35/36 on the organisers'
 1.1.0 rules, and LOCATING.md for how we find where people and things are.
 
 If something fails live: reload the page (a new conversation starts), and continue from step 1.

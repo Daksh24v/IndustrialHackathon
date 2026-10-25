@@ -1,6 +1,10 @@
 """Free checks on a submission CSV before it is handed in (no API calls).
 
-  uv run python -m evals.check_submission <answers.csv> [--reference <other.csv>]
+  uv run python -m evals.check_submission <answers.csv or answers.json> [--reference <other.csv>]
+  uv run python -m evals.check_submission results/team_answers.csv --write-json SUBMISSION/answers.json
+
+The organisers grade SUBMISSION/answers.json (with SUBMISSION/BENCHMARK.md, nothing else in the folder): one
+object {question_id: full reply}, written from the CSV the benchmark run makes, never edited by hand.
 
 1. format: UTF-8, header question_id,answer, at most 5 MB, every test id exactly once, nothing extra;
 2. answer lines: each reply has an 'Answer:' line that the scorer can read for its kind
@@ -80,6 +84,30 @@ def read_rows(raw: bytes, report: Report) -> dict[str, str]:
     return rows
 
 
+def read_json(raw: bytes, report: Report) -> dict[str, str]:
+    if len(raw) > MAX_BYTES:
+        report.format_errors.append(f"file is {len(raw)} bytes, more than 5 MB")
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        report.format_errors.append(f"not UTF-8 JSON: {error}")
+        return {}
+    if not isinstance(data, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in data.items()):
+        report.format_errors.append("expected one object {question_id: answer}")
+        return {}
+    return data
+
+
+def write_json(rows: dict[str, str], path: Path) -> None:
+    """The answers as SUBMISSION/answers.json: {question_id: full reply}, in the CSV's order."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def read_any(path: Path, report: Report) -> dict[str, str]:
+    return read_json(path.read_bytes(), report) if path.suffix == ".json" else read_rows(path.read_bytes(), report)
+
+
 def room_part(line: str) -> str:
     """The room named in an answer line: everything before ', <area> m²' if there is one."""
     return line.split(",")[0].strip().lower()
@@ -108,7 +136,7 @@ def check(path: Path, reference: Path | None = None) -> Report:
     kinds = test_kinds()
     with (DATA / "test" / "submission_template.csv").open(encoding="utf-8", newline="") as handle:
         expected_ids = [row["question_id"] for row in csv.DictReader(handle)]
-    rows = read_rows(path.read_bytes(), report)
+    rows = read_any(path, report)
     missing = [qid for qid in expected_ids if qid not in rows]
     extra = [qid for qid in rows if qid not in set(expected_ids)]
     if missing:
@@ -130,7 +158,7 @@ def check(path: Path, reference: Path | None = None) -> Report:
         if kind == "room_stacked" and not line.strip():
             report.answer_errors.append(f"{qid} (room_stacked): empty answer")
     if reference is not None:
-        other = read_rows(reference.read_bytes(), Report())
+        other = read_any(reference, Report())
         for qid, reply in rows.items():
             if qid not in other:
                 continue
@@ -144,10 +172,14 @@ def check(path: Path, reference: Path | None = None) -> Report:
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="evals.check_submission")
-    parser.add_argument("csv", type=Path)
-    parser.add_argument("--reference", type=Path, default=None, help="another run's CSV to compare with")
+    parser.add_argument("csv", type=Path, help="the answers, .csv or .json")
+    parser.add_argument("--reference", type=Path, default=None, help="another run's answers to compare with")
+    parser.add_argument("--write-json", type=Path, default=None, help="also write them as answers.json here")
     arguments = parser.parse_args()
     report = check(arguments.csv, arguments.reference)
+    if arguments.write_json and not report.format_errors:
+        write_json(read_any(arguments.csv, Report()), arguments.write_json)
+        print(f"wrote {arguments.write_json}")
     print(f"format: {'OK' if not report.format_errors else 'PROBLEMS'}")
     for error in report.format_errors:
         print(f"  {error}")

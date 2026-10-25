@@ -1,4 +1,4 @@
-"""One command from questions to the submission CSV (documented in BENCHMARK.md).
+"""One command from questions to the submission CSV (documented in SUBMISSION/BENCHMARK.md).
 
   uv run --env-file .env python -m navagent.benchmark data/test --out submission.csv
 
