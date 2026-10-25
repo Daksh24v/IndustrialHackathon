@@ -9,13 +9,16 @@ import { type ComponentRef, type MutableRefObject, useEffect, useLayoutEffect, u
 import { Animated, Easing, PanResponder, Platform, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Defs, G, Path, RadialGradient, Rect, Stop, Text as SvgText } from 'react-native-svg';
 
-import type { Context, MapView, Outline, Point, Space } from '../api';
+import type { BuildingDetail, Context, MapView, Outline, Point, Space } from '../api';
 import {
-  boundsOf, centre as centreOf, grow, ISO_PITCH, isoDepth, isoProject, nearby, pointInPolygon, signedArea, type Iso,
+  boundsOf, centre as centreOf, grow, ISO_PITCH, isoDepth, isoProject, nearby, pointInPolygon, segmentDistance, signedArea,
+  type Iso, zigzag,
 } from '../geometry';
 import { colours, map as mapColours, nearStyle, roomStyle } from '../theme';
 import type { MapHandle } from '../ui/MapControls';
-import { type Inset, LABEL_FONT, NO_INSET, wrapAngle } from './FloorScene';
+import { type Inset, LABEL_FONT, NO_INSET, SAFETY_DIM, wrapAngle } from './FloorScene';
+import { SafetyMarks } from './Markers';
+import { type SafetyMark, safetyMarks } from '../safety';
 import { GroundLayers, groundOf } from './Neighbourhood';
 
 const ZOOM_MS = 1300;
@@ -31,6 +34,7 @@ const SPIN_PER_S = (2 * Math.PI) / 90; // the idle turn: once round in 90 s
 const SPIN_PAUSE_MS = 5000; // after a touch the building holds still this long
 const TAP_SLOP_PX = 5;
 const TURN_MS = 450;
+const SHAFT_HIT_PX = 9; // how close the cursor must be to a staircase or lift to name it
 const GRID_M = 5;
 const GRID_REACH_M = 25; // how far the ground grid reaches beyond the building
 const NEAR_REACH_M = 120; // how much of the neighbourhood is drawn (it is redrawn as the building turns)
@@ -50,6 +54,10 @@ interface Props {
   inset?: Inset;
   /** For the map buttons: turn (45° steps, or by hand with the compass) and back to the first view. */
   handleRef?: MutableRefObject<MapHandle | null>;
+  /** The whole building: for safety mode's marks on every floor and the stairs and lifts between floors. */
+  detail?: BuildingDetail | null;
+  /** Safety mode: rooms dim, exits, extinguishers, defibrillators and stairs light up on every floor. */
+  safety?: boolean;
   focusFloorId: string | null;
   onArrived?: () => void;
   /** A click (tap) on a floor's block. */
@@ -80,6 +88,25 @@ interface Face {
   points: Point[]; // on screen
   fill: string;
   depth: number;
+}
+
+/** Where each staircase and lift stands on each floor it serves, lowest floor first: the shafts that join the slabs. */
+export function shaftStops(detail: BuildingDetail, floorIds: string[]): Shaft[] {
+  return detail.vertical_connectors.flatMap((connector) => {
+    const stops = floorIds.flatMap((floorId) => {
+      if (!connector.floor_ids.includes(floorId)) return [];
+      const space = detail.spaces.find((item) => item.floor_id === floorId && connector.space_ids.includes(item.id));
+      return space ? [{ floorId, at: space.anchor }] : [];
+    });
+    return stops.length > 1 ? [{ id: connector.id, kind: connector.kind, name: connector.name, stops }] : [];
+  });
+}
+
+export interface Shaft {
+  id: string;
+  kind: string; // stairs or lift
+  name: string;
+  stops: { floorId: string; at: Point }[];
 }
 
 /** The floor whose block is drawn at a screen point: the highest one there, as it is drawn on top. */
@@ -135,7 +162,12 @@ function floorFaces(iso: Iso, footprints: Point[][], bottom: number, top: number
 }
 
 export function BuildingBlocks({ outline, context, spaces = [], map = null, focusFloorId, onArrived, onPickFloor, spin = false,
-                               width, height, inset = NO_INSET, handleRef }: Props) {
+                               width, height, inset = NO_INSET, handleRef, detail = null, safety = false }: Props) {
+  const marksOn = useMemo(() => {
+    const byFloor = new Map<string, SafetyMark[]>();
+    if (safety && detail) for (const floor of detail.floors) byFloor.set(floor.id, safetyMarks(detail, floor.id));
+    return byFloor;
+  }, [safety, detail]);
   const floors = useMemo(() => [...outline.floors].sort((a, b) => a.elevation_m - b.elevation_m), [outline]);
   const all = useMemo(() => floors.flatMap((floor) => floor.footprints.flat()), [floors]);
   const plan = boundsOf(all);
@@ -149,6 +181,9 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
   const slab = Math.max(0.4, gap * SLAB);
   const stacked = useMemo(() => floors.map((floor, i) => ({ ...floor, z: i * gap, top: i * gap + slab })), [floors, gap, slab]);
   const level = (floorId: string | undefined) => stacked.find((floor) => floor.id === floorId);
+  // The stairs and lifts as shafts joining the slabs: red when out of service (reported, or closed here).
+  const shafts = useMemo(() => (detail ? shaftStops(detail, stacked.map((floor) => floor.id)) : []), [detail, stacked]);
+  const broken = new Set(map?.changes?.closed ?? []);
 
   // The same size at every angle, centred in the free part of the screen (it turns in place).
   const labels = width < 600 ? LABEL_PX * 0.75 : LABEL_PX;
@@ -324,8 +359,10 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
     });
   }, []);
 
-  // Hover (web): the floor under the cursor turns grey and says which it is.
+  // Hover (web): the floor under the cursor turns grey and says which it is; a shaft says which stairs or lift.
   const [hover, setHover] = useState<{ id: string; at: Point } | null>(null);
+  const [shaftHover, setShaftHover] = useState<{ id: string; at: Point } | null>(null);
+  const shaftsRef = useRef<{ shaft: Shaft; from: Point; to: Point; out: boolean }[]>([]);
   useEffect(() => {
     const node = frame.current as unknown as HTMLElement | null;
     if (Platform.OS !== 'web' || !node || typeof node.addEventListener !== 'function') return;
@@ -336,8 +373,14 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
       const id = floorAt(blocksRef.current, point);
       node.style.cursor = id ? 'pointer' : 'grab';
       setHover((current) => (id ? { id, at: point } : current ? null : current));
+      // Near a staircase or lift between the floors: say which, and which floors it joins.
+      const near = id ? null : shaftsRef.current.find((line) => segmentDistance(point, line.from, line.to) < SHAFT_HIT_PX);
+      setShaftHover((current) => (near ? { id: near.shaft.id, at: point } : current ? null : current));
     };
-    const onLeave = () => setHover(null);
+    const onLeave = () => {
+      setHover(null);
+      setShaftHover(null);
+    };
     node.addEventListener('pointermove', onMove);
     node.addEventListener('pointerleave', onLeave);
     return () => {
@@ -356,6 +399,13 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
 
   const routeOn = (floorId: string, z: number) => pieces.filter((piece) => piece.floor_id === floorId).map((piece) =>
     piece.points.map((p, i) => `${i ? 'L' : 'M'}${at(p, z).map((v) => v.toFixed(1)).join(' ')}`).join(' '));
+  const shaftLines = shafts.flatMap((shaft) => shaft.stops.slice(1).map((upper, k) => {
+    const lower = shaft.stops[k];
+    const from = at(lower.at, level(lower.floorId)!.top);
+    const to = at(upper.at, level(upper.floorId)!.z);
+    return { id: `${shaft.id}-${k}`, shaft, from, to, out: broken.has(shaft.id) };
+  }));
+  shaftsRef.current = shaftLines;
   const climbs = pieces.flatMap((piece, i) => {
     const next = pieces[i + 1];
     const a = level(piece.floor_id);
@@ -405,7 +455,7 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
                           strokeLinejoin="round" />
                   ))}
                   {(rooms.get(floor.id) ?? []).map((space) => (
-                    <Path key={space.id} d={path(space.polygon.map((p) => at(p, floor.top)))}
+                    <Path key={space.id} d={path(space.polygon.map((p) => at(p, floor.top)))} opacity={safety ? SAFETY_DIM : 1}
                           fill={lit ? 'transparent' : roomStyle(space).fill} stroke={roomStyle(space).edge} strokeOpacity={0.5}
                           strokeWidth={0.5} />
                   ))}
@@ -421,6 +471,10 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
                     const [x, y] = at(target.position, floor.top + 0.05);
                     return <Circle cx={x} cy={y} r={5} fill="#FFFFFF" stroke={colours.accent} strokeWidth={3} />;
                   })()}
+                  {safety && (
+                    <SafetyMarks marks={marksOn.get(floor.id) ?? []} project={(p) => at(p, floor.top + 0.05)}
+                                 fontFamily={LABEL_FONT} size={0.55} />
+                  )}
                   {label && (
                     <SvgText x={label[0] + 12} y={label[1] + 4} fontSize={12} fontWeight="700" fontFamily={LABEL_FONT}
                              fill={lit || onRoute ? colours.accent : mapColours.label}>
@@ -435,8 +489,23 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
                 <G key={floor.id} testID={`block-${floor.level}`}>{content}</G>
               );
             })}
+            {shaftLines.map((line) => {
+              const colour = line.out ? colours.closed : line.shaft.kind === 'lift' ? '#60A5FA' : '#34D399';
+              const lit = shaftHover?.id === line.shaft.id;
+              return line.shaft.kind === 'lift' ? (
+                <G key={line.id} testID={line.out ? 'shaft-broken' : 'shaft-lift'}>
+                  <Path d={`M${line.from[0]} ${line.from[1]} L${line.to[0]} ${line.to[1]}`} stroke={colour}
+                        strokeOpacity={lit ? 0.6 : 0.35} strokeWidth={9} strokeLinecap="round" />
+                  <Path d={`M${line.from[0]} ${line.from[1]} L${line.to[0]} ${line.to[1]}`} stroke={colour} strokeWidth={1.5} />
+                </G>
+              ) : (
+                <Path key={line.id} testID={line.out ? 'shaft-broken' : 'shaft-stairs'} fill="none" stroke={colour}
+                      strokeWidth={lit ? 2.6 : 1.8} strokeLinejoin="round"
+                      d={zigzag(line.from, line.to).map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ')} />
+              );
+            })}
             {climbs.map((d, k) => (
-              <Path key={`c${k}`} d={d} stroke={colours.accent} strokeWidth={2} strokeDasharray={[4, 4]} fill="none" />
+              <Path key={`c${k}`} d={d} stroke={colours.accent} strokeWidth={3} strokeLinecap="round" fill="none" />
             ))}
             {/* the neighbourhood fades into the dark at the edges */}
             {around && (
@@ -453,6 +522,21 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
           </Svg>
         </Animated.View>
       </View>
+      {shaftHover && !hovered && (() => {
+        const shaft = shafts.find((item) => item.id === shaftHover.id);
+        if (!shaft) return null;
+        const names = shaft.stops.map((stop) => floors.find((floor) => floor.id === stop.floorId)?.name ?? stop.floorId);
+        const out = broken.has(shaft.id);
+        return (
+          <View pointerEvents="none" testID="shaft-hint"
+                style={[styles.hint, { backgroundColor: mapColours.chrome, borderColor: out ? colours.closed : mapColours.chromeEdge,
+                                       left: Math.min(shaftHover.at[0] + 14, width - 260), top: Math.max(shaftHover.at[1] - 34, 8) }]}>
+            <Text style={[styles.hintText, { color: out ? colours.closed : mapColours.chromeText }]}>
+              {shaft.name} · {names[0]} ↔ {names[names.length - 1]}{out ? ' · out of service' : ''}
+            </Text>
+          </View>
+        );
+      })()}
       {hovered && hover && (
         <View pointerEvents="none" testID="floor-hint"
               style={[styles.hint, { backgroundColor: mapColours.chrome, borderColor: mapColours.chromeEdge, left: Math.min(hover.at[0] + 14, width - 190), top: Math.max(hover.at[1] - 34, 8) }]}>

@@ -21,6 +21,19 @@ again), which shrinks into the search bar.
   top button shows the whole building), 3D / Top (bird's eye, straight down) / 2D, turn left / right 45° with the
   compass between them (click: north up; drag sideways: turn all the way round), and zoom. The building and the
   floors turn the same way. Inside a floor, "‹ Building" at the top (or Escape) goes back to the whole building.
+- **Broken for everyone** (`server/reports.py`): "the lift is broken" to FINNI (its `report_problem` tool) or
+  `POST /buildings/{id}/reports` files it for the whole building: every conversation routes around it, the map shows
+  it red (polled every 8 s, `withReports` in `src/changes.ts`), the shaft in the floor stack turns red, and the
+  maintenance team gets it (`GET /maintenance`; emailed with `RESEND_API_KEY` and `MAINTENANCE_EMAIL`). The red line
+  under the search bar opens the list with **Fixed** and the inbox. Live app only: the benchmark never sees reports.
+- **Safety mode** (`src/safety.ts`, the shield): rooms and furniture dim; exits, fire extinguishers, defibrillators,
+  eyewash stations and the stairs light up on every floor. Quick buttons (only what the building has) route to the
+  nearest one at once, without Claude (`POST /sessions/{id}/nearest`); when FINNI doesn't know where you are yet, it
+  asks.
+- **Stairs and lifts between floors** (`shaftStops` in `BuildingBlocks.tsx`): every staircase (zig-zag) and lift
+  (column) joins the slabs where it stands; hover one for its name and floors; red when out of service.
+- **Things along the route** (`routeSpaces` in `src/steps.ts`): the things in the rooms you pass stay bright, the
+  rest fade; the thing you're going to is orange with its name; the landmarks in the steps are named.
 - **Dragging the map** (mouse): hold and drag sideways to turn the building or a floor all the way round, up and down
   to tilt it (down looks from above, up from the side); Shift+drag or right-drag moves a floor; a click is "I'm here".
   Touch: one finger moves, two fingers twist.

@@ -4,9 +4,12 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, useWindowDimensions, Vi
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
 import {
-  api, ApiError, buildingFromUrl, type BuildingRow, type Context, pickBuilding, placeOf, type Point, showBuildingInUrl,
+  api, ApiError, buildingFromUrl, type BuildingRow, type Context, type MaintenanceMessage, pickBuilding, placeOf, type Point,
+  type Report, type SafetyKind, showBuildingInUrl,
 } from './src/api';
 import { categories } from './src/categories';
+import { withReports } from './src/changes';
+import { safetyButtons } from './src/safety';
 import { BuildingBlocks } from './src/components/BuildingBlocks';
 import { FloorPlan } from './src/components/FloorPlan';
 import { FloorScene, type Inset, TILT, TOP_TILT } from './src/components/FloorScene';
@@ -14,13 +17,13 @@ import Intro from './src/orb/Intro';
 import type { SphereMode } from './src/orb/sphere';
 import { chatTurn, RENEWED_NOTE } from './src/session';
 import { initial, nextStep, reduce } from './src/state';
-import { routeSteps, summary } from './src/steps';
+import { bare, routeSteps, summary } from './src/steps';
 import { flushSync } from 'react-dom';
 
 import { colours, isWide, map as mapColours, setTheme, startTheme, type ThemeName } from './src/theme';
 import { MapControls, type MapHandle, type ViewMode } from './src/ui/MapControls';
 import { OrbMark } from './src/ui/OrbMark';
-import { Panel, sheetHeight, type Snap } from './src/ui/Panel';
+import { Panel, type PanelMode, sheetHeight, type Snap } from './src/ui/Panel';
 import { SearchBar } from './src/ui/SearchBar';
 import { switchWithTransition } from './src/ui/ThemeToggle';
 import { WalkBanner } from './src/ui/WalkBanner';
@@ -94,6 +97,13 @@ function Guide() {
   const [hoverStep, setHoverStep] = useState<number | null>(null);
   const [pickedStep, setPickedStep] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // Broken for everyone (polled, so a colleague's report shows up too), the maintenance inbox, and safety mode.
+  const [reports, setReports] = useState<Report[]>([]);
+  const [emailOn, setEmailOn] = useState(false);
+  const [inbox, setInbox] = useState<MaintenanceMessage[]>([]);
+  const [panelMode, setPanelMode] = useState<PanelMode>('answer');
+  const [safety, setSafety] = useState(false);
+  const [safetyBusy, setSafetyBusy] = useState<SafetyKind | null>(null);
   const window = useWindowDimensions();
   const wide = isWide(window.width);
   const handle = useRef<MapHandle | null>(null);
@@ -176,6 +186,7 @@ function Guide() {
     async (text: string) => {
       const mine = ++asks.current;
       setPanelOpen(true);
+      setPanelMode('answer');
       setSnap('peek');
       setSphere('think');
       const sessionId = await until(() => sessionRef.current, SESSION_WAIT_MS);
@@ -195,6 +206,7 @@ function Guide() {
         if (turn.renewed) dispatch({ type: 'renewed', sessionId: turn.sessionId, note: RENEWED_NOTE });
         if (mine !== asks.current) return; // dropped (Escape) or a newer question
         dispatch({ type: 'reply', reply: turn.reply }); // an answer with a route flies the map to the floor
+        void refreshReports(); // "the lift is broken" shows at once
         setSphere('done');
         setTimeout(() => setSphere((now) => (now === 'done' ? 'rest' : now)), DONE_MS); // so the next answer flashes too
         setPickedStep(null);
@@ -240,6 +252,8 @@ function Guide() {
     setAttempt((n) => n + 1);
   };
   const quick = useMemo(() => categories(state.detail), [state.detail]);
+  const safetyChoices = useMemo(() => safetyButtons(state.detail), [state.detail]);
+  const drawn = useMemo(() => withReports(state.map, reports), [state.map, reports]); // the map with reports in red
   const steps = useMemo(() => routeSteps(state.map, state.detail), [state.map, state.detail]);
   const sum = useMemo(() => summary(state.map, state.detail), [state.map, state.detail]);
 
@@ -263,12 +277,14 @@ function Guide() {
   const highlight = lit && lit.floorId === state.floorId && lit.path.length > 1 ? lit.path : null;
 
   // The map fills the screen; FINNI's column (laptops) or bar and sheet (phones) cover part of it.
-  const showPanel = panelOpen && (state.messages.length > 0 || state.busy || !!state.error) && !(walking && !wide);
+  const showPanel = panelOpen && (panelMode !== 'answer' || state.messages.length > 0 || state.busy || !!state.error)
+    && !(walking && !wide);
   const sheet = showPanel && !wide ? sheetHeight(snap, window.height) : 0;
   const inset: Inset = wide
     ? { left: COLUMN_PX + 16, top: walking ? 96 : 0, right: 72, bottom: 0 }
     : { left: 0, top: walking ? 120 : inside ? 196 : 132, right: inside ? 64 : 0, bottom: sheet };
   const controlsBottom = wide ? 24 : sheet + 16;
+  const phoneSheetUp = !wide && showPanel && snap !== 'peek'; // like a map app: the buttons step aside for the sheet
   const mapLeft = wide ? COLUMN_PX + 32 : 12;
 
   // Escape inside a floor (not while typing or walking): back out to the whole building.
@@ -282,6 +298,88 @@ function Guide() {
     return () => globalThis.removeEventListener('keydown', onKey);
   }, [inside, walking]);
 
+  // Reports: polled, so what a colleague reported shows up here too; only a real change redraws the map.
+  const reportsKey = useRef('');
+  const refreshReports = useCallback(async () => {
+    const id = buildingRef.current;
+    if (!id) return;
+    try {
+      const got = await api.reports(id);
+      const key = JSON.stringify(got.reports);
+      setEmailOn(got.email);
+      if (key !== reportsKey.current) {
+        reportsKey.current = key;
+        setReports(got.reports);
+      }
+    } catch {
+      // the next poll tries again
+    }
+  }, []);
+  useEffect(() => {
+    reportsKey.current = '';
+    setReports([]);
+    if (!buildingId) return;
+    void refreshReports();
+    const timer = setInterval(() => void refreshReports(), REPORTS_POLL_MS);
+    return () => clearInterval(timer);
+  }, [buildingId, refreshReports]);
+  const refreshInbox = useCallback(async () => {
+    if (!buildingRef.current) return;
+    try {
+      setInbox((await api.maintenance(buildingRef.current)).messages);
+    } catch {
+      // shown next time
+    }
+  }, []);
+  const openPanel = (mode: PanelMode) => {
+    setPanelMode(mode);
+    setPanelOpen(true);
+    setSnap(mode === 'reports' ? 'half' : 'peek'); // the safety buttons fit the low sheet: the map stays in view
+    if (mode === 'reports') void refreshInbox();
+  };
+  const fixed = async (elementId: string) => {
+    if (!buildingId) return;
+    try {
+      await api.clearReport(buildingId, elementId);
+    } catch (error) {
+      setToast((error as Error).message);
+    }
+    await refreshReports();
+    await refreshInbox();
+  };
+
+  // Safety mode: the map dims to exits, extinguishers, first aid and stairs; a quick button routes to the nearest.
+  const toggleSafety = () => {
+    const on = !safety;
+    setSafety(on);
+    if (on) openPanel('safety');
+    else if (panelMode === 'safety') setPanelMode('answer');
+  };
+  const findNearest = async (kind: SafetyKind) => {
+    const choice = safetyChoices.find((button) => button.kind === kind);
+    if (!state.sessionId || !choice) return;
+    setSafetyBusy(kind);
+    try {
+      const { found, map } = await api.nearest(state.sessionId, kind);
+      const said = kind === 'exit'
+        ? `The nearest exit is by ${bare(found.room)}, ${Math.round(found.walk_m)} m away.`
+        : `${found.label} is in ${bare(found.room)}, ${Math.round(found.walk_m)} m away.`;
+      dispatch({ type: 'reply', reply: { reply: said, question: null, map } });
+      setPickedStep(null);
+      setPanelMode('answer');
+      setSnap('peek');
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        setToast('Tap the map where you are, or tell FINNI. Asking FINNI now…');
+        void ask(choice.question); // FINNI asks where they are, once
+      } else {
+        dispatch({ type: 'error', message: (error as Error).message });
+      }
+    } finally {
+      setSafetyBusy(null);
+    }
+  };
+
   const openHere = () => {
     if (!inside && floors.length) dispatch({ type: 'floor', floorId: (floors.find((f) => f.level === 0) ?? floors[0]).id });
     setToast('Tap the floor where you are. FINNI starts your routes there.');
@@ -294,16 +392,22 @@ function Guide() {
 
   const panel = showPanel ? (
     <Panel wide={wide} messages={state.messages} question={state.question} map={state.map} steps={steps} summary={sum}
+           mode={panelMode} safetyButtons={safetyChoices} onSafety={(kind) => void findNearest(kind)} safetyBusy={safetyBusy}
+           reports={reports} inbox={inbox} email={emailOn} onFixed={(id) => void fixed(id)}
            busy={state.busy} error={state.detail ? state.error : null} note={state.note}
            activeStep={hoverStep ?? shownStep} snap={snap} onSnap={setSnap}
-           onOption={(label) => void ask(label)} onClose={() => setPanelOpen(false)}
+           onOption={(label) => void ask(label)} onClose={() => {
+             setPanelOpen(false);
+             setPanelMode('answer');
+           }}
            onStepHover={setHoverStep} onStepPick={(index) => setPickedStep(index)}
            onStart={() => walkTo(0)} />
   ) : null;
   const search = (
     <SearchBar busy={state.busy} mode={sphere} mic={voice.mic} notice={voice.notice}
                onSubmit={(text) => void ask(text)} onCancel={dropAnswer} onMic={voice.toggle}
-               building={current} buildings={buildings} onPickBuilding={pickOther} categories={quick} />
+               building={current} buildings={buildings} onPickBuilding={pickOther} categories={quick}
+               reports={reports} onReports={() => openPanel('reports')} />
   );
 
   return (
@@ -316,7 +420,9 @@ function Guide() {
             outline={state.outline}
             context={context}
             spaces={state.detail?.spaces}
-            map={state.map}
+            map={drawn}
+            detail={state.detail}
+            safety={safety}
             focusFloorId={state.view === 'flying' ? state.floorId : null}
             onArrived={() => dispatch({ type: 'arrived' })}
             onPickFloor={(floorId) => dispatch({ type: 'floor', floorId })}
@@ -329,11 +435,11 @@ function Guide() {
         ) : null}
         {state.detail && state.floorId && inside ? (
           view !== 'plan' ? (
-            <FloorScene tilt={view === 'top' ? TOP_TILT : TILT} detail={state.detail} floorId={state.floorId} map={state.map} footprints={footprints}
+            <FloorScene tilt={view === 'top' ? TOP_TILT : TILT} detail={state.detail} floorId={state.floorId} map={drawn} footprints={footprints} safety={safety}
                         context={context} width={window.width} height={window.height} onTapFloor={tapHere} controls={false}
                         handleRef={handle} inset={inset} highlight={highlight} focus={focusPath} />
           ) : (
-            <FloorPlan detail={state.detail} floorId={state.floorId} map={state.map} width={window.width} height={window.height}
+            <FloorPlan detail={state.detail} floorId={state.floorId} map={drawn} safety={safety} width={window.width} height={window.height}
                        onTapFloor={tapHere} controls={false} handleRef={handle} inset={inset} highlight={highlight}
                        focus={focusPath} />
           )
@@ -370,11 +476,12 @@ function Guide() {
           <Text style={styles.stepText}>Take {step.name ?? step.kind} to {stepFloor.name} ›</Text>
         </Pressable>
       )}
-      <MapControls inside={inside} view={view} onView={setView} handle={handle} floors={floors}
+      {!(phoneSheetUp) && <MapControls inside={inside} view={view} onView={setView} handle={handle} floors={floors}
                    floorId={state.floorId} onFloor={(floorId) => dispatch({ type: 'floor', floorId })}
                    onBuilding={() => dispatch({ type: 'back' })} onHere={openHere} bottom={controlsBottom}
+                   safety={safety} onSafety={safetyChoices.length ? toggleSafety : undefined}
                    mapKey={`${state.view}:${state.floorId}:${view}:${theme}`} theme={theme} onTheme={toggleTheme}
-                   compact={!wide && inside} />
+                   compact={!wide} />}
       {walking && (
         <WalkBanner steps={steps} index={state.walk!} left={wide ? mapLeft : 12} right={wide ? 88 : 12}
                     onNext={() => walkTo(Math.min(steps.length - 1, state.walk! + 1))}
@@ -409,6 +516,7 @@ const savedTheme = (): string | null => {
     return null;
   }
 };
+const REPORTS_POLL_MS = 8000; // how soon a colleague's report shows up
 const COLUMN_PX = 400; // FINNI's column on laptops: the search card and the answer under it
 const SESSION_WAIT_MS = 8000; // a question asked while the building still loads waits this long
 const DONE_MS = 1300; // the orb stays green this long after an answer

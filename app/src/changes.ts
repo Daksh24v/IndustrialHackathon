@@ -1,7 +1,7 @@
 /** What the building's edits (map.changes: closed doors, lifts and rooms, new doors, moved things) look like on
  * one floor, in plan metres, for both floor views to draw: closed in red, new doors in green, moved things as
  * a small marker. */
-import type { BuildingDetail, MapView, Point } from './api';
+import type { BuildingDetail, MapView, Point, Report } from './api';
 
 export interface DoorMark {
   id: string;
@@ -48,12 +48,29 @@ function mark(id: string, at: Point, width: number, kind: DoorMark['kind'], poly
   return { id, kind, a: [at[0] - dx * half, at[1] - dy * half], b: [at[0] + dx * half, at[1] + dy * half] };
 }
 
+/** The map with what people reported broken added: drawn closed (red), with "out of service" on lifts and stairs.
+ * Reports come from everyone (polled), so they show even when this conversation never heard of them. */
+export function withReports(map: MapView | null, reports: Report[]): MapView | null {
+  if (!reports.length) return map;
+  const base: MapView = map ?? { you_are_here: null, target: null, route: null, focus_floor_id: null };
+  const changes = base.changes ?? { closed: [], new_doors: [], moved: [] };
+  const closed = [...new Set([...changes.closed, ...reports.map((report) => report.element_id)])];
+  return { ...base, changes: { ...changes, closed, reported: reports } };
+}
+
+/** "10:42": when something was reported, for its label. */
+export function clock(seconds: number): string {
+  const time = new Date(seconds * 1000);
+  return `${String(time.getHours()).padStart(2, '0')}:${String(time.getMinutes()).padStart(2, '0')}`;
+}
+
 export function changesOn(detail: BuildingDetail, map: MapView | null, floorId: string): FloorChanges {
   const changes = map?.changes;
   if (!changes) return NO_CHANGES;
   const spaces = detail.spaces.filter((space) => space.floor_id === floorId);
   const polygons = spaces.map((space) => space.polygon);
   const closed = new Set(changes.closed ?? []);
+  const reported = new Map((changes.reported ?? []).map((report) => [report.element_id, report]));
   const result: FloorChanges = { closedSpaces: new Set(), doors: [], labels: [], moved: [] };
 
   for (const space of spaces) if (closed.has(space.id)) result.closedSpaces.add(space.id);
@@ -67,7 +84,9 @@ export function changesOn(detail: BuildingDetail, map: MapView | null, floorId: 
     for (const space of spaces) {
       if (!connector.space_ids.includes(space.id)) continue;
       result.closedSpaces.add(space.id);
-      result.labels.push({ id: `${connector.id}-${space.id}`, at: space.anchor, text: `${connector.name} closed` });
+      const report = reported.get(connector.id);
+      const text = report ? `${connector.name} out of service · ${clock(report.reported_at)}` : `${connector.name} closed`;
+      result.labels.push({ id: `${connector.id}-${space.id}`, at: space.anchor, text });
     }
   }
   for (const door of changes.new_doors ?? []) {

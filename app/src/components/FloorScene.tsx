@@ -18,7 +18,9 @@ import {
 import { useMapGestures } from '../gestures';
 import { assetStyle, colours, map as mapColours, nearStyle, roomStyle, shade } from '../theme';
 import type { MapHandle } from '../ui/MapControls';
-import { ChangeMarks, HereMarker, TargetPin, useLoop } from './Markers';
+import { safetyMarks } from '../safety';
+import { landmarkNames, routeSpaces, routeSteps } from '../steps';
+import { ChangeMarks, HereMarker, SafetyMarks, TargetPin, useLoop } from './Markers';
 import { GroundLayers, groundOf } from './Neighbourhood';
 
 export const TILT = (52 * Math.PI) / 180;
@@ -49,6 +51,7 @@ export function orbit(cam: Camera, pivot: Point, angle: number, tilt: number): C
 } // a click that moves less than this is a tap ("I'm here")
 const FLY_MS = 700; // walking through the steps: the camera moves to the next one
 const STEP_MARGIN_M = 3;
+export const SAFETY_DIM = 0.28; // how much of the map stays visible in safety mode
 const STEP_MIN_M = 10; // a step is shown with at least this much floor around it
 
 /** The box grown about its middle to at least size x size metres. */
@@ -98,6 +101,8 @@ interface Props {
   focus?: Point[] | null;
   /** How far the view leans: TILT (3D) or TOP_TILT (bird's eye). */
   tilt?: number;
+  /** Safety mode: everything dims but exits, extinguishers, defibrillators, eyewash stations and the stairs. */
+  safety?: boolean;
 }
 
 const n = (value: number) => (Math.round(value * 10) / 10).toString();
@@ -116,10 +121,19 @@ interface Solid {
   depth: number; // bigger = farther, drawn first
   faces: { d: string; fill: string; stroke: string }[];
   rim?: string; // a bright line along the top
+  opacity?: number; // things off the route fade
 }
 
+const OFF_ROUTE = 0.28; // with a route: things in rooms you don't pass fade to this
+
 export function FloorScene({ detail, floorId, map, footprints, context, width, height, onTapFloor, controls = true, handleRef,
-                            inset = NO_INSET, highlight, focus, tilt = TILT }: Props) {
+                            inset = NO_INSET, highlight, focus, tilt = TILT, safety = false }: Props) {
+  const marks = useMemo(() => (safety ? safetyMarks(detail, floorId) : []), [safety, detail, floorId]);
+  // Along a route: the things in the rooms you pass stay bright, the thing you're looking for turns orange with its
+  // name, a landmark named in the steps gets its name too; everything else fades.
+  const onWay = useMemo(() => routeSpaces(map, detail), [map, detail]);
+  const named = useMemo(() => landmarkNames(routeSteps(map, detail)), [map, detail]);
+  const dim = safety ? SAFETY_DIM : 1;
   const spaces = useMemo(() => detail.spaces.filter((space) => space.floor_id === floorId), [detail, floorId]);
   const openings = useMemo(() => detail.openings.filter((opening) => opening.floor_id === floorId), [detail, floorId]);
   const changes = useMemo(() => changesOn(detail, map, floorId), [detail, map, floorId]);
@@ -419,16 +433,25 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
     }
 
     // Things in the rooms: flat ones lie on the floor, the rest are boxes standing among the walls.
-    const flats: { id: string; d: string; fill: string; stroke: string }[] = [];
+    const flats: { id: string; d: string; fill: string; stroke: string; opacity: number }[] = [];
+    const tags: { id: string; x: number; y: number; text: string; target: boolean }[] = [];
+    const routed = pieces.length > 0;
     for (const asset of assets) {
-      const style = assetStyle(asset.category ?? '');
+      const isTarget = map?.target?.asset_id === asset.id;
+      const base = assetStyle(asset.category ?? '');
+      const style = isTarget ? { ...base, top: colours.accent, edge: '#FFFFFF', height_m: Math.max(base.height_m, 0.6) } : base;
+      const opacity = routed && !onWay.has(asset.space_id) ? OFF_ROUTE : 1;
+      if ((isTarget || named.has(asset.name)) && depthOf(cam, asset.position) > cam.distance * 0.3) {
+        const [x, y] = project3d(cam, asset.position, style.height_m + 0.4);
+        tags.push({ id: asset.id, x, y, text: asset.name, target: isTarget });
+      }
       const rect = assetRect(asset.position, asset.footprint);
       if (depthOf(cam, asset.position) < cam.distance * 0.3) continue;
       const ppm = pixelsPerMetre(cam, asset.position);
       if (Math.min(asset.footprint.width_m, asset.footprint.depth_m) * ppm < MIN_ASSET_PX) continue;
       if (style.height_m === 0) {
         const d = flat(rect, 0.02);
-        if (d) flats.push({ id: asset.id, d, fill: style.top, stroke: style.edge });
+        if (d) flats.push({ id: asset.id, d, fill: style.top, stroke: style.edge, opacity });
         continue;
       }
       const top = flat(rect, style.height_m);
@@ -448,7 +471,7 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
         faces.push({ d: path(quad), fill: shade(style.top, 0.45 + 0.3 * shine), stroke: shade(style.top, 0.35) });
       });
       faces.push({ d: top, fill: style.top, stroke: style.edge });
-      solids.push({ faces, depth: 2 * depthOf(cam, asset.position) });
+      solids.push({ faces, depth: 2 * depthOf(cam, asset.position), opacity });
     }
     solids.sort((x, y) => y.depth - x.depth);
 
@@ -462,8 +485,8 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
       const text = side > 110 || !space.ref ? space.name : space.ref;
       return [{ id: space.id, x, y, text, size: Math.min(13, Math.max(8.5, ppm * 0.9)) }];
     });
-    return { slabSides, slabTops, grid, near, tiles, flats, routes, solids, labels, lit };
-  }, [cam, footprints, around, spaces, assets, pieces, walls, width, height, changes, highlight]);
+    return { slabSides, slabTops, grid, near, tiles, flats, routes, solids, labels, lit, tags };
+  }, [cam, footprints, around, spaces, assets, pieces, walls, width, height, changes, highlight, map, onWay, named]);
 
   // The route fades in; arrows flow along it.
   const flow = useLoop(900);
@@ -499,19 +522,21 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
             {scene.slabTops.map((d, i) => (
               <Path key={`top-${i}`} d={d} fill={mapColours.slabTop} stroke={mapColours.blockEdge} strokeWidth={1} />
             ))}
-            {scene.tiles.map((tile) => (
-              <Path key={tile.id} d={tile.d!} fill={tile.fill} testID={tile.closed ? 'closed-space' : undefined}
-                    stroke={tile.edge} strokeOpacity={tile.closed ? 1 : 0.55} strokeWidth={tile.closed ? 1.5 : 0.8} />
-            ))}
-            {scene.flats.map((thing) => (
-              <Path key={thing.id} d={thing.d} fill={thing.fill} stroke={thing.stroke} strokeWidth={0.5} />
-            ))}
-            {scene.labels.map((label) => (
-              <SvgText key={`label-${label.id}`} x={label.x} y={label.y + label.size / 3} fill={mapColours.label}
-                       fontSize={label.size} fontFamily={LABEL_FONT} textAnchor="middle">
-                {label.text}
-              </SvgText>
-            ))}
+            <G opacity={dim}>
+              {scene.tiles.map((tile) => (
+                <Path key={tile.id} d={tile.d!} fill={tile.fill} testID={tile.closed ? 'closed-space' : undefined}
+                      stroke={tile.edge} strokeOpacity={tile.closed ? 1 : 0.55} strokeWidth={tile.closed ? 1.5 : 0.8} />
+              ))}
+              {scene.flats.map((thing) => (
+                <Path key={thing.id} d={thing.d} fill={thing.fill} stroke={thing.stroke} strokeWidth={0.5} opacity={thing.opacity} />
+              ))}
+              {scene.labels.map((label) => (
+                <SvgText key={`label-${label.id}`} x={label.x} y={label.y + label.size / 3} fill={mapColours.label}
+                         fontSize={label.size} fontFamily={LABEL_FONT} textAnchor="middle">
+                  {label.text}
+                </SvgText>
+              ))}
+            </G>
             {scene.routes.map((route, i) => (
               <G key={`route-${i}`} testID="route-line">
                 {route.glow && <Path d={route.glow} fill={colours.accentFaint} />}
@@ -522,7 +547,7 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
             ))}
             {scene.lit && <Path d={scene.lit} fill="#B54F00" fillOpacity={0.6} testID="route-highlight" />}
             {scene.solids.map((solid, i) => (
-              <G key={`solid-${i}`}>
+              <G key={`solid-${i}`} opacity={dim * (solid.opacity ?? 1)}>
                 {solid.faces.map((face, j) => (
                   <Path key={j} d={face.d} fill={face.fill} stroke={face.stroke} strokeWidth={0.6} strokeLinejoin="round" />
                 ))}
@@ -536,6 +561,22 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
             ))}
             <ChangeMarks changes={changes} project={(p) => project3d(cam, p)} fontFamily={LABEL_FONT}
                          visible={(p) => depthOf(cam, p) > cam.distance * 0.3} />
+            {scene.tags.map((tag) => (
+              <G key={`tag-${tag.id}`} testID={tag.target ? 'target-thing' : 'landmark-thing'}>
+                <SvgText x={tag.x} y={tag.y} fontSize={tag.target ? 12 : 11} fontWeight="700" fontFamily={LABEL_FONT}
+                         textAnchor="middle" fill={mapColours.background} stroke={mapColours.background} strokeWidth={3}>
+                  {tag.text}
+                </SvgText>
+                <SvgText x={tag.x} y={tag.y} fontSize={tag.target ? 12 : 11} fontWeight="700" fontFamily={LABEL_FONT}
+                         textAnchor="middle" fill={tag.target ? colours.accent : mapColours.chromeText}>
+                  {tag.text}
+                </SvgText>
+              </G>
+            ))}
+            {safety && (
+              <SafetyMarks marks={marks} project={(p) => project3d(cam, p, 0.05)} fontFamily={LABEL_FONT}
+                           visible={(p) => depthOf(cam, p) > cam.distance * 0.3} />
+            )}
             {targetPx && (
               <TargetPin x={targetPx.at[0]} y={targetPx.at[1]} height={Math.min(48, Math.max(30, targetPx.ppm * 2.6))}
                          flatten={flatten} />

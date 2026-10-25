@@ -45,6 +45,23 @@ varies a little between runs; the landmark options can too, so pick any one on t
 | 7 | Tap the floor somewhere else | The dot jumps to where you tapped; the next route starts there without a question | "I'm here" without GPS or hardware |
 | 8 | Reload, then: "I'm in the quality lab. The office lift is out of service today, and I moved the coordinate measuring machine to office 1.04." | "I've updated three things …"; the lift turns red on the map ("Office lift closed"); on Floor 1 the machine stands in Office 1.04; "there's no step-free route to the machine today" | The facility manager: the map keeps up |
 
+**The 60-second story (what makes FINNI different):**
+
+1. A worker says (mic or typed): "Hey FINNI, the office lift is broken." FINNI confirms what it understood ("Office
+   lift, Ground floor ↔ Floor 1, out of service; maintenance has been told"). The lift turns red on everyone's map, a
+   red line appears under the search bar, and the Office lift's shaft in the floor stack turns red (hover it).
+   Maintenance gets it in the inbox (the red line → Maintenance inbox), and by email with `RESEND_API_KEY` and
+   `MAINTENANCE_EMAIL` in `.env`.
+2. A colleague in another browser (or after a reload) in a wheelchair: "Take me to office 1.04, step-free." FINNI
+   says honestly there is no step-free way right now. On foot: the route goes by the Office staircase instead.
+3. Press the **shield** (Safety): the map dims; exits, fire extinguishers, defibrillators and the stairs light up on
+   every floor (not the lifts: not in a fire). Tap "Nearest exit" or "Fire extinguisher": the route, at once.
+4. "The lift works again" (or **Fixed** in the list): cleared for everyone, maintenance hears that too.
+
+On a route, the things in the rooms you pass stay bright and the rest fade; the thing you're going to is orange
+with its name, and the landmarks in the steps ("by the Coordinate measuring machine") are named on the map. First
+aid kits aren't in the data: with a list of them, FINNI routes to them like the extinguishers.
+
 Close with BENCHMARK.md: 145 test answers double-checked, build 114/114 and hold-out 35/36 on the organisers'
 1.1.0 rules, and LOCATING.md for how we find where people and things are.
 

@@ -14,8 +14,10 @@ import {
 import { useMapGestures } from '../gestures';
 import { assetStyle, colours, map as mapColours, roomStyle } from '../theme';
 import type { MapHandle } from '../ui/MapControls';
-import { atLeast, type Inset, LABEL_FONT, NO_INSET, styles } from './FloorScene';
-import { ChangeMarks, HereMarker, TargetPin } from './Markers';
+import { atLeast, type Inset, LABEL_FONT, NO_INSET, SAFETY_DIM, styles } from './FloorScene';
+import { safetyMarks } from '../safety';
+import { routeSpaces } from '../steps';
+import { ChangeMarks, HereMarker, SafetyMarks, TargetPin } from './Markers';
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 const FOCUS_MARGIN_M = 8;
@@ -36,6 +38,7 @@ interface Props {
   inset?: Inset;
   highlight?: Point[] | null;
   focus?: Point[] | null;
+  safety?: boolean;
 }
 
 /** A plan fitted into the uncovered part of the screen. */
@@ -45,7 +48,10 @@ function fitInside(bounds: Parameters<typeof fit>[0], width: number, height: num
 }
 
 export function FloorPlan({ detail, floorId, map, width, height, onTapFloor, controls = true, handleRef, inset = NO_INSET,
-                            highlight, focus }: Props) {
+                            highlight, focus, safety = false }: Props) {
+  const marks = useMemo(() => (safety ? safetyMarks(detail, floorId) : []), [safety, detail, floorId]);
+  const dim = safety ? SAFETY_DIM : 1;
+  const onWay = useMemo(() => routeSpaces(map, detail), [map, detail]); // the rooms the route passes
   const spaces = useMemo(() => detail.spaces.filter((space) => space.floor_id === floorId), [detail, floorId]);
   const pieces = useMemo(
     () => (map?.route?.pieces ?? []).filter((piece) => piece.floor_id === floorId),
@@ -113,6 +119,7 @@ export function FloorPlan({ detail, floorId, map, width, height, onTapFloor, con
       <Animated.View {...gestures.panHandlers} style={[{ width, height }, gestures.style]}>
         <Svg width={width + 2 * MARGIN_PX} height={height + 2 * MARGIN_PX} style={{ position: 'absolute', left: -MARGIN_PX, top: -MARGIN_PX }}>
           <G transform={`translate(${MARGIN_PX} ${MARGIN_PX})`}>
+            <G opacity={dim}>
             {spaces.map((space) => {
               const style = roomStyle(space);
               return (
@@ -126,9 +133,11 @@ export function FloorPlan({ detail, floorId, map, width, height, onTapFloor, con
             {assets.filter((asset) => Math.min(asset.footprint.width_m, asset.footprint.depth_m) * transform.scale >= MIN_ASSET_PX)
               .map((asset) => {
                 const style = assetStyle(asset.category ?? '');
+                const isTarget = map?.target?.asset_id === asset.id;
                 return (
-                  <Path key={asset.id} d={polygonPath(transform, assetRect(asset.position, asset.footprint))} fill={style.top}
-                        stroke={style.edge} strokeWidth={0.6} />
+                  <Path key={asset.id} d={polygonPath(transform, assetRect(asset.position, asset.footprint))}
+                        fill={isTarget ? colours.accent : style.top} stroke={isTarget ? '#FFFFFF' : style.edge}
+                        strokeWidth={isTarget ? 1.5 : 0.6} opacity={pieces.length && !onWay.has(asset.space_id) ? 0.28 : 1} />
                 );
               })}
             {spaces.filter((space) => changes.closedSpaces.has(space.id)).map((space) => (
@@ -147,6 +156,7 @@ export function FloorPlan({ detail, floorId, map, width, height, onTapFloor, con
                 </SvgText>
               );
             })}
+            </G>
             {pieces.map((piece, index) => (
               <G key={`route-${index}`}>
                 <Path d={linePath(transform, piece.points)} stroke={colours.accentFaint} strokeWidth={14}
@@ -169,6 +179,7 @@ export function FloorPlan({ detail, floorId, map, width, height, onTapFloor, con
                     fill="none" testID="route-highlight" />
             )}
             <ChangeMarks changes={changes} project={(p) => toScreen(transform, p)} fontFamily={LABEL_FONT} />
+            {safety && <SafetyMarks marks={marks} project={(p) => toScreen(transform, p)} fontFamily={LABEL_FONT} />}
             {targetPx && <TargetPin x={targetPx[0]} y={targetPx[1]} height={34} />}
             {herePx && <HereMarker x={herePx[0]} y={herePx[1]} radius={8} />}
           </G>

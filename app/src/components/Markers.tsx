@@ -7,6 +7,7 @@ import { Circle, Ellipse, G, Line, Path, Text as SvgText } from 'react-native-sv
 
 import type { Point } from '../api';
 import type { FloorChanges } from '../changes';
+import type { MarkKind, SafetyMark } from '../safety';
 import { colours, map as mapColours } from '../theme';
 
 const AnimatedEllipse = Animated.createAnimatedComponent(Ellipse);
@@ -128,6 +129,64 @@ export function ChangeMarks({ changes, project, visible = () => true, fontFamily
             <Path d={`M${x} ${y - 7} L${x + 7} ${y} L${x} ${y + 7} L${x - 7} ${y} Z`} fill={colours.moved} stroke="#FFFFFF"
                   strokeWidth={2} />
             <Halo x={x} y={y - 11} size={11} weight="600" colour={colours.moved} fontFamily={fontFamily} text={thing.label} />
+          </G>
+        );
+      })}
+    </G>
+  );
+}
+
+const SAFETY_COLOUR: Record<MarkKind, string> = {
+  fire_extinguisher: '#E53935',
+  defibrillator: '#16A34A',
+  eyewash_station: '#0EA5A4',
+  exit: '#16A34A',
+  stairs: '#22C55E',
+};
+
+/** Safety mode: a round badge per safety thing (a flame for an extinguisher, a cross for a defibrillator, a drop
+ * for an eyewash station), a green EXIT tag on entrances and a stairs badge on the escape stairs. */
+export function SafetyMarks({ marks, project, visible = () => true, fontFamily, size = 1 }: {
+  marks: SafetyMark[];
+  project: (p: Point) => Point;
+  visible?: (p: Point) => boolean;
+  fontFamily?: string;
+  size?: number; // 1 on a floor, smaller on the floor stack
+}) {
+  return (
+    <G testID="safety-marks">
+      {marks.filter((mark) => visible(mark.at)).map((mark) => {
+        const [x, y] = project(mark.at);
+        const colour = SAFETY_COLOUR[mark.kind];
+        const r = 10 * size;
+        if (mark.kind === 'exit') {
+          const w = 34 * size;
+          const h = 16 * size;
+          return (
+            <G key={mark.id} testID="safety-exit">
+              <Path d={`M${x - w / 2} ${y - h / 2} h${w} v${h} h${-w} Z`} fill={colour} stroke="#FFFFFF" strokeWidth={1.5} />
+              <SvgText x={x} y={y + 4 * size} fontSize={10 * size} fontWeight="800" fontFamily={fontFamily} fill="#FFFFFF"
+                       textAnchor="middle">EXIT</SvgText>
+            </G>
+          );
+        }
+        const icon =
+          mark.kind === 'fire_extinguisher'
+            ? `M${x} ${y - 6 * size} C${x + 5 * size} ${y - 1 * size} ${x + 4 * size} ${y + 6 * size} ${x} ${y + 6 * size} C${x - 4 * size} ${y + 6 * size} ${x - 5 * size} ${y} ${x - 1 * size} ${y - 3 * size} C${x - 1 * size} ${y} ${x + 1 * size} ${y + 1 * size} ${x} ${y - 6 * size} Z`
+            : mark.kind === 'eyewash_station'
+              ? `M${x} ${y - 6 * size} C${x + 5 * size} ${y} ${x + 5 * size} ${y + 6 * size} ${x} ${y + 6 * size} C${x - 5 * size} ${y + 6 * size} ${x - 5 * size} ${y} ${x} ${y - 6 * size} Z`
+              : mark.kind === 'stairs'
+                ? `M${x - 6 * size} ${y + 5 * size} h${4 * size} v${-4 * size} h${4 * size} v${-4 * size} h${4 * size}`
+                : `M${x - 2 * size} ${y - 6 * size} h${4 * size} v${4 * size} h${4 * size} v${4 * size} h${-4 * size} v${4 * size} h${-4 * size} v${-4 * size} h${-4 * size} v${-4 * size} h${4 * size} Z`;
+        return (
+          <G key={mark.id} testID={`safety-${mark.kind}`}>
+            <Circle cx={x} cy={y} r={r + 3 * size} fill={colour} fillOpacity={0.25} />
+            <Circle cx={x} cy={y} r={r} fill={colour} stroke="#FFFFFF" strokeWidth={1.5} />
+            {mark.kind === 'stairs' ? (
+              <Path d={icon} stroke="#FFFFFF" strokeWidth={1.8 * size} fill="none" strokeLinejoin="round" />
+            ) : (
+              <Path d={icon} fill="#FFFFFF" />
+            )}
           </G>
         );
       })}

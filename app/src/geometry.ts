@@ -380,3 +380,26 @@ export function pointInPolygon([px, py]: Point, polygon: Point[]): boolean {
   }
   return inside;
 }
+
+/** A zig-zag from a to b (screen pixels): a staircase drawn between two floors. */
+export function zigzag([ax, ay]: Point, [bx, by]: Point, steps = 6, amplitude = 5): Point[] {
+  const length = Math.hypot(bx - ax, by - ay) || 1;
+  const [nx, ny] = [-(by - ay) / length, (bx - ax) / length];
+  const points: Point[] = [[ax, ay]];
+  for (let i = 1; i < steps; i += 1) {
+    const t = i / steps;
+    const side = i % 2 ? amplitude : -amplitude;
+    points.push([ax + (bx - ax) * t + nx * side, ay + (by - ay) * t + ny * side]);
+  }
+  points.push([bx, by]);
+  return points;
+}
+
+/** How far a point is from the segment a–b. */
+export function segmentDistance([px, py]: Point, [ax, ay]: Point, [bx, by]: Point): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const length2 = dx * dx + dy * dy;
+  const t = length2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / length2)) : 0;
+  return Math.hypot(ax + t * dx - px, ay + t * dy - py);
+}

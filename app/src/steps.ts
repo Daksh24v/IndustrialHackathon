@@ -174,3 +174,31 @@ export function summary(map: MapView | null, detail: BuildingDetail | null): Sum
     stepFree: !changes.some((piece) => piece.then?.kind === 'stairs') && !stepped,
   };
 }
+
+/** The spaces a route passes through (and where it starts and ends), floor by floor: the things in them are the
+ * ones you walk past, so the map keeps them bright and fades the rest. Empty without a route. */
+export function routeSpaces(map: MapView | null, detail: BuildingDetail | null): Set<string> {
+  const spaces = new Set<string>();
+  if (!map?.route || !detail) return spaces;
+  for (const piece of map.route.pieces) {
+    const onFloor = detail.spaces.filter((space) => space.floor_id === piece.floor_id);
+    const at = (p: Point) => onFloor.find((space) => pointInPolygon(p, space.polygon))?.id;
+    piece.points.forEach((p, i) => {
+      const next = piece.points[i + 1];
+      const here = at(p) ?? (next ? at([(p[0] + next[0]) / 2, (p[1] + next[1]) / 2]) : undefined);
+      if (here) spaces.add(here);
+      if (next) {
+        const middle = at([(p[0] + next[0]) / 2, (p[1] + next[1]) / 2]);
+        if (middle) spaces.add(middle);
+      }
+    });
+  }
+  if (map.you_are_here) spaces.add(map.you_are_here.space_id);
+  if (map.target) spaces.add(map.target.space_id);
+  return spaces;
+}
+
+/** The things named as landmarks in the steps ("by the Coordinate measuring machine 0.21"). */
+export function landmarkNames(steps: Step[]): Set<string> {
+  return new Set(steps.flatMap((step) => (step.near ? [step.near.replace(/^by the /, '')] : [])));
+}

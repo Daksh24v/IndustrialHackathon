@@ -3,7 +3,8 @@
  * that is still being answered. */
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from 'react';
 
-import type { BuildingRow } from '../api';
+import type { BuildingRow, Report } from '../api';
+import { clock } from '../changes';
 import type { Category } from '../categories';
 import { groupBuildings } from '../components/BuildingPicker';
 import type { SphereMode } from '../orb/sphere';
@@ -26,10 +27,13 @@ interface Props {
   buildings: BuildingRow[];
   onPickBuilding: (id: string) => void;
   categories: Category[];
+  /** What's reported broken in the building: a red line under the bar that opens the list. */
+  reports?: Report[];
+  onReports?: () => void;
 }
 
 export function SearchBar(props: Props) {
-  const { busy, mode, mic, notice, onSubmit, onCancel, onMic, building, buildings, onPickBuilding, categories } = props;
+  const { busy, mode, mic, notice, onSubmit, onCancel, onMic, building, buildings, onPickBuilding, categories, reports = [] } = props;
   const [value, setValue] = useState('');
   const [look, setLook] = useState(0);
   const [menu, setMenu] = useState(false);
@@ -96,6 +100,13 @@ export function SearchBar(props: Props) {
             </button>
           ))}
         </div>
+      )}
+      {reports.length > 0 && (
+        <button type="button" className="fi-alert" data-testid="reports-alert" onClick={props.onReports}>
+          <i aria-hidden="true" />
+          {reports[0].label} out of service · {clock(reports[0].reported_at)}
+          {reports.length > 1 ? ` · +${reports.length - 1} more` : ''}
+        </button>
       )}
       {menu && (
         <BuildingMenu buildings={buildings} current={building?.id ?? null}

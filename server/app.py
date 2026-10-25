@@ -12,6 +12,10 @@ Endpoints
 - POST /sessions                          start a conversation with the agent about one building
 - POST /sessions/{id}/chat                one turn: {reply, question, map}
 - POST /sessions/{id}/position            where the person is: a place, or a tapped point on a floor
+- POST /sessions/{id}/nearest             safety mode: the nearest exit / fire extinguisher / defibrillator
+- GET  /buildings/{id}/reports            what people reported broken (everyone's routes avoid it)
+- POST /buildings/{id}/reports            report something broken; DELETE /buildings/{id}/reports/{element} fixed
+- GET  /maintenance                       the maintenance inbox (also emailed with RESEND_API_KEY, MAINTENANCE_EMAIL)
 - GET/DELETE /sessions/{id}/position      where they are, were and the route they follow / forget it
 - DELETE /sessions/{id}                   end it
 - POST /imports                           set up a new building from floor plans: a builder conversation
@@ -25,6 +29,7 @@ import logging
 import threading
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from functools import lru_cache
 from pathlib import Path
 
@@ -44,7 +49,9 @@ from navagent.builder import Draft
 from navagent.tools import Session
 from navcore.engine import Building, Constraints, EngineError
 from navcore.plans import PlanError
-from navcore.resolve import AmbiguousSpace, NoSuchSpace
+from navcore.resolve import AmbiguousSpace, NoSuchSpace, find_element
+from server.notify import email_configured, tell_maintenance
+from server.reports import Report, Reports
 from voice import app as voice_service
 
 DATA = Path(__file__).resolve().parent.parent / "data"
@@ -75,6 +82,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 # imports, voice) need it, as the header x-finni-code or ?code=. The site and the building data stay open.
 ACCESS_HEADER = "x-finni-code"
 PAID_PATHS = ("/sessions", "/imports", "/voice/")
+WRITE_PATHS = ("/reports",)  # reports change everyone's routes: a shared link needs the code to file or clear one
 
 
 def access_code() -> str:
@@ -84,7 +92,9 @@ def access_code() -> str:
 @app.middleware("http")
 async def require_access_code(request, call_next):
     code = access_code()
-    if code and request.method in ("POST", "PUT", "DELETE") and request.url.path.startswith(PAID_PATHS):
+    path = request.url.path
+    guarded = path.startswith(PAID_PATHS) or any(part in path for part in WRITE_PATHS)
+    if code and request.method in ("POST", "PUT", "DELETE") and guarded:
         given = request.headers.get(ACCESS_HEADER) or request.query_params.get("code")
         if given != code:
             return JSONResponse({"detail": "This needs the access code: open the link from the QR code."}, 401)
@@ -94,6 +104,18 @@ _sessions: dict[str, BuildingAgent] = {}
 _turns: dict[str, threading.Lock] = {}  # one turn at a time per conversation, so histories never interleave
 _lock = threading.Lock()
 _client: anthropic.Anthropic | None = None
+
+
+def reports_file() -> Path | None:
+    """Where reports are kept: FINNI_REPORTS_FILE, else .finni/reports.json; set it empty to keep them in memory."""
+    value = os.environ.get("FINNI_REPORTS_FILE")
+    if value is None:
+        return DATA.parent / ".finni" / "reports.json"
+    return Path(value) if value.strip() else None
+
+
+_reports = Reports(reports_file())
+_building_of: dict[str, str] = {}  # conversation -> building id (reports are per building)
 
 
 def client() -> anthropic.Anthropic:
@@ -248,6 +270,8 @@ def start_session(request: SessionRequest) -> dict:
     session_id = uuid.uuid4().hex
     with _lock:
         remember(session_id, agent)
+        _building_of[session_id] = request.building_id
+    keep_up_with_reports(session_id, agent)
     return {"session_id": session_id, "building_id": request.building_id,
             "building_name": agent.session.building.info["name"]}
 
@@ -258,6 +282,7 @@ def remember(session_id: str, agent: BuildingAgent) -> None:
         oldest = next(iter(_sessions))  # forget the oldest conversation
         _sessions.pop(oldest)
         _turns.pop(oldest, None)
+        _building_of.pop(oldest, None)
     _sessions[session_id] = agent
     _turns[session_id] = threading.Lock()
 
@@ -266,7 +291,90 @@ def agent_for(session_id: str) -> BuildingAgent:
     agent = _sessions.get(session_id)
     if agent is None:
         raise HTTPException(404, "Unknown or expired session; start a new one.")
+    keep_up_with_reports(session_id, agent)
     return agent
+
+
+# ---------- reports: broken for everyone ----------
+
+def keep_up_with_reports(session_id: str, agent: BuildingAgent) -> None:
+    """Before each turn: this conversation sees what anyone reported broken in its building, and can report."""
+    building_id = _building_of.get(session_id)
+    if building_id is None:  # a builder conversation: no reports
+        return
+    session = agent.session
+    session.reported = {report.element_id: report_view(report) for report in _reports.of(building_id)}
+    session.on_report = lambda summary, fixed: file_report(building_id, summary, fixed)
+
+
+def report_view(report: Report) -> dict:
+    return {key: value for key, value in asdict(report).items() if key != "building_id"}
+
+
+def file_report(building_id: str, summary: dict, fixed: bool) -> dict:
+    """File (or clear) a report for everyone and tell maintenance. summary: Session.element_summary + problem."""
+    label, problem = summary["label"], summary.get("problem", "")
+    if fixed:
+        report = _reports.clear(building_id, summary["element_id"])
+        message = tell_maintenance(_reports, building_id, f"Working again: {label}",
+                                   f"{label} was reported working again ({problem or 'no details'}).")
+        return {"report": report_view(report) if report else None, "maintenance": delivered(message.delivery)}
+    known = summary["element_id"] in _reports.ids(building_id)
+    report = _reports.add(Report(element_id=summary["element_id"], building_id=building_id, kind=summary["kind"],
+                                 label=label, floor_ids=summary["floor_ids"], problem=problem))
+    if known:  # reported before: maintenance already has it, no second message
+        return {"report": report_view(report), "maintenance": "already with maintenance"}
+    building_name = load(building_id).info.get("name", building_id)
+    message = tell_maintenance(
+        _reports, building_id, f"Out of service: {label}",
+        f"Reported in {building_name}: {label} is out of service.\nIn their words: \"{problem}\"\n"
+        f"FINNI now routes everyone around it. Clear it in FINNI when it works again.")
+    return {"report": report_view(report), "maintenance": delivered(message.delivery)}
+
+
+def delivered(delivery: str) -> str:
+    return "being emailed to maintenance" if delivery == "emailing" else "in the maintenance inbox"
+
+
+class ReportRequest(BaseModel):
+    element: str = Field(min_length=1, description="a lift, staircase, door or room: name or id")
+    problem: str = Field("", description="what is wrong, in the reporter's words")
+
+
+@app.get("/buildings/{building_id}/reports")
+def list_reports(building_id: str) -> dict:
+    """What people reported broken in this building, oldest first (every conversation routes around it)."""
+    building_path(building_id)
+    return {"reports": [report_view(report) for report in _reports.of(building_id)],
+            "email": email_configured()}
+
+
+@app.post("/buildings/{building_id}/reports")
+def add_report(building_id: str, request: ReportRequest) -> dict:
+    """Report something broken without a conversation (a button, a test): as FINNI's report_problem does."""
+    session = Session(load(building_id))
+    try:
+        summary = session.element_summary(find_element(session.building, request.element))
+    except EngineError as error:
+        raise HTTPException(422, str(error)) from error
+    return file_report(building_id, {**summary, "problem": request.problem}, fixed=False)
+
+
+@app.delete("/buildings/{building_id}/reports/{element_id}")
+def clear_report(building_id: str, element_id: str) -> dict:
+    """It works again."""
+    building_path(building_id)
+    known = {report.element_id: report for report in _reports.of(building_id)}
+    if element_id not in known:
+        raise HTTPException(404, "Nothing reported for that.")
+    report = known[element_id]
+    return file_report(building_id, {"element_id": element_id, "label": report.label, "problem": "fixed"}, fixed=True)
+
+
+@app.get("/maintenance")
+def maintenance(building_id: str | None = None) -> dict:
+    """The maintenance inbox, newest first: every report and every 'works again', and how it was delivered."""
+    return {"messages": [asdict(message) for message in _reports.messages(building_id)], "email": email_configured()}
 
 
 @app.post("/sessions/{session_id}/chat")
@@ -394,7 +502,28 @@ def end_session(session_id: str) -> dict:
     with _lock:
         _sessions.pop(session_id, None)
         _turns.pop(session_id, None)
+        _building_of.pop(session_id, None)
     return {"ended": True}
+
+
+class NearestRequest(BaseModel):
+    kind: str = Field(description="exit, fire_extinguisher, defibrillator or eyewash_station")
+
+
+@app.post("/sessions/{session_id}/nearest")
+def nearest(session_id: str, request: NearestRequest) -> dict:
+    """Safety mode's quick buttons: the route from where the person is to the nearest exit or safety thing, at
+    once and without Claude (closures and reports respected). 409 when it isn't known where they are."""
+    agent = agent_for(session_id)
+    session = agent.session
+    if session.position is None:
+        raise HTTPException(409, "Where are you? Tap the map where you are, or tell FINNI.")
+    with _turns.setdefault(session_id, threading.Lock()):
+        try:
+            found = session.nearest_safety(request.kind)
+        except EngineError as error:
+            raise HTTPException(422, str(error)) from error
+        return {"found": found, "map": session.map_view}
 
 
 # ---------- voice ----------

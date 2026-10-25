@@ -1,6 +1,7 @@
 // End-to-end check of the web build, like a person would use it, on a phone and a laptop: the map is there from
 // the start (the floor stack behind the opening); hover and open a floor; a quick search; ask, tap an option, the
-// route with its steps; walk it with Start (up the stairs to Floor 1); turn the map, compass, bird's eye, 2D; back to the
+// route with its steps; walk it with Start (up the stairs to Floor 1); turn the map; a broken lift reported for
+// everyone, safety mode and the nearest exit, Fixed; compass, bird's eye, 2D; back to the
 // whole building; Escape drops a question without moving the map.
 // No Claude API calls: the /chat answers are canned, but the map in them is a real route from the server.
 //
@@ -12,6 +13,8 @@ const { chromium } = require('playwright');
 const API = process.env.API ?? 'http://localhost:8000';
 const WEB = process.env.WEB ?? 'http://localhost:8081';
 const OUT = process.argv[2] ?? 'e2e/screenshots';
+const BUILDING = 'proc-factory-dev-003';
+const LIFT = 'proc-factory-dev-003-V02'; // the Office lift
 
 const expect = (ok, message) => {
   if (!ok) throw new Error(message);
@@ -45,6 +48,9 @@ const expect = (ok, message) => {
     const idle = () => page.waitForSelector('[data-testid="search-status"]', { state: 'detached', timeout: 20000 });
 
     // the opening, with the map already behind it
+    // a clean start: nothing reported broken from an earlier run
+    const known = (await (await fetch(`${API}/buildings/${BUILDING}/reports`)).json()).reports;
+    for (const report of known) await fetch(`${API}/buildings/${BUILDING}/reports/${report.element_id}`, { method: 'DELETE' });
     await page.goto(WEB);
     await page.waitForSelector('[data-testid="intro"]', { timeout: 30000 });
     await page.waitForSelector('[data-testid="building-blocks"]', { timeout: 30000 });
@@ -69,9 +75,11 @@ const expect = (ok, message) => {
 
     // turn the whole building with the buttons and by dragging the compass; the compass follows
     const compassTurn = () => page.$eval('[data-testid="compass"] svg', (svg) => svg.style.transform);
-    await page.click('[data-testid="turn-right"]');
-    await page.waitForTimeout(700);
-    expect((await compassTurn()) !== 'rotate(0deg)', 'the turn button did not turn the building');
+    if (size === 'laptop') { // phones turn with two fingers or the compass: no turn buttons there
+      await page.click('[data-testid="turn-right"]');
+      await page.waitForTimeout(700);
+      expect((await compassTurn()) !== 'rotate(0deg)', 'the turn button did not turn the building');
+    }
     const compass = await (await page.$('[data-testid="compass"]')).boundingBox();
     await page.mouse.move(compass.x + compass.width / 2, compass.y + compass.height / 2);
     await page.mouse.down();
@@ -178,6 +186,39 @@ const expect = (ok, message) => {
       const box = dot.getBoundingClientRect();
       return Math.abs(box.x - before.x) + Math.abs(box.y - before.y) > 10;
     }, dotBefore, { timeout: 10000 });
+
+    // "the office lift is broken" (reported by a colleague, here through the API): it turns up for everyone within
+    // a poll, red on the map, and maintenance has it
+    await fetch(`${API}/buildings/${BUILDING}/reports`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ element: 'Office lift', problem: 'the lift is broken' }),
+    });
+    await page.waitForSelector('[data-testid="reports-alert"]', { timeout: 15000 });
+    await page.waitForSelector('[data-testid="closed-label"]', { timeout: 10000 });
+    await shot('8c-lift-reported');
+
+    // safety mode: the map dims to exits, extinguishers and stairs; the nearest exit is one tap, with the way
+    await page.click('[data-testid="safety-toggle"]');
+    await page.waitForSelector('[data-testid="safety-panel"]');
+    await page.waitForSelector('[data-testid="safety-marks"]');
+    await page.waitForTimeout(500);
+    await shot('8d-safety');
+    await page.click('[data-testid="nearest-exit"]');
+    await page.waitForSelector('[data-testid="route-card"]', { timeout: 10000 });
+    expect((await page.textContent('[data-testid="answer"]')).includes('nearest exit'), 'no way to the nearest exit');
+    await page.waitForTimeout(800);
+    await shot('8e-nearest-exit');
+    await page.click('[data-testid="safety-toggle"]');
+    await page.waitForSelector('[data-testid="safety-marks"]', { state: 'detached' });
+
+    // it works again: Fixed in the list clears it for everyone, and maintenance hears that too
+    await page.click('[data-testid="reports-alert"]');
+    await page.waitForSelector('[data-testid="reports-panel"]');
+    await page.waitForSelector('[data-testid="inbox"]');
+    await shot('8f-reports');
+    await page.click(`[data-testid="fixed-${LIFT}"]`);
+    await page.waitForSelector('[data-testid="reports-alert"]', { state: 'detached', timeout: 10000 });
+    await page.click('[data-testid="panel-close"]');
     await page.click('[data-testid="compass"]');
     // the bird's eye view: straight down, still turns
     await page.click('[data-testid="view-top"]');
