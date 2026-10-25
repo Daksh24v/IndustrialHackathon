@@ -3,8 +3,10 @@
  * laptops; a bottom sheet with three heights on phones (drag the handle). */
 import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react';
 
-import type { MapView, Question } from '../api';
+import type { MaintenanceMessage, MapView, Question, Report, SafetyKind } from '../api';
+import { clock } from '../changes';
 import { type Message, plain } from '../components/ChatCard';
+import type { SafetyButton } from '../safety';
 import { bare, type Step, type Summary } from '../steps';
 import { StepIcon } from './icons';
 
@@ -31,10 +33,28 @@ interface Props {
   onStart: () => void;
   snap: Snap;
   onSnap: (snap: Snap) => void;
+  /** answer: FINNI's words and the route; safety: the quick buttons; reports: what's broken and the inbox. */
+  mode?: PanelMode;
+  safetyButtons?: SafetyButton[];
+  onSafety?: (kind: SafetyKind) => void;
+  safetyBusy?: SafetyKind | null;
+  reports?: Report[];
+  inbox?: MaintenanceMessage[];
+  email?: boolean;
+  onFixed?: (elementId: string) => void;
 }
 
+export type PanelMode = 'answer' | 'safety' | 'reports';
+
+const SAFETY_LOOK: Record<SafetyKind, { colour: string; icon: string; hint: string }> = {
+  fire_extinguisher: { colour: '#E53935', icon: '🔥', hint: 'the nearest one, with the way' },
+  defibrillator: { colour: '#16A34A', icon: '✚', hint: 'defibrillator (AED)' },
+  eyewash_station: { colour: '#0EA5A4', icon: '💧', hint: 'for eyes: rinse at once' },
+  exit: { colour: '#16A34A', icon: '🚪', hint: 'the quickest way out' },
+};
+
 export function Panel(props: Props) {
-  const { wide, messages, question, map, steps, summary, busy, error, note, activeStep } = props;
+  const { wide, messages, question, map, steps, summary, busy, error, note, activeStep, mode = 'answer' } = props;
   const [earlier, setEarlier] = useState(false);
   const lastSaid = [...messages].reverse().find((message) => message.from === 'guide');
   const lastAsked = [...messages].reverse().find((message) => message.from === 'you');
@@ -44,10 +64,55 @@ export function Panel(props: Props) {
   const body = (
     <div className="fi-panel-body" data-testid="panel-body">
       <div className="fi-head">
-        <i className="fi-dot" aria-hidden="true" />
-        FINNI
+        <i className="fi-dot" aria-hidden="true" style={mode === 'answer' ? undefined : { background: '#E53935' }} />
+        {mode === 'safety' ? 'Safety' : mode === 'reports' ? 'Reported broken' : 'FINNI'}
         <button type="button" className="fi-close" aria-label="Close" data-testid="panel-close" onClick={props.onClose}>×</button>
       </div>
+      {mode === 'safety' && (
+        <div className="fi-safety-list" data-testid="safety-panel">
+          <p className="fi-note">The map shows only what keeps you safe: exits, extinguishers, first aid and the stairs
+            (not the lifts in a fire). Tap one for the way there.</p>
+          {(props.safetyButtons ?? []).map((button) => {
+            const look = SAFETY_LOOK[button.kind];
+            return (
+              <button key={button.kind} type="button" className="fi-safety-btn" style={{ color: look.colour }}
+                      data-testid={`nearest-${button.kind}`} disabled={!!props.safetyBusy}
+                      onClick={() => props.onSafety?.(button.kind)}>
+                <span className="ic" style={{ background: look.colour }} aria-hidden="true">{look.icon}</span>
+                <span style={{ color: 'var(--text)' }}>
+                  {props.safetyBusy === button.kind ? 'Finding the way…' : button.label}
+                  <small>{look.hint}</small>
+                </span>
+              </button>
+            );
+          })}
+          {!props.safetyButtons?.length && <p className="fi-note">This building's data has no exits or safety equipment.</p>}
+        </div>
+      )}
+      {mode === 'reports' && (
+        <div className="fi-reports" data-testid="reports-panel">
+          {(props.reports ?? []).map((report) => (
+            <div key={report.element_id} className="fi-report" data-testid={`report-${report.element_id}`}>
+              <b>{report.label}</b>
+              <small>Out of service since {clock(report.reported_at)}{report.problem ? ` · “${report.problem}”` : ''}</small>
+              <button type="button" data-testid={`fixed-${report.element_id}`} onClick={() => props.onFixed?.(report.element_id)}>
+                Fixed
+              </button>
+            </div>
+          ))}
+          {!props.reports?.length && <p className="fi-note">Nothing is reported broken. Tell FINNI when something is.</p>}
+          <p className="fi-note">Everyone's routes avoid these. Say “the lift works again” or press Fixed when it does.</p>
+          {!!props.inbox?.length && (
+            <div className="fi-inbox" data-testid="inbox">
+              <h4>Maintenance inbox{props.email ? ' · also emailed' : ''}</h4>
+              {props.inbox.slice(0, 6).map((message, i) => (
+                <p key={i}>{message.subject} <span>· {clock(message.sent_at)} · {message.delivery === 'inbox' ? 'on screen' : message.delivery}</span></p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {mode === 'answer' && <>
       {lastAsked && !answered && busy && (
         <>
           <p className="fi-note">“{lastAsked.text}”</p>
@@ -113,6 +178,7 @@ export function Panel(props: Props) {
           ))}
         </div>
       )}
+      </>}
     </div>
   );
 

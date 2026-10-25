@@ -508,3 +508,71 @@
 :root.dark .fi-tag { color: #4fd1a0; background: rgba(79, 209, 160, 0.12); }
 :root.dark .mo-intro-veil { background: rgba(11, 16, 22, 0.86); }
 :root.dark .mo-intro-words { color: #f2f6fa; }
+
+/* safety mode: the shield, the quick buttons and the reports */
+.fi-group > button.fi-safety[data-on] { background: #e53935; color: #fff; }
+.fi-safety-list { display: flex; flex-direction: column; gap: 8px; }
+.fi-safety-btn {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  border-radius: 14px;
+  padding: 10px 12px;
+  font-size: 15px;
+  font-weight: 700;
+  transition: border-color 0.15s, background 0.15s;
+}
+.fi-safety-btn:hover { border-color: currentColor; }
+.fi-safety-btn .ic { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 18px; }
+.fi-safety-btn small { display: block; font-weight: 500; color: var(--muted); font-size: 13px; }
+.fi-reports { display: flex; flex-direction: column; gap: 8px; }
+.fi-report {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(229, 57, 53, 0.08);
+  border: 1px solid rgba(229, 57, 53, 0.35);
+}
+.fi-report b { font-size: 15px; }
+.fi-report small { grid-column: 1; color: var(--muted); font-size: 13px; }
+.fi-report button {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 16px;
+  border: none;
+  background: #16a34a;
+  color: #fff !important;
+  font-weight: 700;
+  font-size: 13px;
+}
+.fi-inbox { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 10px; }
+.fi-inbox h4 { margin: 0 0 2px; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.fi-inbox p { margin: 0; font-size: 13px; }
+.fi-inbox p span { color: var(--muted); }
+.fi-alert {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 12px;
+  background: rgba(229, 57, 53, 0.1);
+  color: #c62828 !important;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: left;
+}
+:root.dark .fi-alert { color: #ff8a80 !important; background: rgba(229, 57, 53, 0.18); }
+.fi-alert i { width: 8px; height: 8px; border-radius: 50%; background: #e53935; flex: none; animation: fi-pulse 1.6s ease-in-out infinite; }
+@keyframes fi-pulse { 50% { opacity: 0.3; } }

@@ -61,6 +61,16 @@ function Compass({ yaw, handle }: { yaw: number; handle: RefObject<MapHandle | n
   );
 }
 
+function Shield() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 3 4.5 6v5.5c0 4.6 3.1 8.4 7.5 9.5 4.4-1.1 7.5-4.9 7.5-9.5V6L12 3z" fill="none" stroke="currentColor"
+            strokeWidth="2" strokeLinejoin="round" />
+      <path d="M12 8v5M12 16v.5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function TurnArrow({ flip = false }: { flip?: boolean }) {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" style={flip ? { transform: 'scaleX(-1)' } : undefined}>
@@ -95,9 +105,12 @@ interface Props {
   onTheme: () => void;
   /** A phone inside a floor: fewer buttons (two fingers turn and zoom), the views side by side, so they all fit. */
   compact?: boolean;
+  /** Safety mode (shield): on or off, and whether this building has anything to show for it. */
+  safety: boolean;
+  onSafety?: () => void;
 }
 
-export function MapControls({ inside, view, onView, handle, floors, floorId, onFloor, onBuilding, onHere, bottom, mapKey, theme, onTheme, compact = false }: Props) {
+export function MapControls({ inside, view, onView, handle, floors, floorId, onFloor, onBuilding, onHere, bottom, mapKey, theme, onTheme, compact = false, safety, onSafety }: Props) {
   const [yaw, setYaw] = useState(0);
   const [tip, setTip] = useState<{ name: string; y: number } | null>(null);
   const turns = !inside || view !== 'plan'; // the building and the 3D / top views turn; the flat plan stays north up
@@ -114,7 +127,16 @@ export function MapControls({ inside, view, onView, handle, floors, floorId, onF
   const top = [...floors].reverse();
   return (
     <div className="fi fi-controls" style={{ bottom }} data-testid="map-controls">
-      <ThemeToggle theme={theme} onToggle={onTheme} />
+      {!(compact && inside) && <ThemeToggle theme={theme} onToggle={onTheme} />}
+      {onSafety && (
+        <div className="fi-group">
+          <button type="button" className="fi-safety" data-on={safety ? '' : undefined} data-testid="safety-toggle"
+                  aria-pressed={safety} aria-label={safety ? 'Leave safety mode' : 'Safety: exits, extinguishers, first aid'}
+                  title={safety ? 'Leave safety mode' : 'Safety mode'} onClick={onSafety}>
+            <Shield />
+          </button>
+        </div>
+      )}
       <div className="fi-group">
         <button type="button" aria-label="I'm here: tap the floor where you are" title="I'm here" data-testid="here-button" onClick={onHere}>
           <Locate />
