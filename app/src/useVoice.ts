@@ -1,8 +1,9 @@
 /** The microphone and the guide's voice. Tap the mic once: it listens, stops when you pause and hands over
- * what you said; the answer is read out and it listens again. Tap while it talks to interrupt; tap while it
- * listens to send what it has (or stop, if nothing was recorded yet); tap while it works on an answer to stop
- * talking (the answer still arrives as text). It also stops by itself when nobody speaks for a while, and
- * whenever the browser refuses to play the answer it listens again instead of hanging. */
+ * what you said; the answer is read out and it listens again. Talk over it to interrupt (web: it hears you
+ * start and goes quiet at once, then listens); say "stop" and the conversation ends. Tap while it talks or works
+ * on an answer to stop it (the answer still arrives as text); tap while it listens to send what it has (or stop,
+ * if nothing was recorded yet). It also stops by itself when nobody speaks for a while, and whenever the
+ * browser refuses to play the answer it listens again instead of hanging. */
 import {
   requestRecordingPermissionsAsync,
   RecordingPresets,
@@ -15,7 +16,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 
 import type { ChatReply } from './api';
-import { audioUrl, recordingType, SilenceDetector, type Spoken, voiceApi } from './voice';
+import { audioUrl, isStopCommand, recordingType, SILENCE, SilenceDetector, type Spoken, voiceApi, watchForBargeIn } from './voice';
 
 export type MicState = 'off' | 'listening' | 'thinking' | 'speaking';
 
@@ -26,6 +27,7 @@ const RECORDING = { ...RecordingPresets.HIGH_QUALITY, numberOfChannels: 1, isMet
 const MIN_RECORDING_MS = 600; // a tap after this long sends what was recorded, even if it sounded quiet
 const NOTHING_HEARD = "I didn't hear anything, so I stopped listening. Tap the mic to try again.";
 const NOT_NOW = "I couldn't take that just now. Tap the mic and say it again.";
+const AFTER_BARGE_IN_WAIT_MS = 3500; // talked over it and then said nothing more ("stop!"): close the mic quietly
 
 interface Options {
   buildingId: string | null;
@@ -47,6 +49,7 @@ export function useVoice({ buildingId, onHeard, onError }: Options) {
   const filler = useRef<Spoken | null>(null);
   const fillerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const turns = useRef(0);
+  const quietIfNothing = useRef(false); // this turn began by talking over Finni: silence just ends it
   const latest = useRef({ buildingId, onHeard, onError });
   latest.current = { buildingId, onHeard, onError };
 
@@ -73,7 +76,7 @@ export function useVoice({ buildingId, onHeard, onError }: Options) {
     return true;
   }
 
-  async function listen() {
+  async function listen(afterBargeIn = false) {
     const turn = ++turns.current; // a stop or a newer listen while we wait makes this one stale
     try {
       const permission = await requestRecordingPermissionsAsync();
@@ -88,7 +91,8 @@ export function useVoice({ buildingId, onHeard, onError }: Options) {
       await recorder.prepareToRecordAsync();
       if (!on.current || turn !== turns.current) return;
       recorder.record();
-      detector.current = new SilenceDetector();
+      detector.current = new SilenceDetector(afterBargeIn ? { ...SILENCE, waitMs: AFTER_BARGE_IN_WAIT_MS } : SILENCE);
+      quietIfNothing.current = afterBargeIn;
       setMic('listening');
     } catch (error) {
       fail(error);
@@ -113,6 +117,7 @@ export function useVoice({ buildingId, onHeard, onError }: Options) {
       const heard = await voiceApi.transcribe(audio, recordingType(uri, audio.type), latest.current.buildingId);
       if (!on.current) return;
       if (!heard) await sayThenListen(await voiceApi.speakText(DIDNT_HEAR));
+      else if (isStopCommand(heard)) stop(); // "stop": end the conversation, nothing sent
       else if (latest.current.onHeard(heard) === false) {
         stop();
         setNotice(NOT_NOW);
@@ -146,7 +151,7 @@ export function useVoice({ buildingId, onHeard, onError }: Options) {
         else stop();
         break;
       case 'speaking':
-        void listen(); // interrupt
+        stop(); // stop talking (to say something instead, just talk over it)
         break;
       case 'thinking':
         stop(); // stop talking; the answer still arrives as text
@@ -184,9 +189,19 @@ export function useVoice({ buildingId, onHeard, onError }: Options) {
     if (decision === 'done') void finishTurn();
     else if (decision === 'nothing') {
       stop();
-      setNotice(NOTHING_HEARD);
+      if (!quietIfNothing.current) setNotice(NOTHING_HEARD);
     }
   }, [recording]);
+
+  // speaking: the person talks over it (web): go quiet at once and listen to them
+  useEffect(() => {
+    if (mic !== 'speaking') return;
+    return watchForBargeIn(() => {
+      if (state.current !== 'speaking' || !on.current) return;
+      player.pause();
+      void listen(true);
+    });
+  }, [mic]); // eslint-disable-line react-hooks/exhaustive-deps -- one watch per answer read out
 
   // speaking: when the answer has been read out, listen again
   useEffect(() => {

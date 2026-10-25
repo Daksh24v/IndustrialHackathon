@@ -68,3 +68,23 @@ describe('SilenceDetector', () => {
     expect(new SilenceDetector(options).update(undefined, 15000)).toBe('nothing'); // no metering at all
   });
 });
+
+describe('stop words and talking over Finni', () => {
+  const { BargeInDetector, isStopCommand } = require('../voice');
+  it('knows a "stop" from a question with the word in it', () => {
+    for (const said of ['Stop', 'stop!', 'Okay, stop.', 'Finni, be quiet', 'Hey Finny stop', 'cancel', 'Stopp', "That's enough"]) {
+      expect(isStopCommand(said)).toBe(true);
+    }
+    for (const said of ['Stop at the kitchen on the way', 'where is the bus stop', 'take me to the exit', '']) {
+      expect(isStopCommand(said)).toBe(false);
+    }
+  });
+  it('hears someone talk over it only when it is loud for a moment, after the start', () => {
+    const detector = new BargeInDetector({ speechDb: -34, holdMs: 200, graceMs: 400 });
+    expect(detector.update(-10, 100)).toBe(false);  // the speaker starting up
+    expect(detector.update(-20, 500)).toBe(false);  // loud, but only just
+    expect(detector.update(-50, 600)).toBe(false);  // a click, gone
+    expect(detector.update(-20, 700)).toBe(false);
+    expect(detector.update(-20, 950)).toBe(true);   // still talking 250 ms later
+  });
+});

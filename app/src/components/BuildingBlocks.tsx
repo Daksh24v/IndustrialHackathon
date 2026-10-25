@@ -40,6 +40,8 @@ const PITCH_MAX = 1.2;
 const clampPitch = (pitch: number) => Math.min(PITCH_MAX, Math.max(PITCH_MIN, pitch));
 const SPIN_PER_S = (2 * Math.PI) / 90; // the idle turn: once round in 90 s
 const SPIN_PAUSE_MS = 5000; // after a touch the building holds still this long
+const HOVER_LINGER_MS = 500; // after the mouse leaves the building it stays open this long, then closes
+const OVER_PAD_PX = 16; // the mouse counts as on the building this close to it
 const TAP_SLOP_PX = 5;
 const TURN_MS = 450;
 const SHAFT_HIT_PX = 9; // how close the cursor must be to a staircase or lift to name it
@@ -130,6 +132,15 @@ export function floorAt(floors: { id: string; faces: { points: Point[] }[] }[], 
     if (floors[i].faces.some((face) => pointInPolygon(point, face.points))) return floors[i].id;
   }
   return null;
+}
+
+/** Whether a screen point is on the building: inside the box round all its floors (open or closed), a little
+ * grown, so the gaps between the slabs count and opening up doesn't move the building out from under the mouse. */
+export function overBuilding(floors: { faces: { points: Point[] }[] }[], point: Point, pad = OVER_PAD_PX): boolean {
+  const points = floors.flatMap((floor) => floor.faces.flatMap((face) => face.points));
+  if (!points.length) return false;
+  const box = boundsOf(points);
+  return point[0] >= box.minX - pad && point[0] <= box.maxX + pad && point[1] >= box.minY - pad && point[1] <= box.maxY + pad;
 }
 
 const AnimatedG = Animated.createAnimatedComponent(G);
@@ -523,6 +534,13 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
   // Hover (web): the floor under the cursor turns grey and says which it is; a shaft says which stairs or lift.
   const [hover, setHover] = useState<{ id: string; at: Point } | null>(null);
   const [shaftHover, setShaftHover] = useState<{ id: string; at: Point } | null>(null);
+  // The mouse on the building (web): it opens up; off it, it closes again into the real building after a moment.
+  const [over, setOverNow] = useState(false);
+  const left = useRef(0);
+  const setOver = (now: boolean) => setOverNow((was) => {
+    if (was && !now) left.current = Date.now();
+    return now;
+  });
   const shaftsRef = useRef<{ shaft: Shaft; from: Point; to: Point; out: boolean }[]>([]);
   useEffect(() => {
     const node = frame.current as unknown as HTMLElement | null;
@@ -532,7 +550,7 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
       const box = node.getBoundingClientRect();
       const point: Point = [event.clientX - box.left, event.clientY - box.top];
       const id = floorAt(blocksRef.current, point);
-      if (id) touched.current = Date.now(); // looked at: stays open a while after the pointer leaves
+      setOver(overBuilding(blocksRef.current, point));
       node.style.cursor = id ? 'pointer' : 'grab';
       setHover((current) => (id ? { id, at: point } : current ? null : current));
       // Near a staircase or lift between the floors: say which, and which floors it joins.
@@ -542,6 +560,7 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
     const onLeave = () => {
       setHover(null);
       setShaftHover(null);
+      setOver(false);
     };
     node.addEventListener('pointermove', onMove);
     node.addEventListener('pointerleave', onLeave);
@@ -552,8 +571,18 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
   }, []);
   const hovered = hover && !focus ? floors.find((floor) => floor.id === hover.id) : undefined;
 
-  // Open up when looked at (hovered, touched, a route, safety mode, a floor chosen); left alone, it closes again.
-  const open = !spin || !!focus || !!hover || pieces.length > 0 || safety || Date.now() - touched.current < SPIN_PAUSE_MS;
+  // Open up while looked at (the mouse on it, just touched or turned, safety mode, a floor chosen); otherwise it
+  // stands closed: the real building from outside. A route doesn't hold it open: it shows again on the next look.
+  const held = !!focus || over || !!hover || !!shaftHover || safety;
+  const now = Date.now();
+  const lingering = Math.max(SPIN_PAUSE_MS - (now - touched.current), HOVER_LINGER_MS - (now - left.current));
+  const open = held || lingering > 0;
+  const [, wake] = useState(0);
+  useEffect(() => {
+    if (held || lingering <= 0) return;
+    const timer = setTimeout(() => wake((n) => n + 1), lingering + 20); // look again once the pause is over
+    return () => clearTimeout(timer);
+  });
   useEffect(() => {
     const goal = open ? 1 : 0;
     const from = explodeRef.current;
@@ -675,7 +704,6 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
                     const fade = 1 - explode / 0.7;
                     return (
                       <G opacity={fade} testID="facade">
-                        {marks.windows ? <Path d={marks.windows} fill={mapColours.window} stroke={mapColours.blockEdge} strokeWidth={0.4} /> : null}
                         {marks.doors ? <Path d={marks.doors} fill={colourOf('black')} stroke={colours.added} strokeWidth={1} /> : null}
                         {marks.canopyFronts ? <Path d={marks.canopyFronts} fill={mapColours.blockDark} stroke={mapColours.blockEdge}
                                                     strokeWidth={0.5} /> : null}

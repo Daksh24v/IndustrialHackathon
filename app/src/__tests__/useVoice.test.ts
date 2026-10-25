@@ -3,6 +3,7 @@
 import { act, renderHook } from '@testing-library/react-native';
 
 import { useVoice } from '../useVoice';
+import * as voiceModule from '../voice';
 import { voiceApi } from '../voice';
 
 const mockAudio = {
@@ -101,18 +102,51 @@ test('says "One moment." when the answer is slow', async () => {
   jest.useRealTimers();
 });
 
-test('tapping while it talks interrupts and listens; tapping before speaking stops', async () => {
+test('tapping while it talks stops it; tapping before speaking stops', async () => {
   const { hook } = await setup();
   await act(async () => hook.result.current.toggle());
   await act(async () => hook.result.current.say({ reply: 'Long answer.', question: null, map: null }));
   expect(hook.result.current.mic).toBe('speaking');
   await act(async () => hook.result.current.toggle());
   expect(mockPlayer.pause).toHaveBeenCalled();
-  expect(hook.result.current.mic).toBe('listening');
-  await act(async () => hook.result.current.toggle());  // nothing said yet: stop
   expect(hook.result.current.mic).toBe('off');
   await act(async () => hook.result.current.say({ reply: 'Ignored.', question: null, map: null }));
   expect(hook.result.current.mic).toBe('off');           // typed chats are not read out when voice is off
+
+  await act(async () => hook.result.current.toggle());
+  expect(hook.result.current.mic).toBe('listening');
+  await act(async () => hook.result.current.toggle());  // nothing said yet: stop
+  expect(hook.result.current.mic).toBe('off');
+});
+
+test('talking over it: goes quiet at once and listens; nothing more said: closes quietly', async () => {
+  let heardOver: (() => void) | null = null;
+  jest.spyOn(voiceModule, 'watchForBargeIn').mockImplementation((onSpeech) => {
+    heardOver = onSpeech;
+    return () => { heardOver = null; };
+  });
+  const { hook, level } = await setup();
+  await act(async () => hook.result.current.toggle());
+  await act(async () => hook.result.current.say({ reply: 'Long answer.', question: null, map: null }));
+  expect(hook.result.current.mic).toBe('speaking');
+  expect(heardOver).not.toBeNull();
+  const pausedBefore = mockAudio.paused;
+  await act(async () => heardOver!());
+  expect(mockAudio.paused).toBeGreaterThan(pausedBefore);
+  expect(hook.result.current.mic).toBe('listening');
+  await level(-60, 3600);                                 // "stop!" was all: quiet for 3.5 s
+  expect(hook.result.current.mic).toBe('off');
+  expect(hook.result.current.notice).toBeNull();          // no "I didn't hear anything"
+});
+
+test('"stop" ends the conversation without asking the guide', async () => {
+  jest.spyOn(voiceApi, 'transcribe').mockResolvedValue('Okay, stop!');
+  const { hook, onHeard, level } = await setup();
+  await act(async () => hook.result.current.toggle());
+  await level(-20, 300);
+  await level(-60, 1300);
+  expect(onHeard).not.toHaveBeenCalled();
+  expect(hook.result.current.mic).toBe('off');
 });
 
 test('nobody speaks: stops by itself; nothing heard: says so and listens again', async () => {

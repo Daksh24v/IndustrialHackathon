@@ -89,3 +89,91 @@ export class SilenceDetector {
     return 'listening';
   }
 }
+
+/** Words that mean "stop talking", said instead of a question: the conversation ends, nothing is sent. */
+const STOP_WORDS = new Set([
+  'stop', 'stop it', 'stop talking', 'stop please', 'please stop', 'ok stop', 'okay stop', 'finni stop', 'finny stop',
+  'be quiet', 'quiet', 'shut up', 'cancel', 'never mind', 'nevermind', "that's enough", 'thats enough', 'enough',
+  'thank you stop', 'stopp', 'halt', 'ruhe', 'hör auf', 'hoer auf',
+]);
+
+/** Whether what was heard is only a "stop" ("Stop!", "Okay, stop.", "Finni, be quiet"), not a question that
+ * happens to contain the word ("stop at the kitchen on the way"). */
+export function isStopCommand(heard: string): boolean {
+  const words = heard.toLowerCase().replace(/[^\p{L}\p{N}' ]+/gu, ' ').replace(/\s+/g, ' ').trim()
+    .replace(/^(hey |hi )?(finni|finny|finn[ie]?)\b ?/, '');
+  return STOP_WORDS.has(words) || STOP_WORDS.has(words.replace(/^(ok|okay|please|no|hey) /, ''));
+}
+
+export interface BargeInOptions {
+  speechDb: number; // louder than this (dBFS, after echo cancellation) is the person talking over Finni
+  holdMs: number; // for at least this long
+  graceMs: number; // ignored at the start of an answer (the speaker starting up)
+}
+
+export const BARGE_IN: BargeInOptions = { speechDb: -34, holdMs: 220, graceMs: 400 };
+
+/** Decides from the microphone level, while Finni talks, when the person starts talking over it. */
+export class BargeInDetector {
+  private loudSince: number | null = null;
+
+  constructor(private readonly options: BargeInOptions = BARGE_IN) {}
+
+  update(levelDb: number, elapsedMs: number): boolean {
+    if (elapsedMs < this.options.graceMs || levelDb <= this.options.speechDb) {
+      this.loudSince = null;
+      return false;
+    }
+    this.loudSince ??= elapsedMs;
+    return elapsedMs - this.loudSince >= this.options.holdMs;
+  }
+}
+
+/** Web only: listen to the microphone (with the browser's echo cancellation, so Finni's own voice from the
+ * speakers doesn't count) while Finni talks, and call onSpeech once the person talks over it. Returns a stop
+ * function; does nothing where the browser has no microphone API. */
+export function watchForBargeIn(onSpeech: () => void, options: BargeInOptions = BARGE_IN): () => void {
+  const media = typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined;
+  const Context = typeof window !== 'undefined'
+    ? (window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext)
+    : undefined;
+  if (!media?.getUserMedia || !Context) return () => {};
+  let stopped = false;
+  let stream: MediaStream | null = null;
+  let context: AudioContext | null = null;
+  let frame: number | null = null;
+  const stop = () => {
+    stopped = true;
+    if (frame !== null) cancelAnimationFrame(frame);
+    stream?.getTracks().forEach((track) => track.stop());
+    context?.close().catch(() => {});
+  };
+  media.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false } })
+    .then((got) => {
+      stream = got;
+      if (stopped) return stop();
+      context = new Context();
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 1024;
+      context.createMediaStreamSource(got).connect(analyser);
+      const samples = new Float32Array(analyser.fftSize);
+      const detector = new BargeInDetector(options);
+      const began = performance.now();
+      const tick = () => {
+        if (stopped) return;
+        analyser.getFloatTimeDomainData(samples);
+        let sum = 0;
+        for (const sample of samples) sum += sample * sample;
+        const db = 10 * Math.log10(sum / samples.length + 1e-12);
+        if (detector.update(db, performance.now() - began)) {
+          stop();
+          onSpeech();
+          return;
+        }
+        frame = requestAnimationFrame(tick);
+      };
+      frame = requestAnimationFrame(tick);
+    })
+    .catch(() => {}); // no microphone: no barge-in, the mic button still stops it
+  return stop;
+}

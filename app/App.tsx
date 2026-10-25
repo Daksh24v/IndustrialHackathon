@@ -543,7 +543,7 @@ const REPORTS_POLL_MS = 8000; // how soon a colleague's report shows up
 const COLUMN_PX = 400; // FINNI's column on laptops: the search card and the answer under it
 const SESSION_WAIT_MS = 8000; // a question asked while the building still loads waits this long
 const DONE_MS = 1300; // the orb stays green this long after an answer
-const VOICE_LINE = { off: '', listening: "Listening… pause when you're done", thinking: 'Thinking…', speaking: 'Speaking… tap the mic to interrupt' };
+const VOICE_LINE = { off: '', listening: "Listening… pause when you're done", thinking: 'Thinking…', speaking: 'Speaking… talk to interrupt, tap the mic to stop' };
 
 /** The value once it's there (polled), or null after a while. */
 async function until<T>(get: () => T | null, timeoutMs = 20000): Promise<T | null> {
