@@ -22,7 +22,6 @@ import { flushSync } from 'react-dom';
 
 import { colours, isWide, map as mapColours, setTheme, startTheme, type ThemeName } from './src/theme';
 import { MapControls, type MapHandle, type ViewMode } from './src/ui/MapControls';
-import { MapKey } from './src/ui/MapKey';
 import { mapKey } from './src/legend';
 import { straightenMap, straightRoute } from './src/routeShape';
 import type { WallMode } from './src/walls';
@@ -505,17 +504,14 @@ function Guide() {
           <Text style={styles.stepText}>Take {step.name ?? step.kind} to {stepFloor.name} ›</Text>
         </Pressable>
       )}
-      {!phoneSheetUp && !walking && (
-        <MapKey legend={legend} left={wide ? mapLeft : 12}
-                bottom={controlsBottom + (inside && step && stepFloor ? 52 : 0)} />
-      )}
       {!(phoneSheetUp) && <MapControls inside={inside} view={view} onView={setView} handle={handle} floors={floors}
                    floorId={state.floorId} onFloor={(floorId) => dispatch({ type: 'floor', floorId })}
                    onBuilding={() => dispatch({ type: 'back' })} onHere={openHere} bottom={controlsBottom}
                    safety={safety} onSafety={safetyChoices.length ? toggleSafety : undefined}
                    mapKey={`${state.view}:${state.floorId}:${view}:${theme}`} theme={theme} onTheme={toggleTheme}
                    compact={!wide} walls={walls}
-                   onWalls={() => setWalls((now) => (now === 'cutaway' ? 'low' : now === 'low' ? 'full' : 'cutaway'))} />}
+                   onWalls={() => setWalls((now) => (now === 'cutaway' ? 'low' : now === 'low' ? 'full' : 'cutaway'))}
+                   legend={legend} />}
       {walking && (
         <WalkBanner steps={steps} index={state.walk!} left={wide ? mapLeft : 12} right={wide ? 88 : 12}
                     onNext={() => walkTo(Math.min(steps.length - 1, state.walk! + 1))}

@@ -277,6 +277,7 @@
 .fi-group.fi-row > button + button { border-top: none; border-left: 1px solid var(--line); }
 .fi-group > button:hover { background: var(--surface-2); }
 .fi-group > button.txt { font-size: 13px; font-weight: 800; color: var(--muted); }
+.fi-group > button[data-on] { color: var(--accent-ink); background: var(--accent-soft); }
 .fi-group > button.txt[data-on] { color: var(--accent-ink); background: var(--accent-soft); }
 .fi-stack { position: relative; padding: 6px 4px 4px; display: flex; flex-direction: column; align-items: center; gap: 0; }
 .fi-stack button.slab { width: 36px; height: 14px; border: none; background: transparent; padding: 0; display: block; }
@@ -589,13 +590,8 @@
 @keyframes fi-pulse { 50% { opacity: 0.3; } }
 
 /* ── map key ─────────────────────────────────────────────────── */
-.fi-key { position: fixed; z-index: 8; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
-.fi-key-btn {
-  height: 34px; padding: 0 14px; border: none; border-radius: 17px; background: var(--bg); color: var(--text);
-  box-shadow: var(--shadow); font-size: 13px; font-weight: 700; cursor: pointer;
-}
-.fi-key-btn:hover { background: var(--surface-2); }
 .fi-key-card {
+  position: fixed; z-index: 9;
   width: 270px; max-height: min(60vh, 520px); overflow-y: auto; padding: 4px 14px 12px; border-radius: 14px;
   background: var(--bg); box-shadow: var(--shadow); color: var(--text); font-size: 13px; animation: fi-up 0.2s var(--ease);
 }

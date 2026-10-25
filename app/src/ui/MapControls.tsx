@@ -7,6 +7,8 @@ import type { Floor } from '../api';
 import type { ThemeName } from '../theme';
 import type { WallMode } from '../walls';
 import { Building, Locate, Walls } from './icons';
+import { MapKey } from './MapKey';
+import type { MapKey as Legend } from '../legend';
 import { ThemeToggle } from './ThemeToggle';
 
 /** What the open floor view lets the buttons do. */
@@ -112,11 +114,13 @@ interface Props {
   /** How the floor's walls stand (3D and top views): cut away to see in, all low, or all full height. */
   walls?: WallMode;
   onWalls?: () => void;
+  /** What the colours mean, for the map key button. */
+  legend?: Legend | null;
 }
 
 const WALL_NAMES: Record<WallMode, string> = { cutaway: 'Walls: cut away', low: 'Walls: low', full: 'Walls: full height' };
 
-export function MapControls({ inside, view, onView, handle, floors, floorId, onFloor, onBuilding, onHere, bottom, mapKey, theme, onTheme, compact = false, safety, onSafety, walls = 'cutaway', onWalls }: Props) {
+export function MapControls({ inside, view, onView, handle, floors, floorId, onFloor, onBuilding, onHere, bottom, mapKey, theme, onTheme, compact = false, safety, onSafety, walls = 'cutaway', onWalls, legend = null }: Props) {
   const [yaw, setYaw] = useState(0);
   const [tip, setTip] = useState<{ name: string; y: number } | null>(null);
   const turns = !inside || view !== 'plan'; // the building and the 3D / top views turn; the flat plan stays north up
@@ -143,6 +147,7 @@ export function MapControls({ inside, view, onView, handle, floors, floorId, onF
           </button>
         </div>
       )}
+      <MapKey legend={legend} />
       <div className="fi-group">
         <button type="button" aria-label="I'm here: tap the floor where you are" title="I'm here" data-testid="here-button" onClick={onHere}>
           <Locate />

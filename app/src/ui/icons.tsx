@@ -32,6 +32,15 @@ export const Building = () => (
   </svg>
 );
 
+/** The map key: three swatches with a line of text beside each. */
+export const KeyIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true" width="20" height="20">
+    <rect x="3" y="4" width="5" height="4" rx="1" fill="currentColor" /><rect x="3" y="10" width="5" height="4" rx="1" fill="currentColor" />
+    <rect x="3" y="16" width="5" height="4" rx="1" fill="currentColor" />
+    <path d="M11 6h10M11 12h10M11 18h7" {...line} />
+  </svg>
+);
+
 /** The direction arrow for a step: which way to turn, stairs, lift or the flag at the end. */
 export function StepIcon({ kind, action }: { kind: StepKind; action: string }) {
   if (kind === 'arrive') return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 21V4h11l-2 4 2 4H6" {...line} /></svg>;
