@@ -6,6 +6,7 @@ import { type PointerEvent as ReactPointerEvent, type RefObject, useEffect, useR
 import type { Floor } from '../api';
 import type { ThemeName } from '../theme';
 import type { WallMode } from '../walls';
+import { useDock } from './dock';
 import { Building, Locate, Walls } from './icons';
 import { MapKey } from './MapKey';
 import type { MapKey as Legend } from '../legend';
@@ -135,8 +136,10 @@ export function MapControls({ inside, view, onView, handle, floors, floorId, onF
   }, [turns, mapKey, handle]);
 
   const top = [...floors].reverse();
+  const column = useRef<HTMLDivElement>(null);
+  useDock(column); // the buttons near the mouse swell, like a dock
   return (
-    <div className="fi fi-controls" style={{ bottom }} data-testid="map-controls">
+    <div className="fi fi-controls" style={{ bottom }} data-testid="map-controls" ref={column}>
       {!(compact && inside) && <ThemeToggle theme={theme} onToggle={onTheme} />}
       {onSafety && (
         <div className="fi-group">

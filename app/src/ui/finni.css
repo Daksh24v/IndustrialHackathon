@@ -264,6 +264,7 @@
 
 /* ── map controls ────────────────────────────────────────────── */
 .fi-controls { position: fixed; z-index: 8; right: 16px; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+.fi-controls > * { transform-origin: right center; transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1); } /* dock.ts */
 .fi-group { background: var(--bg); border-radius: 12px; box-shadow: var(--shadow); display: flex; flex-direction: column; overflow: hidden; }
 .fi-group > button {
   width: 44px;
