@@ -3,8 +3,8 @@
   uv run python -m evals.check_submission <answers.csv or answers.json> [--reference <other.csv>]
   uv run python -m evals.check_submission results/team_answers.csv --write-json SUBMISSION/answers.json
 
-The organisers grade SUBMISSION/answers.json (with SUBMISSION/BENCHMARK.md, nothing else in the folder): one
-object {question_id: full reply}, written from the CSV the benchmark run makes, never edited by hand.
+The organisers grade SUBMISSION/answers.json (with SUBMISSION/BENCHMARK.md, nothing else in the folder): a list
+of {"question_id": ..., "answer": full reply}, written from the CSV the benchmark run makes, never edited by hand.
 
 1. format: UTF-8, header question_id,answer, at most 5 MB, every test id exactly once, nothing extra;
 2. answer lines: each reply has an 'Answer:' line that the scorer can read for its kind
@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from benchmark.score import committed_answer, numbers_in
+from navagent.benchmark import answers_json
 
 DATA = Path(__file__).resolve().parent.parent / "data"
 MAX_BYTES = 5 * 1024 * 1024
@@ -92,16 +93,24 @@ def read_json(raw: bytes, report: Report) -> dict[str, str]:
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         report.format_errors.append(f"not UTF-8 JSON: {error}")
         return {}
-    if not isinstance(data, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in data.items()):
-        report.format_errors.append("expected one object {question_id: answer}")
+    if not isinstance(data, list) or not all(
+            isinstance(row, dict) and set(row) == {"question_id", "answer"}
+            and isinstance(row["question_id"], str) and isinstance(row["answer"], str) for row in data):
+        report.format_errors.append('expected a list of {"question_id": ..., "answer": ...}')
         return {}
-    return data
+    rows: dict[str, str] = {}
+    for row in data:
+        if row["question_id"] in rows:
+            report.format_errors.append(f"duplicate id {row['question_id']} (only the first counts)")
+            continue
+        rows[row["question_id"]] = row["answer"]
+    return rows
 
 
 def write_json(rows: dict[str, str], path: Path) -> None:
-    """The answers as SUBMISSION/answers.json: {question_id: full reply}, in the CSV's order."""
+    """The answers as SUBMISSION/answers.json, in the CSV's order."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.write_text(answers_json(rows), encoding="utf-8")
 
 
 def read_any(path: Path, report: Report) -> dict[str, str]:

@@ -1,7 +1,7 @@
 """One command from questions to the submission CSV (documented in SUBMISSION/BENCHMARK.md).
 
   uv run --env-file .env python -m navagent.benchmark data/test --out submission.csv
-  uv run --env-file .env python -m navagent.benchmark data/test --out answers.json   # {question_id: full reply}
+  uv run --env-file .env python -m navagent.benchmark data/test --out answers.json   # [{question_id, answer}, ...]
 
 The input can be
 - a split directory with <building_id>/questions.jsonl (data/test, data/dev),
@@ -169,7 +169,7 @@ def read_existing(out: Path) -> dict[str, str]:
     if not out.exists():
         return {}
     if out.suffix == ".json":
-        return json.loads(out.read_text(encoding="utf-8"))
+        return {row["question_id"]: row["answer"] for row in json.loads(out.read_text(encoding="utf-8"))}
     with out.open(encoding="utf-8", newline="") as handle:
         return {row["question_id"]: row["answer"] for row in csv.DictReader(handle)}
 
@@ -228,17 +228,23 @@ def run(
 
 
 def write_answers(out: Path, rows: dict[str, str]) -> None:
-    """A CSV (question_id,answer), or answers.json ({question_id: full reply}) when --out ends in .json. Written
-    to a temporary file and moved into place, so stopping the run never leaves half a file."""
+    """A CSV (question_id,answer), or answers.json when --out ends in .json. Written to a temporary file and
+    moved into place, so stopping the run never leaves half a file."""
     partial = out.with_name(out.name + ".partial")
     if out.suffix == ".json":
-        partial.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        partial.write_text(answers_json(rows), encoding="utf-8")
     else:
         with partial.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.writer(handle)
             writer.writerow(("question_id", "answer"))
             writer.writerows(rows.items())
     partial.replace(out)
+
+
+def answers_json(rows: dict[str, str]) -> str:
+    """answers.json as the organisers grade it: a list of {"question_id": ..., "answer": full reply}."""
+    listed = [{"question_id": question_id, "answer": reply} for question_id, reply in rows.items()]
+    return json.dumps(listed, ensure_ascii=False, indent=2) + "\n"
 
 
 def main() -> None:

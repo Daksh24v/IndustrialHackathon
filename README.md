@@ -70,7 +70,7 @@ All runs are in [SUBMISSION/BENCHMARK.md](SUBMISSION/BENCHMARK.md), on the organ
 |---|---|
 | Development buildings (benchmark, warm-up, reworded and novel questions) | 114 / 114 |
 | **Hold-out buildings, locked away and run once, nothing tuned on them** | **35 / 36** |
-| Test set submission | 145 answers, every question run twice (both runs agreed on all 145) |
+| Test set submission | 145 answers from the final code, every question run twice (both runs agreed on all 145) |
 | Buildings rebuilt from floor plans only (hold-out) | rooms 100%, doors 97%, routes 82% |
 | An unseen building | one command, about 6 s per question |
 
@@ -114,7 +114,7 @@ and a laptop.
 | `evals/` | Our checks: reworded and novel questions, floor-plan rebuilds, submission checks |
 | `holdout/` | The locked hold-out split |
 | `tests/` | pytest |
-| `SUBMISSION/` | What is graded: `answers.json` (our 145 test answers) and `BENCHMARK.md` (how they were made, all runs) |
+| `SUBMISSION/` | What is graded: `answers.json` (our 145 test answers, a list of `{question_id, answer}`) and `BENCHMARK.md` (how to run it on a new building, how the answers were made, all runs) |
 | `results/` | The same answers as the benchmark run wrote them (`team_answers.csv`) |
 | `data/`, `benchmark/`, `starter_agent/` | The organisers' kit (data, scorer, starter agent), unchanged |
 

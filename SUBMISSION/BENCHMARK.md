@@ -14,9 +14,10 @@ uv run --env-file .env python -m navagent.benchmark <building folder> --out answ
 
 `<building folder>` is the building in the kit's format, e.g. `data/sunday/<building_id>` with `building.json`
 and `questions.jsonl` (the same layout as `data/test/<building_id>`). A folder holding several buildings works
-too, and so does a building given only as floor plans (see the table below). `answers.json` is written as
-`{question_id: full reply}`, the same as `SUBMISSION/answers.json`; `--out answers.csv` writes the kit's
-`question_id,answer` CSV instead. Every reply ends with the `Answer:` line the scorer reads.
+too, and so does a building given only as floor plans (see the table below). `answers.json` is written as a
+list of `{"question_id": ..., "answer": <full reply>}`, the same as `SUBMISSION/answers.json`; `--out answers.csv`
+writes the kit's `question_id,answer` CSV instead. Every reply ends with exactly one `Answer:` line, the one the
+scorer reads.
 
 Nothing is tuned to the test buildings: Claude reads each question and the engine computes from the building's
 own data. About 6 s and $0.03–0.04 per question (20 questions: 2–3 minutes, under $1). A question that fails
@@ -108,28 +109,35 @@ Cost: about $0.03–0.04 per question (prompt caching on).
 
 ## The test-set submission
 
-`SUBMISSION/answers.json` holds our 145 test answers, `{question_id: full reply}`, written by code from
-`results/team_answers.csv` (`uv run python -m evals.check_submission results/team_answers.csv --write-json
-SUBMISSION/answers.json`, which checks it first; no answer edited by hand). `results/team_answers.csv` (145 answers) was made on 2026-10-24, after the kit 1.1.0 route rules, by the
-Claude agent with
+`SUBMISSION/answers.json` holds our answers to the 145 questions in `data/test` (the test cases in the kit, and
+nothing else), as a list of `{"question_id": ..., "answer": <full reply>}`, the format the organisers asked for.
+It is written by code from `results/team_answers.csv` (`uv run python -m evals.check_submission
+results/team_answers.csv --write-json SUBMISSION/answers.json`, which checks it first; no answer edited by hand).
+
+`results/team_answers.csv` was made on 2026-10-25 with the final agent and engine (commit `9aa27e5`), by
 
 ```bash
-uv run --env-file .env python -m navagent.benchmark data/test --out agent_output/test_run.csv --double-check --resume
+uv run --env-file .env python -m navagent.benchmark data/test --out agent_output/test_run_final.csv --double-check --resume
 ```
 
 (every question twice, a third run only on disagreement: the two runs agreed on 145/145, so none was needed;
-290 runs, $6.54), then checked for free with
+290 runs in 29 minutes, $6.16), then checked for free with
 `uv run python -m evals.check_submission results/team_answers.csv --reference <other run>`:
-format OK (UTF-8, header, every test id once, under 5 MB) and every answer line readable by the scorer.
+format OK (UTF-8, header, every test id once, under 5 MB), every answer line readable by the scorer, and every
+reply has exactly one `Answer:` line.
 
-Against the previous submission (made with the 1.0.0 route rules) 124/145 answers are the same; the 21 that
-changed are exactly the route-dependent ones the new rules move (19 errands, 2 what-if doors), and each new
-answer equals the engine's 1.1.0 result computed directly from the question. The 18 wide-delivery counts did
-not change. No answer was edited by hand.
+It agrees with the earlier submission (2026-10-24, kit 1.1.0 rules, older code) on 145/145 answers within the
+scorer's tolerances. That one, against the one before it (kit 1.0.0 route rules), changed exactly the 21
+route-dependent answers the new rules move (19 errands, 2 what-if doors), each equal to the engine's 1.1.0 result
+computed directly from the question. No answer was edited by hand.
 
 ## Sunday dry run
 
-From a fresh clone of this repository (2026-10-24, after kit 1.1.0): `uv sync` (1 s with the uv cache),
+Last run on the final code (2026-10-25, fresh clone of `9aa27e5`): `uv sync`, create `.env`, then the command at
+the top on one test building (`data/test/osm-way363805324`, 7 questions) with `--out answers.json`: 7 answers in
+42 s, each with exactly one `Answer:` line, all 7 the same as in the submission.
+
+Earlier, from a fresh clone of this repository (2026-10-24, after kit 1.1.0): `uv sync` (1 s with the uv cache),
 create `.env`, then the command above on one test building directory (`data/test/osm-way363805324`,
 7 questions): a valid CSV in 43 s (about 6 s per question, run one after another), every answer line readable
 by the scorer, all 7 answers the same as in the submission. A Sunday building with 20 questions takes about

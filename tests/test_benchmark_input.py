@@ -135,7 +135,8 @@ def test_out_json_writes_answers_json_and_resumes_from_it(tmp_path, monkeypatch)
     monkeypatch.setattr(benchmark, "answer", lambda *args, **kwargs: "Over there.\nAnswer: 12")
     out = tmp_path / "answers.json"
     benchmark.run(tmp_path, out)
-    assert json.loads(out.read_text(encoding="utf-8")) == {"Q1": "Over there.\nAnswer: 12", "Q2": "Over there.\nAnswer: 12"}
+    assert json.loads(out.read_text(encoding="utf-8")) == [{"question_id": "Q1", "answer": "Over there.\nAnswer: 12"},
+                                                           {"question_id": "Q2", "answer": "Over there.\nAnswer: 12"}]
 
     monkeypatch.setattr(benchmark, "answer", lambda *args, **kwargs: pytest.fail("answered again"))
     benchmark.run(tmp_path, out, resume=True)  # every row already has an Answer: line

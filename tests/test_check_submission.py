@@ -32,16 +32,21 @@ def test_the_graded_folder_holds_exactly_the_two_files_and_the_same_answers():
     report = check(folder / "answers.json")
     assert not report.format_errors and not report.answer_errors
     answers = json.loads((folder / "answers.json").read_text(encoding="utf-8"))
+    assert isinstance(answers, list) and all(set(row) == {"question_id", "answer"} for row in answers)
     report = Report()
-    assert answers == read_rows((DATA.parent / "results" / "team_answers.csv").read_bytes(), report)
+    assert {row["question_id"]: row["answer"] for row in answers} == read_rows(
+        (DATA.parent / "results" / "team_answers.csv").read_bytes(), report)
 
 
 def test_json_answers_are_read_and_written(tmp_path):
     rows = {qid: "Answer: 1" for qid in template_ids()}
     write_json(rows, tmp_path / "answers.json")
     assert not check(tmp_path / "answers.json").format_errors
-    (tmp_path / "bad.json").write_text("[1, 2]", encoding="utf-8")
-    assert check(tmp_path / "bad.json").format_errors
+    written = json.loads((tmp_path / "answers.json").read_text(encoding="utf-8"))
+    assert written[0] == {"question_id": template_ids()[0], "answer": "Answer: 1"}  # a list, as the organisers asked
+    for bad in ("[1, 2]", json.dumps(rows), json.dumps([{"id": "x", "answer": "Answer: 1"}])):
+        (tmp_path / "bad.json").write_text(bad, encoding="utf-8")  # the old {id: reply} object is wrong now too
+        assert check(tmp_path / "bad.json").format_errors
 
 
 def test_missing_duplicate_and_unknown_ids_are_reported(tmp_path):
