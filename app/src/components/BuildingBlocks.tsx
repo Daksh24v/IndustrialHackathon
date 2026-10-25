@@ -2,13 +2,14 @@
  * band of windows, stacked by elevation,
  * drawn as an isometric view with SVG (no 3D engine, so it runs the same on every phone and on the web).
  * When a floor is chosen (by the agent, or a click on its block) the view zooms onto it, the floors above
- * fade away, and onArrived() hands over to the floor view. */
+ * fade away, and onArrived() hands over to the floor view. Around it, dimmer, the real neighbourhood from
+ * OpenStreetMap when the building has one: streets, green, water and the buildings next door. */
 import { type ComponentRef, useEffect, useMemo, useRef } from 'react';
 import { Animated, Easing, Pressable, View } from 'react-native';
-import Svg, { G, Path } from 'react-native-svg';
+import Svg, { Defs, G, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
 
-import type { Outline, Point } from '../api';
-import { boundsOf, grow, isoDepth, isoProject, pointInPolygon, signedArea, type Iso } from '../geometry';
+import type { Context, Outline, Point } from '../api';
+import { boundsOf, centre, grow, isoDepth, isoProject, nearby, pointInPolygon, ribbon, signedArea, type Iso } from '../geometry';
 import { map as mapColours } from '../theme';
 
 const ZOOM_MS = 1300;
@@ -18,9 +19,11 @@ const VIEW_ANGLE = Math.PI / 9; // a slight turn so two sides of the building sh
 const WINDOW_ROW_M = 3.5; // one row of windows per this much height
 const GRID_M = 5;
 const GRID_REACH_M = 25; // how far the ground grid reaches beyond the building
+const NEAR_REACH_M = 250; // how much of the neighbourhood is drawn
 
 interface Props {
   outline: Outline;
+  context?: Context | null;
   focusFloorId: string | null;
   onArrived?: () => void;
   /** A click (tap) on a floor's block. */
@@ -51,8 +54,19 @@ function path(points: Point[]): string {
   return points.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`).join(' ') + ' Z';
 }
 
+interface Look {
+  wall: string;
+  wallDark: string;
+  top: string;
+  windows: boolean;
+}
+
+const OURS: Look = { wall: mapColours.block, wallDark: mapColours.blockDark, top: mapColours.blockTop, windows: true };
+const NEXT_DOOR: Look = { wall: mapColours.near, wallDark: mapColours.nearDark, top: mapColours.nearTop, windows: false };
+
 /** Faces of one floor block in drawing order: the walls facing the viewer (far to near), then the top. */
-function floorFaces(iso: Iso, footprints: Point[][], bottom: number, top: number, toScreen: (p: Point) => Point): Face[] {
+function floorFaces(iso: Iso, footprints: Point[][], bottom: number, top: number, toScreen: (p: Point) => Point,
+                    look: Look = OURS): Face[] {
   const walls: Face[] = [];
   const tops: Face[] = [];
   for (const raw of footprints) {
@@ -69,8 +83,8 @@ function floorFaces(iso: Iso, footprints: Point[][], bottom: number, top: number
       if (rx + ry >= 0) continue;
       const quad = [isoProject(iso, a, bottom), isoProject(iso, b, bottom), isoProject(iso, b, top), isoProject(iso, a, top)]
         .map(toScreen);
-      const shade = rx < ry ? mapColours.block : mapColours.blockDark; // left-facing walls lighter, right-facing darker
-      const rows = Math.max(1, Math.round((top - bottom) / WINDOW_ROW_M));
+      const shade = rx < ry ? look.wall : look.wallDark; // left-facing walls lighter, right-facing darker
+      const rows = look.windows ? Math.max(1, Math.round((top - bottom) / WINDOW_ROW_M)) : 0;
       const bands = Array.from({ length: rows }, (_, row) => {
         const z = bottom + ((row + 0.55) * (top - bottom)) / rows;
         const [w0, w1] = [isoProject(iso, a, z), isoProject(iso, b, z)].map(toScreen);
@@ -79,13 +93,13 @@ function floorFaces(iso: Iso, footprints: Point[][], bottom: number, top: number
       walls.push({ d: path(quad), points: quad, fill: shade, depth: (isoDepth(iso, a) + isoDepth(iso, b)) / 2, bands });
     }
     const roof = ring.map((p) => toScreen(isoProject(iso, p, top)));
-    tops.push({ d: path(roof), points: roof, fill: mapColours.blockTop, depth: Infinity });
+    tops.push({ d: path(roof), points: roof, fill: look.top, depth: Infinity });
   }
   walls.sort((x, y) => x.depth - y.depth);
   return [...walls, ...tops];
 }
 
-export function BuildingBlocks({ outline, focusFloorId, onArrived, onPickFloor, width, height }: Props) {
+export function BuildingBlocks({ outline, context, focusFloorId, onArrived, onPickFloor, width, height }: Props) {
   const floors = useMemo(() => [...outline.floors].sort((a, b) => a.elevation_m - b.elevation_m), [outline]);
   const all = useMemo(() => floors.flatMap((floor) => floor.footprints.flat()), [floors]);
   const plan = boundsOf(all);
@@ -116,6 +130,35 @@ export function BuildingBlocks({ outline, focusFloorId, onArrived, onPickFloor, 
   const grid: string[] = [];
   for (let x = Math.ceil(area.minX / GRID_M) * GRID_M; x <= area.maxX; x += GRID_M) grid.push(gridLine([x, area.minY], [x, area.maxY]));
   for (let y = Math.ceil(area.minY / GRID_M) * GRID_M; y <= area.maxY; y += GRID_M) grid.push(gridLine([area.minX, y], [area.maxX, y]));
+
+  // The neighbourhood: what is on screen, the buildings next door far to near.
+  const around = useMemo(() => {
+    if (!context) return null;
+    const near = nearby(context, plan, NEAR_REACH_M);
+    const onScreen = (points: Point[]) => {
+      const b = boundsOf(points);
+      return b.maxX > 0 && b.minX < width && b.maxY > 0 && b.minY < height;
+    };
+    const ground = (polygon: Point[]) => {
+      const screen = polygon.map((p) => toScreen(isoProject(iso, p, 0)));
+      return screen.length > 2 && onScreen(screen) ? path(screen) : null;
+    };
+    const live = (d: string | null): d is string => !!d;
+    const neighbours = near.buildings
+      .map((item) => ({ item, depth: isoDepth(iso, centre(item.polygon)) }))
+      .sort((a, b) => a.depth - b.depth)
+      .flatMap(({ item }) => {
+        const faces = floorFaces(iso, [item.polygon], 0, item.height_m, toScreen, NEXT_DOOR);
+        return faces.some((face) => onScreen(face.points)) ? [faces] : [];
+      });
+    return {
+      green: near.green.map(ground).filter(live),
+      water: near.water.map(ground).filter(live),
+      roads: near.roads.map((road) => ({ d: ground(ribbon(road.line, road.width_m / 2)), rail: road.kind === 'rail' }))
+        .filter((road): road is { d: string; rail: boolean } => !!road.d),
+      neighbours,
+    };
+  }, [context, outline, width, height]); // the projection follows from the outline and the view size
 
   const focus = floors.find((floor) => floor.id === focusFloorId);
   const zoom = useRef(new Animated.Value(0)).current;
@@ -151,6 +194,23 @@ export function BuildingBlocks({ outline, focusFloorId, onArrived, onPickFloor, 
         <Animated.View style={{ width, height, transform: [{ translateX: shiftX }, { translateY: shiftY }, { scale: scaleAnim }] }}>
           <Svg width={width} height={height}>
             <Path d={grid.join(' ')} stroke={mapColours.slabEdge} strokeOpacity={0.6} strokeWidth={0.6} fill="none" />
+            {around && (
+              <AnimatedG opacity={fadeAbove}>
+                {around.green.map((d, i) => <Path key={`green-${i}`} d={d} fill={mapColours.green} />)}
+                {around.water.map((d, i) => <Path key={`water-${i}`} d={d} fill={mapColours.water} />)}
+                {around.roads.map((road, i) => (
+                  <Path key={`road-${i}`} d={road.d} fill={road.rail ? mapColours.rail : mapColours.road}
+                        stroke={mapColours.roadEdge} strokeWidth={0.4} />
+                ))}
+                {around.neighbours.map((faces, i) => (
+                  <G key={`near-${i}`}>
+                    {faces.map((face, j) => (
+                      <Path key={j} d={face.d} fill={face.fill} stroke={mapColours.nearEdge} strokeWidth={0.5} strokeLinejoin="round" />
+                    ))}
+                  </G>
+                ))}
+              </AnimatedG>
+            )}
             {/* a soft shadow under the building */}
             <Path
               d={path(floors[0]?.footprints[0]?.map((p) => toScreen(isoProject(iso, [p[0] + 1.5, p[1] - 1.5], 0))) ?? [])}
@@ -174,6 +234,18 @@ export function BuildingBlocks({ outline, focusFloorId, onArrived, onPickFloor, 
                 <G key={floor.id}>{content}</G>
               );
             })}
+            {/* the neighbourhood fades into the dark at the edges */}
+            {around && (
+              <>
+                <Defs>
+                  <RadialGradient id="vignette" cx="50%" cy="50%" r="60%">
+                    <Stop offset="0.55" stopColor={mapColours.background} stopOpacity={0} />
+                    <Stop offset="1" stopColor={mapColours.background} stopOpacity={1} />
+                  </RadialGradient>
+                </Defs>
+                <Rect x={0} y={0} width={width} height={height} fill="url(#vignette)" />
+              </>
+            )}
           </Svg>
         </Animated.View>
       </Pressable>

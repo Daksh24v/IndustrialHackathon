@@ -1,16 +1,17 @@
 /** One floor in 3D: the camera looks down at an angle with perspective, rooms are tiles on a floor slab, walls
  * stand up (low, so you can see into the rooms) with gaps at the doors, the route is an orange band on the
  * floor with arrows flowing along it, the target is a pin and you are an orange disc on the floor. Rooms are tinted
- * by what they're for; machines and equipment stand in them as lit boxes, furniture lies flat.
+ * by what they're for; machines and equipment stand in them as lit boxes, furniture lies flat. Below, on the ground,
+ * the OpenStreetMap neighbourhood when there is one: streets, green, water and next door's outlines.
  * Drawn with SVG (no 3D engine: those crash Expo Go on iPhones). Drag to move, pinch or +/− to zoom, ⟳ to turn. */
 import { type ComponentRef, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { G, Path, Text as SvgText } from 'react-native-svg';
 
-import type { BuildingDetail, MapView, Point } from '../api';
+import type { BuildingDetail, Context, MapView, Point } from '../api';
 import { assetsOn, changesOn } from '../changes';
 import {
-  assetRect, boundsOf, chooseCamera, clipNear, depthOf, grow, moveCamera, pixelsPerMetre, project3d, ribbon, rotateAbout,
+  assetRect, boundsOf, chooseCamera, clipNear, depthOf, grow, moveCamera, nearby, pixelsPerMetre, project3d, ribbon, rotateAbout,
   signedArea, unproject3d, wallSegments, type Camera, type Point3,
 } from '../geometry';
 import { useMapGestures } from '../gestures';
@@ -27,6 +28,7 @@ const TURN_MS = 450;
 const MIN_ASSET_PX = 3; // things smaller than this on screen aren't drawn
 const GRID_M = 5;
 const GRID_REACH_M = 40; // how far the ground grid reaches beyond the building
+const NEAR_REACH_M = 150; // how much of the neighbourhood is drawn
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 export const LABEL_FONT = Platform.select({ web: 'Helvetica, Arial, sans-serif', android: 'sans-serif', default: 'Helvetica' });
@@ -36,6 +38,7 @@ interface Props {
   floorId: string;
   map: MapView | null;
   footprints: Point[][];
+  context?: Context | null;
   width: number;
   height: number;
   /** A tap on the floor: where on it (metres), e.g. to say "I'm here". */
@@ -60,7 +63,7 @@ interface Solid {
   rim?: string; // a bright line along the top
 }
 
-export function FloorScene({ detail, floorId, map, footprints, width, height, onTapFloor }: Props) {
+export function FloorScene({ detail, floorId, map, footprints, context, width, height, onTapFloor }: Props) {
   const spaces = useMemo(() => detail.spaces.filter((space) => space.floor_id === floorId), [detail, floorId]);
   const openings = useMemo(() => detail.openings.filter((opening) => opening.floor_id === floorId), [detail, floorId]);
   const changes = useMemo(() => changesOn(detail, map, floorId), [detail, map, floorId]);
@@ -70,6 +73,10 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
     return wallSegments(spaces.map((space) => space.polygon), [...openings, ...added]);
   }, [spaces, openings, newDoors, floorId]);
   const assets = useMemo(() => assetsOn(detail, map, floorId), [detail, map, floorId]);
+  const around = useMemo(
+    () => (context && footprints.length ? nearby(context, boundsOf(footprints.flat()), NEAR_REACH_M) : null),
+    [context, footprints],
+  );
   const pieces = useMemo(() => (map?.route?.pieces ?? []).filter((piece) => piece.floor_id === floorId), [map, floorId]);
   const here = map?.you_are_here?.floor_id === floorId ? map.you_are_here : null;
   const target = map?.target?.floor_id === floorId ? map.target : null;
@@ -164,6 +171,17 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
     for (let x = Math.ceil(area.minX / GRID_M) * GRID_M; x <= area.maxX; x += GRID_M) gridLine([x, area.minY], [x, area.maxY]);
     for (let y = Math.ceil(area.minY / GRID_M) * GRID_M; y <= area.maxY; y += GRID_M) gridLine([area.minX, y], [area.maxX, y]);
 
+    // The neighbourhood on the ground, under the slab.
+    const ground = (polygon: Point[]) => (polygon.length > 2 ? flat(polygon, -SLAB_M) : null);
+    const live = (d: string | null): d is string => !!d;
+    const near = around && {
+      green: around.green.map(ground).filter(live),
+      water: around.water.map(ground).filter(live),
+      roads: around.roads.map((road) => ({ d: ground(ribbon(road.line, road.width_m / 2)), rail: road.kind === 'rail' }))
+        .filter((road): road is { d: string; rail: boolean } => !!road.d),
+      buildings: around.buildings.map((item) => ground(item.polygon)).filter(live),
+    };
+
     const tiles = spaces.map((space) => {
       const closed = changes.closedSpaces.has(space.id);
       const style = roomStyle(space);
@@ -241,8 +259,8 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
       const text = side > 110 || !space.ref ? space.name : space.ref;
       return [{ id: space.id, x, y, text, size: Math.min(13, Math.max(8.5, ppm * 0.9)) }];
     });
-    return { slabSides, slabTops, grid, tiles, flats, routes, solids, labels };
-  }, [cam, footprints, spaces, assets, pieces, walls, width, height, changes]);
+    return { slabSides, slabTops, grid, near, tiles, flats, routes, solids, labels };
+  }, [cam, footprints, around, spaces, assets, pieces, walls, width, height, changes]);
 
   // The route fades in; arrows flow along it.
   const flow = useLoop(900);
@@ -264,6 +282,19 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
         <Svg width={width + 2 * MARGIN_PX} height={height + 2 * MARGIN_PX} style={{ position: 'absolute', left: -MARGIN_PX, top: -MARGIN_PX }}>
           <G transform={`translate(${MARGIN_PX} ${MARGIN_PX})`}>
             <Path d={scene.grid.join(' ')} stroke={mapColours.slabEdge} strokeOpacity={0.5} strokeWidth={0.6} fill="none" />
+            {scene.near && (
+              <G testID="neighbourhood">
+                {scene.near.green.map((d, i) => <Path key={`green-${i}`} d={d} fill={mapColours.green} />)}
+                {scene.near.water.map((d, i) => <Path key={`water-${i}`} d={d} fill={mapColours.water} />)}
+                {scene.near.roads.map((road, i) => (
+                  <Path key={`road-${i}`} d={road.d} fill={road.rail ? mapColours.rail : mapColours.road}
+                        stroke={mapColours.roadEdge} strokeWidth={0.5} />
+                ))}
+                {scene.near.buildings.map((d, i) => (
+                  <Path key={`near-${i}`} d={d} fill={mapColours.nearTop} stroke={mapColours.nearEdge} strokeWidth={0.8} />
+                ))}
+              </G>
+            )}
             {scene.slabSides.map((side, i) => (
               <Path key={`slab-${i}`} d={side.d} fill={mapColours.slabSide} stroke={mapColours.slabEdge} strokeWidth={0.6} />
             ))}

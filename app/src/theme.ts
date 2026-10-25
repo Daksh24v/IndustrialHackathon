@@ -48,6 +48,16 @@ export const map = {
   blockEdge: 'rgba(79, 195, 247, 0.8)',
   window: 'rgba(150, 215, 255, 0.6)',
   closedFaint: 'rgba(229, 57, 53, 0.28)',
+  // the OpenStreetMap neighbourhood: dimmer than the building, so it stays the subject
+  near: '#161E29', // neighbouring buildings' walls
+  nearDark: '#111821',
+  nearTop: '#1B2531',
+  nearEdge: 'rgba(120, 150, 190, 0.35)',
+  road: '#1D2632',
+  roadEdge: 'rgba(110, 140, 175, 0.35)',
+  rail: '#262B36',
+  green: '#0F2018',
+  water: '#0D1D2D',
 } as const;
 
 export interface RoomStyle {

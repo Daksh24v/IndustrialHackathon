@@ -4,7 +4,8 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, useWindowDimensions, Vi
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
-  api, ApiError, buildingFromUrl, type BuildingRow, type ChatReply, pickBuilding, placeOf, type Point, showBuildingInUrl,
+  api, ApiError, buildingFromUrl, type BuildingRow, type ChatReply, type Context, pickBuilding, placeOf, type Point,
+  showBuildingInUrl,
 } from './src/api';
 import { BuildingBlocks } from './src/components/BuildingBlocks';
 import { BuildingPicker } from './src/components/BuildingPicker';
@@ -56,6 +57,7 @@ function Guide() {
   const [threeD, setThreeD] = useState(true);
   const [buildings, setBuildings] = useState<BuildingRow[]>([]);
   const [buildingId, setBuildingId] = useState<string | null>(null);
+  const [context, setContext] = useState<Context | null>(null); // the OpenStreetMap neighbourhood, if any
   const insets = useSafeAreaInsets();
   const wide = isWide(useWindowDimensions().width);
   // home: the orb (src/orb); map: the building and the route. An answer with a route brings the map in.
@@ -91,6 +93,9 @@ function Guide() {
     dispatch({ type: 'switch' });
     (async () => {
       try {
+        setContext(null);
+        // The neighbourhood is a nice-to-have: without it (or when it fails) the map works the same.
+        void api.context(buildingId).then((found) => mine === generation.current && setContext(found), () => {});
         const [detail, outline, session] = await Promise.all([
           api.building(buildingId), api.outline(buildingId), api.startSession(buildingId)]);
         if (mine === generation.current) dispatch({ type: 'loaded', detail, outline, sessionId: session.session_id });
@@ -238,6 +243,7 @@ function Guide() {
         {state.outline && size.width > 0 && (state.view === 'outside' || state.view === 'flying') ? (
           <BuildingBlocks
             outline={state.outline}
+            context={context}
             focusFloorId={state.view === 'flying' ? state.floorId : null}
             onArrived={() => dispatch({ type: 'arrived' })}
             onPickFloor={(floorId) => dispatch({ type: 'floor', floorId })}
@@ -247,7 +253,7 @@ function Guide() {
         ) : null}
         {state.detail && state.floorId && inside && size.width > 0 ? (
           threeD ? (
-            <FloorScene detail={state.detail} floorId={state.floorId} map={state.map} footprints={footprints}
+            <FloorScene detail={state.detail} floorId={state.floorId} map={state.map} footprints={footprints} context={context}
                         width={size.width} height={size.height} onTapFloor={tapHere} />
           ) : (
             <FloorPlan detail={state.detail} floorId={state.floorId} map={state.map} width={size.width} height={size.height}
@@ -281,6 +287,9 @@ function Guide() {
             </View>
           </View>
         )}
+        {context?.buildings.length && (state.view !== 'floor' || threeD) ? (
+          <Text style={[styles.credit, { bottom: bottom - 4 }]} pointerEvents="none">{context.attribution}</Text>
+        ) : null}
         {inside && step && stepFloor ? (
           <Pressable testID="next-step" style={[styles.step, { bottom }]} onPress={() => dispatch({ type: 'floor', floorId: stepFloor.id })}>
             <Text style={styles.stepText}>Take {step.name ?? step.kind} to {stepFloor.name} ›</Text>
@@ -347,4 +356,5 @@ const styles = StyleSheet.create({
   distance: { position: 'absolute', right: 12, backgroundColor: mapColours.chrome, borderRadius: 14,
               paddingHorizontal: 10, paddingVertical: 6, ...mapEdge },
   distanceText: { color: colours.accent, fontWeight: '700' },
+  credit: { position: 'absolute', left: 12, color: mapColours.chromeMuted, fontSize: 10 },
 });

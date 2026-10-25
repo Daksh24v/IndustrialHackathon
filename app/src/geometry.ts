@@ -1,5 +1,5 @@
 /** Pure geometry for drawing: metres (x right, y up) to screen pixels (x right, y down). */
-import type { Point } from './api';
+import type { Context, Point } from './api';
 
 export interface Bounds {
   minX: number;
@@ -124,6 +124,22 @@ export function assetRect([x, y]: Point, { width_m, depth_m, rotation_deg }: { w
     const [dx, dy] = [(u * width_m) / 2, (v * depth_m) / 2];
     return [x + dx * c - dy * s, y + dx * s + dy * c];
   });
+}
+
+/** The part of the neighbourhood within reach (metres) of an area: what is worth drawing around the building. */
+export function nearby(context: Context, area: Bounds, reach: number): Context {
+  const box = grow(area, reach);
+  const near = (points: Point[]) => {
+    const b = boundsOf(points);
+    return b.maxX >= box.minX && b.minX <= box.maxX && b.maxY >= box.minY && b.minY <= box.maxY;
+  };
+  return {
+    attribution: context.attribution,
+    buildings: context.buildings.filter((item) => near(item.polygon)),
+    roads: context.roads.filter((item) => near(item.line)),
+    green: context.green.filter(near),
+    water: context.water.filter(near),
+  };
 }
 
 /** Signed area (positive = counter-clockwise in plan coordinates). */
