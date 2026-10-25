@@ -17,6 +17,7 @@ export interface State {
   error: string | null;
   note: string | null; // a quiet line in the chat, e.g. a new conversation was started
   walk: number | null; // walking the route: the step shown ("Start")
+  left: string | null; // the floor just left with "‹ Building": the building view zooms out from it
 }
 
 export type Event =
@@ -35,7 +36,7 @@ export type Event =
 
 export const initial: State = {
   view: 'loading', detail: null, outline: null, sessionId: null, messages: [], question: null, map: null,
-  floorId: null, busy: false, error: null, note: null, walk: null,
+  floorId: null, busy: false, error: null, note: null, walk: null, left: null,
 };
 
 export function reduce(state: State, event: Event): State {
@@ -59,14 +60,14 @@ export function reduce(state: State, event: Event): State {
       const next = { ...state, busy: false, messages, question };
       if (!map || !map.focus_floor_id) return next;
       // Something to show: fly in from outside, or switch straight to the floor if already inside.
-      return { ...next, map, walk: null, floorId: map.focus_floor_id, view: state.view === 'floor' ? 'floor' : 'flying' };
+      return { ...next, map, walk: null, floorId: map.focus_floor_id, view: state.view === 'floor' ? 'floor' : 'flying', left: null };
     }
     case 'arrived':
       return state.view === 'flying' ? { ...state, view: 'floor' } : state;
     case 'floor':
-      return { ...state, floorId: event.floorId, view: state.view === 'outside' ? 'flying' : 'floor' };
+      return { ...state, floorId: event.floorId, view: state.view === 'outside' ? 'flying' : 'floor', left: null };
     case 'back':
-      return { ...state, view: 'outside', floorId: null, walk: null };
+      return { ...state, view: 'outside', floorId: null, walk: null, left: state.floorId };
     case 'here': {
       // "I'm here" from a tap: the dot moves at once; the route and the target stay as they are.
       const base: MapView = state.map ?? { you_are_here: null, target: null, route: null, focus_floor_id: null };

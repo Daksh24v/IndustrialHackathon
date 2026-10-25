@@ -30,6 +30,7 @@ import { type SafetyMark, safetyMarks } from '../safety';
 import { GroundLayers, groundOf } from './Neighbourhood';
 
 const ZOOM_MS = 1300;
+const LEAVE_MS = 1100; // back to the building: the zoom out
 const ZOOM_SCALE = 2.4;
 const FLOOR_GAP = 0.08; // fraction of a floor's height left as a visible seam
 const VIEW_ANGLE = Math.PI / 9; // a slight turn so two sides of the building show
@@ -76,6 +77,8 @@ interface Props {
   /** Safety mode: rooms dim, exits, extinguishers, defibrillators and stairs light up on every floor. */
   safety?: boolean;
   focusFloorId: string | null;
+  /** The floor just left ("‹ Building"): the view starts close on it and zooms out to the whole building. */
+  leaveFloorId?: string | null;
   onArrived?: () => void;
   /** A click (tap) on a floor's block. */
   onPickFloor?: (floorId: string) => void;
@@ -292,7 +295,7 @@ function slabWalls(iso: Iso, segments: [Point, Point][], z: number, h: number, t
   return { lit: lit.join(' '), dark: dark.join(' '), rims: rims.join(' ') };
 }
 
-export function BuildingBlocks({ outline, context, spaces = [], map = null, focusFloorId, onArrived, onPickFloor, spin = false,
+export function BuildingBlocks({ outline, context, spaces = [], map = null, focusFloorId, leaveFloorId = null, onArrived, onPickFloor, spin = false,
                                width, height, inset = NO_INSET, handleRef, detail = null, safety = false }: Props) {
   const marksOn = useMemo(() => {
     const byFloor = new Map<string, SafetyMark[]>();
@@ -307,7 +310,7 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
   const [pitch, setPitch] = useState(ISO_PITCH);
   const iso: Iso = { angle, centre, pitch };
   // 0: the building assembled, every floor at its real height; 1: opened up into the floor stack.
-  const [explode, setExplode] = useState(spin ? 0 : 1);
+  const [explode, setExplode] = useState(spin && !leaveFloorId ? 0 : 1); // back from a floor: start opened up
   const explodeRef = useRef(explode);
   explodeRef.current = explode;
 
@@ -417,17 +420,28 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
   [detail, roofId]);
 
   const focus = floors.find((floor) => floor.id === focusFloorId);
-  const zoom = useRef(new Animated.Value(0)).current;
+  const leaving = focus ? undefined : floors.find((floor) => floor.id === leaveFloorId);
+  const zoomedOn = focus ?? leaving; // the floor the view is close on, going in or coming out
+  const zoom = useRef(new Animated.Value(leaving ? 1 : 0)).current;
   const arrived = useRef(onArrived);
   arrived.current = onArrived;
   useEffect(() => {
-    if (!focus) {
-      zoom.setValue(0);
+    if (focus) {
+      Animated.timing(zoom, { toValue: 1, duration: ZOOM_MS, easing: Easing.inOut(Easing.cubic), useNativeDriver: false })
+        .start(({ finished }) => finished && arrived.current?.());
       return;
     }
-    Animated.timing(zoom, { toValue: 1, duration: ZOOM_MS, easing: Easing.inOut(Easing.cubic), useNativeDriver: false })
-      .start(({ finished }) => finished && arrived.current?.());
-  }, [focus, zoom]);
+    if (leaving) {
+      // Back to the building: from close on that floor out to the whole stack, the floors above fading back in;
+      // it stays opened up a moment, then closes into the real building as usual.
+      touched.current = Date.now();
+      zoom.setValue(1);
+      Animated.timing(zoom, { toValue: 0, duration: LEAVE_MS, easing: Easing.inOut(Easing.cubic), useNativeDriver: false })
+        .start();
+      return;
+    }
+    zoom.setValue(0);
+  }, [focus?.id, leaving?.id, zoom]); // eslint-disable-line react-hooks/exhaustive-deps -- by floor, not by object
 
   // Turning: by itself while untouched, by dragging otherwise.
   const touched = useRef(0);
@@ -599,7 +613,7 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
   }, [open]);
 
   // Zoom towards the chosen floor's top face.
-  const goal = focus ? at(iso.centre, level(focus.id)!.top) : mid;
+  const goal = zoomedOn ? at(iso.centre, level(zoomedOn.id)!.top) : mid;
   const scaleAnim = zoom.interpolate({ inputRange: [0, 1], outputRange: [1, ZOOM_SCALE] });
   const shiftX = zoom.interpolate({ inputRange: [0, 1], outputRange: [0, (mid[0] - goal[0]) * ZOOM_SCALE] });
   const shiftY = zoom.interpolate({ inputRange: [0, 1], outputRange: [0, (mid[1] - goal[1]) * ZOOM_SCALE] });
@@ -686,7 +700,7 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
             <Path d={path(floors[0]?.footprints[0]?.map((p) => at([p[0] + 1.5, p[1] - 1.5], -slab)) ?? [])} fill={mapColours.shadow} />
             {stacked.map((floor, i) => {
               const faces = blocks[i].faces;
-              const above = !!focus && floor.elevation_m > focus.elevation_m;
+              const above = !!zoomedOn && floor.elevation_m > zoomedOn.elevation_m;
               const lit = hovered?.id === floor.id;
               const onRoute = routeFloors.has(floor.id);
               const tops = faces.filter((face) => face.depth === Infinity);

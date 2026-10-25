@@ -451,6 +451,7 @@ function Guide() {
             detail={state.detail}
             safety={safety}
             focusFloorId={state.view === 'flying' ? state.floorId : null}
+            leaveFloorId={state.view === 'outside' ? state.left : null}
             onArrived={() => dispatch({ type: 'arrived' })}
             onPickFloor={(floorId) => dispatch({ type: 'floor', floorId })}
             spin={state.view === 'outside' && !state.map?.route}

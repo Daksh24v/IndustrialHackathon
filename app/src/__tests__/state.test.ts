@@ -42,7 +42,9 @@ describe('state machine', () => {
     state = reduce(state, { type: 'floor', floorId: 'F1' });
     expect(state).toMatchObject({ view: 'floor', floorId: 'F1' });
     expect(nextStep(state.map, state.floorId)).toBeNull();
-    expect(reduce(state, { type: 'back' })).toMatchObject({ view: 'outside', floorId: null });
+    const back = reduce(state, { type: 'back' });
+    expect(back).toMatchObject({ view: 'outside', floorId: null, left: 'F1' }); // zooms out from Floor 1
+    expect(reduce(back, { type: 'floor', floorId: 'F0' })).toMatchObject({ view: 'flying', floorId: 'F0', left: null });
   });
 
   it('stays inside when a new answer arrives on the floor view', () => {
