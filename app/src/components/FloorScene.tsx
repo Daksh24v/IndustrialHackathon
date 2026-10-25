@@ -2,21 +2,24 @@
  * stand up (low, so you can see into the rooms) with gaps at the doors, the route is an orange band on the
  * floor with arrows flowing along it, the target is a pin and you are an orange disc on the floor.
  * Drawn with SVG (no 3D engine: those crash Expo Go on iPhones). Drag to move, pinch or +/− to zoom, ⟳ to turn. */
-import { type ComponentRef, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type ComponentRef, type MutableRefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { G, Path, Text as SvgText } from 'react-native-svg';
 
 import type { BuildingDetail, MapView, Point } from '../api';
 import { changesOn } from '../changes';
 import {
-  boundsOf, chooseCamera, clipNear, depthOf, grow, moveCamera, pixelsPerMetre, project3d, ribbon, rotateAbout,
+  boundsOf, chooseCamera, clipNear, depthOf, fitCamera, grow, moveCamera, pixelsPerMetre, project3d, ribbon, rotateAbout,
   signedArea, unproject3d, wallSegments, type Camera, type Point3,
 } from '../geometry';
 import { useMapGestures } from '../gestures';
 import { colours, spaceFill } from '../theme';
+import type { MapHandle } from '../ui/MapControls';
 import { ChangeMarks, HereMarker, TargetPin, useLoop } from './Markers';
 
 export const TILT = (52 * Math.PI) / 180;
+/** The bird's-eye view: almost straight down, the walls still standing so the rooms read. */
+export const TOP_TILT = (8 * Math.PI) / 180;
 const WALL_M = 1.1;
 const SLAB_M = 0.5;
 const FOCUS_MARGIN_M = 4;
@@ -24,6 +27,27 @@ const MIN_LABEL_PX = 38;
 const MARGIN_PX = 120; // drawn beyond the edges, so dragging doesn't show blank space
 const TURN_MS = 450;
 const DRAG_TURN = 0.006; // radians per pixel of a turning drag
+const FLY_MS = 700; // walking through the steps: the camera moves to the next one
+const STEP_MARGIN_M = 3;
+const STEP_MIN_M = 10; // a step is shown with at least this much floor around it
+
+/** The box grown about its middle to at least size x size metres. */
+export function atLeast(box: ReturnType<typeof boundsOf>, size: number): ReturnType<typeof boundsOf> {
+  const cx = (box.minX + box.maxX) / 2;
+  const cy = (box.minY + box.maxY) / 2;
+  const hx = Math.max(box.maxX - box.minX, size) / 2;
+  const hy = Math.max(box.maxY - box.minY, size) / 2;
+  return { minX: cx - hx, maxX: cx + hx, minY: cy - hy, maxY: cy + hy };
+}
+
+/** Space on the screen that is covered (the answer panel, the search bar): the map frames around it. */
+export interface Inset { left: number; top: number; right: number; bottom: number }
+export const NO_INSET: Inset = { left: 0, top: 0, right: 0, bottom: 0 };
+
+/** A camera fitted into the uncovered part of the screen. */
+function inside(cam: Camera, inset: Inset): Camera {
+  return { ...cam, ox: cam.ox + inset.left, oy: cam.oy + inset.top };
+}
 
 /** An angle in (-π, π]: the shortest way back to north. */
 export function wrapAngle(angle: number): number {
@@ -43,6 +67,16 @@ interface Props {
   height: number;
   /** A tap on the floor: where on it (metres), e.g. to say "I'm here". */
   onTapFloor?: (floorId: string, point: Point) => void;
+  /** Its own zoom, turn and compass buttons (off when the screen has map controls of its own). */
+  controls?: boolean;
+  handleRef?: MutableRefObject<MapHandle | null>;
+  inset?: Inset;
+  /** A stretch of the route to stand out (the step under the cursor). */
+  highlight?: Point[] | null;
+  /** Frame this stretch, facing the way it goes (walking through the steps). */
+  focus?: Point[] | null;
+  /** How far the view leans: TILT (3D) or TOP_TILT (bird's eye). */
+  tilt?: number;
 }
 
 const n = (value: number) => (Math.round(value * 10) / 10).toString();
@@ -56,7 +90,8 @@ function grey(level: number): string {
   return `#${v}${v}${v}`;
 }
 
-export function FloorScene({ detail, floorId, map, footprints, width, height, onTapFloor }: Props) {
+export function FloorScene({ detail, floorId, map, footprints, width, height, onTapFloor, controls = true, handleRef,
+                            inset = NO_INSET, highlight, focus, tilt = TILT }: Props) {
   const spaces = useMemo(() => detail.spaces.filter((space) => space.floor_id === floorId), [detail, floorId]);
   const openings = useMemo(() => detail.openings.filter((opening) => opening.floor_id === floorId), [detail, floorId]);
   const changes = useMemo(() => changesOn(detail, map, floorId), [detail, map, floorId]);
@@ -78,9 +113,10 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
     const box = focus.length ? grow(boundsOf(focus), FOCUS_MARGIN_M) : boundsOf(spaces.flatMap((space) => space.polygon));
     const corners: Point3[] = [];
     for (const x of [box.minX, box.maxX]) for (const y of [box.minY, box.maxY]) corners.push([x, y, 0], [x, y, WALL_M]);
-    return chooseCamera(corners, width, height, TILT, here?.position ?? pieces[0]?.points[0],
-                        target?.position ?? pieces[pieces.length - 1]?.points.slice(-1)[0]);
-  }, [pieces, here, target, spaces, width, height]);
+    return inside(chooseCamera(corners, width - inset.left - inset.right, height - inset.top - inset.bottom, tilt,
+                               here?.position ?? pieces[0]?.points[0], target?.position ?? pieces[pieces.length - 1]?.points.slice(-1)[0]),
+                  inset);
+  }, [pieces, here, target, spaces, width, height, inset.left, inset.top, inset.right, inset.bottom, tilt]);
   const [cam, setCam] = useState<Camera>(fitted);
   useEffect(() => setCam(fitted), [fitted]);
 
@@ -119,6 +155,61 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
   };
   const turn = () => turnBy(Math.PI / 2);
   const north = () => turnBy(-wrapAngle(camera.current.yaw)); // the compass: north up again
+
+  // The map controls outside the scene: zoom, north up, and the compass following the turn.
+  const watchers = useRef(new Set<(yaw: number) => void>());
+  useLayoutEffect(() => watchers.current.forEach((watch) => watch(cam.yaw)), [cam.yaw]);
+  const zoomRef = useRef(zoomBy);
+  zoomRef.current = zoomBy;
+  const northRef = useRef(north);
+  northRef.current = north;
+  useEffect(() => {
+    if (!handleRef) return;
+    handleRef.current = {
+      zoomBy: (k) => zoomRef.current(k),
+      north: () => northRef.current(),
+      watchYaw: (watch) => {
+        watchers.current.add(watch);
+        watch(camera.current.yaw);
+        return () => watchers.current.delete(watch);
+      },
+    };
+    return () => {
+      handleRef.current = null;
+    };
+  }, [handleRef]);
+
+  // Walking through the steps: fly to the stretch, turned so that it goes up the screen (the way you walk).
+  const flying = useRef<number | null>(null);
+  useEffect(() => {
+    if (!focus?.length) return;
+    const [a, b] = [focus[0], focus[focus.length - 1]];
+    const along = Math.hypot(b[0] - a[0], b[1] - a[1]) > 0.5;
+    const yaw = along ? Math.atan2(b[0] - a[0], b[1] - a[1]) : camera.current.yaw;
+    const box = atLeast(grow(boundsOf(focus), STEP_MARGIN_M), STEP_MIN_M);
+    const corners: Point3[] = [];
+    for (const x of [box.minX, box.maxX]) for (const y of [box.minY, box.maxY]) corners.push([x, y, 0], [x, y, WALL_M]);
+    const goal = inside(fitCamera(corners, width - inset.left - inset.right, height - inset.top - inset.bottom, yaw, tilt, 24), inset);
+    const from = camera.current;
+    const turnBy = wrapAngle(goal.yaw - from.yaw);
+    const began = Date.now();
+    const mix = (x: number, y: number, t: number) => x + (y - x) * t;
+    const step = () => {
+      const t = Easing.inOut(Easing.cubic)(Math.min(1, (Date.now() - began) / FLY_MS));
+      setCam({
+        ...goal, yaw: from.yaw + turnBy * t, target: [mix(from.target[0], goal.target[0], t), mix(from.target[1], goal.target[1], t)],
+        distance: mix(from.distance, goal.distance, t), scale: mix(from.scale, goal.scale, t), ox: mix(from.ox, goal.ox, t),
+        oy: mix(from.oy, goal.oy, t),
+      });
+      flying.current = t < 1 ? requestAnimationFrame(step) : null;
+    };
+    if (flying.current !== null) cancelAnimationFrame(flying.current);
+    flying.current = requestAnimationFrame(step);
+    return () => {
+      if (flying.current !== null) cancelAnimationFrame(flying.current);
+      flying.current = null;
+    };
+  }, [focus]); // eslint-disable-line react-hooks/exhaustive-deps -- a new stretch only
 
   // Turn it all the way round like a map app: right-drag, Shift/Alt+drag (mouse) or a two-finger twist.
   useEffect(() => {
@@ -205,6 +296,7 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
       fill: changes.closedSpaces.has(space.id) ? colours.closedFaint : spaceFill[space.type] ?? colours.room,
     })).filter((tile) => tile.d);
 
+    const lit = highlight && highlight.length > 1 ? flat(ribbon(highlight, 0.5), 0.035) : null;
     const routes = pieces.map((piece) => ({
       glow: flat(ribbon(piece.points, 1.1), 0.02),
       band: flat(ribbon(piece.points, 0.42), 0.03),
@@ -239,8 +331,8 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
       const text = side > 110 || !space.ref ? space.name : space.ref;
       return [{ id: space.id, x, y, text, size: Math.min(13, Math.max(8.5, ppm * 0.9)) }];
     });
-    return { slabSides, slabTops, tiles, routes, wallFaces, labels };
-  }, [cam, footprints, spaces, pieces, walls, width, height, changes]);
+    return { slabSides, slabTops, tiles, routes, wallFaces, labels, lit };
+  }, [cam, footprints, spaces, pieces, walls, width, height, changes, highlight]);
 
   // The route fades in; arrows flow along it.
   const flow = useLoop(900);
@@ -254,7 +346,7 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
   const marker = (p: Point) => ({ at: project3d(cam, p), ppm: pixelsPerMetre(cam, p) });
   const herePx = here && depthOf(cam, here.position) > cam.distance * 0.3 ? marker(here.position) : null;
   const targetPx = target && depthOf(cam, target.position) > cam.distance * 0.3 ? marker(target.position) : null;
-  const flatten = Math.cos(TILT);
+  const flatten = Math.cos(tilt);
 
   return (
     <Animated.View ref={frame} style={[styles.frame, { width, height, opacity: appear }]} testID="floor-scene">
@@ -281,6 +373,7 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
                               strokeLinejoin="round" fill="none" strokeDasharray={[6, 18]} strokeDashoffset={dashOffset} />
               </G>
             ))}
+            {scene.lit && <Path d={scene.lit} fill="#B54F00" fillOpacity={0.6} testID="route-highlight" />}
             {scene.wallFaces.map((face, i) => (
               <Path key={`wall-${i}`} d={face.d} fill={face.fill} stroke="#C9C9C9" strokeWidth={0.6} strokeLinejoin="round" />
             ))}
@@ -302,7 +395,7 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
           </G>
         </Svg>
       </Animated.View>
-      <View style={styles.controls}>
+      {controls && <View style={styles.controls}>
         <Pressable testID="zoom-in" accessibilityLabel="Zoom in" style={styles.button} onPress={() => zoomBy(1.5)}>
           <Text style={styles.buttonText}>+</Text>
         </Pressable>
@@ -319,7 +412,7 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
             <Path d="M0 9 L4 0 L-4 0 Z" fill={colours.blockEdge} />
           </Svg>
         </Pressable>
-      </View>
+      </View>}
     </Animated.View>
   );
 }
