@@ -84,7 +84,9 @@ Cost: about $0.03–0.04 per question (prompt caching on).
 
 ## The test-set submission
 
-`submission/team_answers.csv` (145 answers) was made on 2026-10-24, after the kit 1.1.0 route rules, by the
+`SUBMISSION/answers.json` holds our 145 test answers, `{question_id: full reply}`, written by code from
+`results/team_answers.csv` (`uv run python -m evals.check_submission results/team_answers.csv --write-json
+SUBMISSION/answers.json`, which checks it first; no answer edited by hand). `results/team_answers.csv` (145 answers) was made on 2026-10-24, after the kit 1.1.0 route rules, by the
 Claude agent with
 
 ```bash
@@ -93,7 +95,7 @@ uv run --env-file .env python -m navagent.benchmark data/test --out agent_output
 
 (every question twice, a third run only on disagreement: the two runs agreed on 145/145, so none was needed;
 290 runs, $6.54), then checked for free with
-`uv run python -m evals.check_submission submission/team_answers.csv --reference <other run>`:
+`uv run python -m evals.check_submission results/team_answers.csv --reference <other run>`:
 format OK (UTF-8, header, every test id once, under 5 MB) and every answer line readable by the scorer.
 
 Against the previous submission (made with the 1.0.0 route rules) 124/145 answers are the same; the 21 that

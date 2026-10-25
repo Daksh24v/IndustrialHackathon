@@ -27,11 +27,11 @@ Slides or screen captures; one picture per sentence is enough.
 | 1:15–1:32 | The floor plan with the walking graph drawn over it (doors, centres, stairs); a route lighting up | Every answer comes from a deterministic core: a graph of rooms, doors, corridors, stairs and lifts, with real walking paths inside each room, and a shortest-path search. |
 | 1:32–1:42 | The Walk · Wheelchair · Trolley · Forklift chip; the same trip as walk and as forklift | A wheelchair, a trolley or a forklift only changes the graph: door widths, no steps, and a forklift only through halls and aisles. |
 | 1:42–1:52 | A Swiss floor plan (SVG) turning into the 3D floor stack, stairs found | Give Finni only floor plans, and it reads the drawings, lines up the floors, and finds the stairs, even when none are drawn. |
-| 1:52–2:00 | BENCHMARK.md: the hold-out row 35 / 36; the one-command run in a terminal | On buildings we locked away and never tuned on: thirty-five of thirty-six questions right. Any building, one command. Finni. |
+| 1:52–2:00 | SUBMISSION/BENCHMARK.md: the hold-out row 35 / 36; the one-command run in a terminal | On buildings we locked away and never tuned on: thirty-five of thirty-six questions right. Any building, one command. Finni. |
 
 **For ElevenLabs:** "Finni" is said "Finny"; the blank lines between scenes give natural pauses. Speed 1.0, a
 calm, clear voice. Record the screen first, then cut it to the voice.
 
 **Facts in the voiceover:** Fertigung Ost 27 has 2 floors, 79 rooms and 505 things; the hold-out run (buildings locked
-away, nothing tuned on them) got 35 of 36 questions right (BENCHMARK.md); the forklift detour around Main aisle H-B2 is 20 m longer, about
-54 s; stairs are found from plans that draw none (Swiss Dwellings, BENCHMARK.md Level 4).
+away, nothing tuned on them) got 35 of 36 questions right (SUBMISSION/BENCHMARK.md); the forklift detour around Main aisle H-B2 is 20 m longer, about
+54 s; stairs are found from plans that draw none (Swiss Dwellings, SUBMISSION/BENCHMARK.md Level 4).

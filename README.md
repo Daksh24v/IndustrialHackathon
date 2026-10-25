@@ -64,7 +64,7 @@ More in [ARCHITECTURE.md](ARCHITECTURE.md) and, for finding people and things, [
 
 ## Results
 
-All runs are in [BENCHMARK.md](BENCHMARK.md), on the organisers' kit 1.1.0 rules.
+All runs are in [SUBMISSION/BENCHMARK.md](SUBMISSION/BENCHMARK.md), on the organisers' kit 1.1.0 rules.
 
 | Check | Result |
 |---|---|
@@ -114,10 +114,11 @@ and a laptop.
 | `evals/` | Our checks: reworded and novel questions, floor-plan rebuilds, submission checks |
 | `holdout/` | The locked hold-out split |
 | `tests/` | pytest |
-| `submission/` | Our test-set answers |
+| `SUBMISSION/` | What is graded: `answers.json` (our 145 test answers) and `BENCHMARK.md` (how they were made, all runs) |
+| `results/` | The same answers as the benchmark run wrote them (`team_answers.csv`) |
 | `data/`, `benchmark/`, `starter_agent/` | The organisers' kit (data, scorer, starter agent), unchanged |
 
-Docs: [ARCHITECTURE.md](ARCHITECTURE.md) · [BENCHMARK.md](BENCHMARK.md) · [LOCATING.md](LOCATING.md) ·
+Docs: [ARCHITECTURE.md](ARCHITECTURE.md) · [BENCHMARK.md](SUBMISSION/BENCHMARK.md) · [LOCATING.md](LOCATING.md) ·
 [DEMO.md](DEMO.md) · [VIDEO.md](VIDEO.md) · [app/README.md](app/README.md) · [CHALLENGE.md](CHALLENGE.md)
 
 ## Team

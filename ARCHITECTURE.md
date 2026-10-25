@@ -59,7 +59,7 @@ Checked by `tests/test_live.py --live` (9 scripted conversations against the rea
 - Tests: pytest (offline: engine, tools, server, every dataset answer, unseen buildings, input layouts;
   `--live`: real conversations), jest for the website.
 
-## Numbers (BENCHMARK.md)
+## Numbers (SUBMISSION/BENCHMARK.md)
 
 Test set: 145 answers, double-checked, kit 1.1.0 rules. Build sets 114/114, hold-out 35/36 (run once, nothing
 tuned on it). Sunday: one command, any layout, about 6 s per question.

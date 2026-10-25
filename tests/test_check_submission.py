@@ -1,8 +1,9 @@
 """The free pre-submission checker."""
 
 import csv
+import json
 
-from evals.check_submission import answers_agree, check
+from evals.check_submission import Report, answers_agree, check, read_rows, write_json
 from tests.conftest import DATA
 
 
@@ -20,7 +21,27 @@ def write(path, rows, header=("question_id", "answer")):
 
 
 def test_the_committed_submission_has_the_right_format():
-    assert not check(DATA.parent / "submission" / "team_answers.csv").format_errors
+    assert not check(DATA.parent / "results" / "team_answers.csv").format_errors
+
+
+def test_the_graded_folder_holds_exactly_the_two_files_and_the_same_answers():
+    folder = DATA.parent / "SUBMISSION"
+    # the exact spelling the organisers grade (a case-insensitive disk would hide a wrong one)
+    assert sorted(path.name for path in folder.iterdir()) == ["BENCHMARK.md", "answers.json"]
+    assert "SUBMISSION" in [path.name for path in DATA.parent.iterdir()]
+    report = check(folder / "answers.json")
+    assert not report.format_errors and not report.answer_errors
+    answers = json.loads((folder / "answers.json").read_text(encoding="utf-8"))
+    report = Report()
+    assert answers == read_rows((DATA.parent / "results" / "team_answers.csv").read_bytes(), report)
+
+
+def test_json_answers_are_read_and_written(tmp_path):
+    rows = {qid: "Answer: 1" for qid in template_ids()}
+    write_json(rows, tmp_path / "answers.json")
+    assert not check(tmp_path / "answers.json").format_errors
+    (tmp_path / "bad.json").write_text("[1, 2]", encoding="utf-8")
+    assert check(tmp_path / "bad.json").format_errors
 
 
 def test_missing_duplicate_and_unknown_ids_are_reported(tmp_path):
