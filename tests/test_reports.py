@@ -123,3 +123,13 @@ def test_safety_quick_buttons_route_to_the_nearest(http):
     assert "extinguisher" in extinguisher["found"]["label"].lower()
     assert extinguisher["map"]["target"]["asset_id"] and extinguisher["map"]["route"]["length_m"] >= 0
     assert http.post(f"/sessions/{session_id}/nearest", json={"kind": "unicorn"}).status_code == 422
+
+
+def test_reports_stay_in_the_server_unless_a_file_is_asked_for(monkeypatch, tmp_path):
+    """A broken lift is known to the running server only: no file is written (nothing in the repository changes)
+    and a restart starts clean, unless FINNI_REPORTS_FILE names a file."""
+    monkeypatch.delenv("FINNI_REPORTS_FILE", raising=False)
+    assert server.reports_file() is None
+    assert Reports().path is None
+    monkeypatch.setenv("FINNI_REPORTS_FILE", str(tmp_path / "reports.json"))
+    assert server.reports_file() == tmp_path / "reports.json"

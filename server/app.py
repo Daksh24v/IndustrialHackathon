@@ -108,10 +108,9 @@ _client: anthropic.Anthropic | None = None
 
 
 def reports_file() -> Path | None:
-    """Where reports are kept: FINNI_REPORTS_FILE, else .finni/reports.json; set it empty to keep them in memory."""
-    value = os.environ.get("FINNI_REPORTS_FILE")
-    if value is None:
-        return DATA.parent / ".finni" / "reports.json"
+    """Where reports are kept: in the running server's memory only (a restart starts clean, and no file in the
+    repository ever changes), unless FINNI_REPORTS_FILE names a file to keep them in across restarts."""
+    value = os.environ.get("FINNI_REPORTS_FILE", "")
     return Path(value) if value.strip() else None
 
 

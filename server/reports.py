@@ -2,7 +2,8 @@
 Every conversation about the building routes around it and the map shows it red until someone says it works again.
 Each report also goes to the maintenance inbox (and by email when that is set up, see notify.py).
 
-Live website only: the benchmark never sees these. Kept in .finni/reports.json so a restart doesn't lose them."""
+Live website only: the benchmark never sees these. Kept in the running server's memory: the building's own data
+is never changed, and a restart starts clean (FINNI_REPORTS_FILE keeps them in a file across restarts)."""
 
 import json
 import threading
@@ -10,7 +11,6 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-DEFAULT_FILE = Path(__file__).resolve().parent.parent / ".finni" / "reports.json"
 MAX_INBOX = 200
 
 
@@ -37,7 +37,7 @@ class Message:
 
 
 class Reports:
-    def __init__(self, path: Path | None = DEFAULT_FILE):
+    def __init__(self, path: Path | None = None):
         self.path = path
         self._lock = threading.Lock()
         self._reports: dict[str, dict[str, Report]] = {}  # building id -> element id -> report
