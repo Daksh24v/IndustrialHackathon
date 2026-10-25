@@ -1,4 +1,5 @@
-/** One floor seen from straight above (the 2D view): white rooms, thin walls, labels that size with the zoom;
+/** One floor seen from straight above (the 2D view): rooms tinted by what they're for, things in them as small
+ * rectangles, thin walls, labels that size with the zoom;
  * you as an orange disc with a spreading ring, the route as an orange line that draws itself in, the target as
  * a pin. Drag to move, pinch or +/− to zoom; the plan redraws itself sharp at every zoom. */
 import { type ComponentRef, type MutableRefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -6,12 +7,12 @@ import { Animated, Easing, Pressable, Text, View } from 'react-native';
 import Svg, { G, Path, Text as SvgText } from 'react-native-svg';
 
 import type { BuildingDetail, MapView, Point } from '../api';
-import { changesOn } from '../changes';
+import { assetsOn, changesOn } from '../changes';
 import {
-  boundsOf, fit, grow, linePath, lineLength, moveTransform, polygonPath, toScreen, toWorld, type Transform,
+  assetRect, boundsOf, fit, grow, linePath, lineLength, moveTransform, polygonPath, toScreen, toWorld, type Transform,
 } from '../geometry';
 import { useMapGestures } from '../gestures';
-import { colours, spaceFill } from '../theme';
+import { assetStyle, colours, map as mapColours, roomStyle } from '../theme';
 import type { MapHandle } from '../ui/MapControls';
 import { atLeast, type Inset, LABEL_FONT, NO_INSET, styles } from './FloorScene';
 import { ChangeMarks, HereMarker, TargetPin } from './Markers';
@@ -20,6 +21,7 @@ const AnimatedPath = Animated.createAnimatedComponent(Path);
 const FOCUS_MARGIN_M = 8;
 const MIN_LABEL_PX = 30; // rooms smaller than this on screen get no label
 const MARGIN_PX = 120;
+const MIN_ASSET_PX = 3;
 
 interface Props {
   detail: BuildingDetail;
@@ -52,6 +54,7 @@ export function FloorPlan({ detail, floorId, map, width, height, onTapFloor, con
   const here = map?.you_are_here?.floor_id === floorId ? map.you_are_here : null;
   const target = map?.target?.floor_id === floorId ? map.target : null;
   const changes = useMemo(() => changesOn(detail, map, floorId), [detail, map, floorId]);
+  const assets = useMemo(() => assetsOn(detail, map, floorId), [detail, map, floorId]);
 
   // Fit to what matters: the route and the two places if there are any, else the whole floor.
   const fitted = useMemo(() => {
@@ -106,17 +109,31 @@ export function FloorPlan({ detail, floorId, map, width, height, onTapFloor, con
   const targetPx = target ? toScreen(transform, target.position) : null;
 
   return (
-    <View ref={frame} style={[styles.frame, { width, height }]} testID="floor-plan">
+    <View ref={frame} style={[styles.frame, { width, height, backgroundColor: mapColours.background }]} testID="floor-plan">
       <Animated.View {...gestures.panHandlers} style={[{ width, height }, gestures.style]}>
         <Svg width={width + 2 * MARGIN_PX} height={height + 2 * MARGIN_PX} style={{ position: 'absolute', left: -MARGIN_PX, top: -MARGIN_PX }}>
           <G transform={`translate(${MARGIN_PX} ${MARGIN_PX})`}>
-            {spaces.map((space) => (
-              <Path key={space.id} d={polygonPath(transform, space.polygon)} fill={spaceFill[space.type] ?? colours.room}
-                    stroke={colours.wall} strokeWidth={wall} />
-            ))}
+            {spaces.map((space) => {
+              const style = roomStyle(space);
+              return (
+                <G key={space.id}>
+                  <Path d={polygonPath(transform, space.polygon)} fill={style.fill} stroke={mapColours.wall2d} strokeWidth={wall * 2} />
+                  <Path d={polygonPath(transform, space.polygon)} fill="none" stroke={style.edge} strokeOpacity={0.6}
+                        strokeWidth={Math.max(0.5, wall * 0.6)} />
+                </G>
+              );
+            })}
+            {assets.filter((asset) => Math.min(asset.footprint.width_m, asset.footprint.depth_m) * transform.scale >= MIN_ASSET_PX)
+              .map((asset) => {
+                const style = assetStyle(asset.category ?? '');
+                return (
+                  <Path key={asset.id} d={polygonPath(transform, assetRect(asset.position, asset.footprint))} fill={style.top}
+                        stroke={style.edge} strokeWidth={0.6} />
+                );
+              })}
             {spaces.filter((space) => changes.closedSpaces.has(space.id)).map((space) => (
               <Path key={`closed-${space.id}`} testID="closed-space" d={polygonPath(transform, space.polygon)}
-                    fill={colours.closedFaint} stroke={colours.closed} strokeWidth={1.5} />
+                    fill={mapColours.closedFaint} stroke={colours.closed} strokeWidth={1.5} />
             ))}
             {spaces.map((space) => {
               const side = Math.sqrt(space.area_m2) * transform.scale;
@@ -124,7 +141,7 @@ export function FloorPlan({ detail, floorId, map, width, height, onTapFloor, con
               const [cx, cy] = toScreen(transform, space.anchor);
               const size = Math.min(13, Math.max(8.5, transform.scale * 0.9));
               return (
-                <SvgText key={`${space.id}-label`} x={cx} y={cy + size / 3} fill={colours.label} fontSize={size}
+                <SvgText key={`${space.id}-label`} x={cx} y={cy + size / 3} fill={mapColours.label} fontSize={size}
                          fontFamily={LABEL_FONT} textAnchor="middle">
                   {side > 110 || !space.ref ? space.name : space.ref}
                 </SvgText>

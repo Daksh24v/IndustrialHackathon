@@ -56,6 +56,17 @@ const expect = (ok, message) => {
     await page.waitForTimeout(800);
     await shot('1-home');
 
+    // light / dark: the button switches the whole look (the map and FINNI's cards), and back again
+    const isDark = () => page.evaluate(() => document.documentElement.classList.contains('dark'));
+    const startedDark = await isDark();
+    await page.click('[data-testid="theme-toggle"]');
+    await page.waitForTimeout(1000);
+    expect((await isDark()) !== startedDark, 'the theme button did not switch the look');
+    await shot(startedDark ? '1t-light' : '1t-dark');
+    await page.click('[data-testid="theme-toggle"]');
+    await page.waitForTimeout(1000);
+    expect((await isDark()) === startedDark, 'the theme button did not switch back');
+
     // turn the whole building with the buttons and by dragging the compass; the compass follows
     const compassTurn = () => page.$eval('[data-testid="compass"] svg', (svg) => svg.style.transform);
     await page.click('[data-testid="turn-right"]');

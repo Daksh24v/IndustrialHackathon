@@ -4,7 +4,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, useWindowDimensions, Vi
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
 import {
-  api, ApiError, buildingFromUrl, type BuildingRow, pickBuilding, placeOf, type Point, showBuildingInUrl,
+  api, ApiError, buildingFromUrl, type BuildingRow, type Context, pickBuilding, placeOf, type Point, showBuildingInUrl,
 } from './src/api';
 import { categories } from './src/categories';
 import { BuildingBlocks } from './src/components/BuildingBlocks';
@@ -15,11 +15,14 @@ import type { SphereMode } from './src/orb/sphere';
 import { chatTurn, RENEWED_NOTE } from './src/session';
 import { initial, nextStep, reduce } from './src/state';
 import { routeSteps, summary } from './src/steps';
-import { colours, isWide } from './src/theme';
+import { flushSync } from 'react-dom';
+
+import { colours, isWide, map as mapColours, setTheme, startTheme, type ThemeName } from './src/theme';
 import { MapControls, type MapHandle, type ViewMode } from './src/ui/MapControls';
 import { OrbMark } from './src/ui/OrbMark';
 import { Panel, sheetHeight, type Snap } from './src/ui/Panel';
 import { SearchBar } from './src/ui/SearchBar';
+import { switchWithTransition } from './src/ui/ThemeToggle';
 import { WalkBanner } from './src/ui/WalkBanner';
 import './src/ui/finni.css';
 import { useVoice } from './src/useVoice';
@@ -59,8 +62,31 @@ export default function App() {
 function Guide() {
   const [state, dispatch] = useReducer(reduce, initial);
   const [view, setView] = useState<ViewMode>('3d');
+  // Dark (the digital twin) or light: the map's colours switch, the page's too (the "dark" class on <html>).
+  const [theme, setThemeState] = useState<ThemeName>(() => {
+    const first = startTheme(globalThis.location?.search ?? '', savedTheme());
+    setTheme(first);
+    return first;
+  });
+  useEffect(() => {
+    globalThis.document?.documentElement.classList.toggle('dark', theme === 'dark');
+  }, [theme]);
+  const toggleTheme = () => {
+    const next: ThemeName = theme === 'dark' ? 'light' : 'dark';
+    switchWithTransition(() => {
+      setTheme(next);
+      flushSync(() => setThemeState(next));
+      document.documentElement.classList.toggle('dark', next === 'dark');
+      try {
+        localStorage.setItem(THEME_KEY, next);
+      } catch {
+        // private window: the choice just isn't remembered
+      }
+    });
+  };
   const [buildings, setBuildings] = useState<BuildingRow[]>([]);
   const [buildingId, setBuildingId] = useState<string | null>(null);
+  const [context, setContext] = useState<Context | null>(null); // the OpenStreetMap neighbourhood, if any
   const [attempt, setAttempt] = useState(0); // "Retry" after the server couldn't be reached
   const [panelOpen, setPanelOpen] = useState(false);
   const [snap, setSnap] = useState<Snap>('peek');
@@ -98,6 +124,9 @@ function Guide() {
     if (previous) void api.endSession(previous).catch(() => {});
     dispatch({ type: 'switch' });
     setPanelOpen(false);
+    setContext(null);
+    // The neighbourhood is a nice-to-have: without it (or when it fails) the map works the same.
+    void api.context(buildingId).then((found) => mine === generation.current && setContext(found), () => {});
     (async () => {
       try {
         const [detail, outline, session] = await Promise.all([
@@ -278,13 +307,14 @@ function Guide() {
   );
 
   return (
-    <View style={styles.screen}>
+    <View style={[styles.screen, { backgroundColor: mapColours.background }]}>
       <StatusBar style="dark" />
-      <View style={styles.map} testID="map-layer">
+      <View style={[styles.map, { backgroundColor: mapColours.background }]} testID="map-layer" key={theme}>
         {state.view === 'loading' && !state.error ? <ActivityIndicator color={colours.accent} style={{ flex: 1 }} /> : null}
         {state.outline && (state.view === 'outside' || state.view === 'flying') ? (
           <BuildingBlocks
             outline={state.outline}
+            context={context}
             spaces={state.detail?.spaces}
             map={state.map}
             focusFloorId={state.view === 'flying' ? state.floorId : null}
@@ -300,13 +330,16 @@ function Guide() {
         {state.detail && state.floorId && inside ? (
           view !== 'plan' ? (
             <FloorScene tilt={view === 'top' ? TOP_TILT : TILT} detail={state.detail} floorId={state.floorId} map={state.map} footprints={footprints}
-                        width={window.width} height={window.height} onTapFloor={tapHere} controls={false}
+                        context={context} width={window.width} height={window.height} onTapFloor={tapHere} controls={false}
                         handleRef={handle} inset={inset} highlight={highlight} focus={focusPath} />
           ) : (
             <FloorPlan detail={state.detail} floorId={state.floorId} map={state.map} width={window.width} height={window.height}
                        onTapFloor={tapHere} controls={false} handleRef={handle} inset={inset} highlight={highlight}
                        focus={focusPath} />
           )
+        ) : null}
+        {context?.buildings.length && (state.view !== 'floor' || view !== 'plan') ? (
+          <Text style={[styles.credit, { color: mapColours.chromeMuted }]} pointerEvents="none">{context.attribution}</Text>
         ) : null}
       </View>
 
@@ -340,7 +373,8 @@ function Guide() {
       <MapControls inside={inside} view={view} onView={setView} handle={handle} floors={floors}
                    floorId={state.floorId} onFloor={(floorId) => dispatch({ type: 'floor', floorId })}
                    onBuilding={() => dispatch({ type: 'back' })} onHere={openHere} bottom={controlsBottom}
-                   mapKey={`${state.view}:${state.floorId}:${view}`} />
+                   mapKey={`${state.view}:${state.floorId}:${view}:${theme}`} theme={theme} onTheme={toggleTheme}
+                   compact={!wide && inside} />
       {walking && (
         <WalkBanner steps={steps} index={state.walk!} left={wide ? mapLeft : 12} right={wide ? 88 : 12}
                     onNext={() => walkTo(Math.min(steps.length - 1, state.walk! + 1))}
@@ -367,6 +401,14 @@ function Guide() {
   );
 }
 
+const THEME_KEY = 'finni-theme';
+const savedTheme = (): string | null => {
+  try {
+    return globalThis.localStorage?.getItem(THEME_KEY) ?? null;
+  } catch {
+    return null;
+  }
+};
 const COLUMN_PX = 400; // FINNI's column on laptops: the search card and the answer under it
 const SESSION_WAIT_MS = 8000; // a question asked while the building still loads waits this long
 const DONE_MS = 1300; // the orb stays green this long after an answer
@@ -384,7 +426,8 @@ async function until<T>(get: () => T | null, timeoutMs = 20000): Promise<T | nul
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colours.background, overflow: 'hidden' },
-  map: { position: 'absolute', left: 0, top: 0, right: 0, bottom: 0 },
+  map: { position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, backgroundColor: mapColours.background },
+  credit: { position: 'absolute', right: 10, bottom: 4, color: mapColours.chromeMuted, fontSize: 10 },
   title: { fontSize: 18, fontWeight: '700', color: colours.text },
   step: { position: 'absolute', backgroundColor: colours.accent, borderRadius: 22, paddingHorizontal: 18, paddingVertical: 12,
           shadowColor: colours.accent, shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
