@@ -1,22 +1,27 @@
 import { StatusBar } from 'expo-status-bar';
-import { Component, type ReactNode, useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import { Component, type ReactNode, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
-import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   api, ApiError, buildingFromUrl, type BuildingRow, pickBuilding, placeOf, type Point, showBuildingInUrl,
 } from './src/api';
+import { categories } from './src/categories';
 import { BuildingBlocks } from './src/components/BuildingBlocks';
-import { BuildingPicker } from './src/components/BuildingPicker';
-import { plain } from './src/components/ChatCard';
 import { FloorPlan } from './src/components/FloorPlan';
-import { FloorScene } from './src/components/FloorScene';
+import { FloorScene, type Inset, TILT, TOP_TILT } from './src/components/FloorScene';
 import Intro from './src/orb/Intro';
-import MorphOrb, { type OrbAnswer, type OrbHandle } from './src/orb/MorphOrb';
-import type { Area } from './src/orb/motion';
+import type { SphereMode } from './src/orb/sphere';
 import { chatTurn, RENEWED_NOTE } from './src/session';
 import { initial, nextStep, reduce } from './src/state';
+import { routeSteps, summary } from './src/steps';
 import { colours, isWide } from './src/theme';
+import { MapControls, type MapHandle, type ViewMode } from './src/ui/MapControls';
+import { OrbMark } from './src/ui/OrbMark';
+import { Panel, sheetHeight, type Snap } from './src/ui/Panel';
+import { SearchBar } from './src/ui/SearchBar';
+import { WalkBanner } from './src/ui/WalkBanner';
+import './src/ui/finni.css';
 import { useVoice } from './src/useVoice';
 
 /** Shows an error on screen (with what went wrong) instead of a crashed app. */
@@ -53,14 +58,19 @@ export default function App() {
 
 function Guide() {
   const [state, dispatch] = useReducer(reduce, initial);
-  const [threeD, setThreeD] = useState(true);
+  const [view, setView] = useState<ViewMode>('3d');
   const [buildings, setBuildings] = useState<BuildingRow[]>([]);
   const [buildingId, setBuildingId] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0); // "Retry" after the server couldn't be reached
-  const insets = useSafeAreaInsets();
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [snap, setSnap] = useState<Snap>('peek');
+  const [sphere, setSphere] = useState<SphereMode>('rest');
+  const [hoverStep, setHoverStep] = useState<number | null>(null);
+  const [pickedStep, setPickedStep] = useState<number | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const window = useWindowDimensions();
   const wide = isWide(window.width);
-  const orb = useRef<OrbHandle>(null);
+  const handle = useRef<MapHandle | null>(null);
 
   // Which building: ?building=<id> in the address (web), else EXPO_PUBLIC_BUILDING, else the first factory.
   useEffect(() => {
@@ -87,6 +97,7 @@ function Guide() {
     const previous = sessionRef.current;
     if (previous) void api.endSession(previous).catch(() => {});
     dispatch({ type: 'switch' });
+    setPanelOpen(false);
     (async () => {
       try {
         const [detail, outline, session] = await Promise.all([
@@ -104,11 +115,12 @@ function Guide() {
   }, []);
 
   // Voice (../voice): what was said goes to FINNI like typed text; answers are read out.
+  const askRef = useRef<(text: string) => void>(() => {});
   const voice = useVoice({
     buildingId: state.detail?.building.id ?? null,
     onHeard: (text) => {
-      if (!orb.current) return false;
-      orb.current.ask(text);
+      if (!sessionRef.current) return false;
+      askRef.current(text);
       return true;
     },
     onError: (message) => dispatch({ type: 'error', message }),
@@ -128,38 +140,47 @@ function Guide() {
   const dropAnswer = useCallback(() => {
     asks.current += 1; // whatever is in flight no longer counts
     voice.stop();
+    dispatch({ type: 'cancel' });
+    setSphere('rest');
   }, [voice]);
   const ask = useCallback(
-    async (text: string): Promise<OrbAnswer> => {
+    async (text: string) => {
       const mine = ++asks.current;
+      setPanelOpen(true);
+      setSnap('peek');
+      setSphere('think');
       const sessionId = await until(() => sessionRef.current, SESSION_WAIT_MS);
       const building = buildingRef.current;
       if (!sessionId || !building) {
         voice.stop();
-        return { text: "I can't reach the building right now. Check that the server is running, then ask again." };
+        setSphere('rest');
+        dispatch({ type: 'error', message: "I can't reach the building right now. Check that the server is running, then ask again." });
+        return;
       }
       const turnOf = generation.current;
       dispatch({ type: 'send', text });
       voice.waiting();
       try {
         const turn = await chatTurn({ sessionId, buildingId: building, text, spoken: talkingRef.current, here: hereRef.current });
-        if (turnOf !== generation.current) {
-          voice.stop();
-          return { text: 'You switched buildings: ask me again.' };
-        }
+        if (turnOf !== generation.current) return voice.stop();
         if (turn.renewed) dispatch({ type: 'renewed', sessionId: turn.sessionId, note: RENEWED_NOTE });
-        if (mine !== asks.current) return { text: '' }; // dropped (New question / Escape) or a newer question
+        if (mine !== asks.current) return; // dropped (Escape) or a newer question
         dispatch({ type: 'reply', reply: turn.reply }); // an answer with a route flies the map to the floor
+        setSphere('done');
+        setTimeout(() => setSphere((now) => (now === 'done' ? 'rest' : now)), DONE_MS); // so the next answer flashes too
+        setPickedStep(null);
+        setSnap((turn.reply.question?.options.length ?? 0) > 3 ? 'half' : 'peek');
         void voice.say(turn.reply);
-        const said = [plain(turn.reply.reply), turn.reply.question?.question].filter(Boolean).join(' ');
-        return { text: said || 'Here it is on the map.', options: turn.reply.question?.options };
       } catch (error) {
         voice.stop();
-        return { text: (error as Error).message }; // shown in the card (once, not also as a banner)
+        if (mine !== asks.current) return;
+        setSphere('rest');
+        dispatch({ type: 'error', message: (error as Error).message });
       }
     },
     [voice],
   );
+  askRef.current = (text) => void ask(text);
 
   // Tap the map: "I'm here". The dot moves, and FINNI starts routes there without asking.
   const tapHere = useCallback(
@@ -168,6 +189,7 @@ function Guide() {
       try {
         const position = await api.setPositionAt(state.sessionId, floorId, point);
         dispatch({ type: 'here', place: placeOf(position, state.detail) });
+        setToast(null);
       } catch (error) {
         dispatch({ type: 'error', message: (error as Error).message });
       }
@@ -175,14 +197,12 @@ function Guide() {
     [state.sessionId, state.detail],
   );
 
-  const floors = [...(state.detail?.floors ?? [])].sort((a, b) => a.level - b.level);
+  const floors = useMemo(() => [...(state.detail?.floors ?? [])].sort((a, b) => a.level - b.level), [state.detail]);
   const floorName = floors.find((floor) => floor.id === state.floorId)?.name;
   const footprints = state.outline?.floors.find((floor) => floor.id === state.floorId)?.footprints ?? [];
   const step = nextStep(state.map, state.floorId);
   const stepFloor = floors.find((floor) => floor.id === step?.to_floor_id);
   const inside = state.view === 'floor';
-  const open = inside || state.view === 'flying'; // a floor is open (or opening): FINNI moves beside the map
-  const bottom = Math.max(insets.bottom, 12);
   const row = buildings.find((item) => item.id === buildingId);
   const current = state.detail?.building ?? (row ? { id: row.id, name: row.name ?? row.id } : null);
   const loadFailed = !!state.error && !state.detail;
@@ -190,99 +210,150 @@ function Guide() {
     dispatch({ type: 'error', message: '' });
     setAttempt((n) => n + 1);
   };
+  const quick = useMemo(() => categories(state.detail), [state.detail]);
+  const steps = useMemo(() => routeSteps(state.map, state.detail), [state.map, state.detail]);
+  const sum = useMemo(() => summary(state.map, state.detail), [state.map, state.detail]);
 
-  // One screen: the map fills it; FINNI sits over the building, or beside the map once a floor is open.
-  const { finni, map } = layout(window.width, window.height, open, wide);
+  // Walking the route ("Start"), or a step picked in the list: show its floor and frame it.
+  const walking = state.walk !== null && !!steps[state.walk];
+  const shownStep = walking ? state.walk : pickedStep;
+  useEffect(() => {
+    const at = shownStep !== null ? steps[shownStep] : null;
+    if (at && at.floorId !== state.floorId) dispatch({ type: 'floor', floorId: at.floorId });
+  }, [shownStep, steps]); // eslint-disable-line react-hooks/exhaustive-deps -- follow the step, not the floor
+  const walkTo = (index: number | null) => {
+    dispatch({ type: 'walk', step: index });
+    const at = index !== null ? steps[index] : null;
+    if (at && talking) void voice.say({ reply: `${at.walk_m ? `In ${at.walk_m} metres, ` : ''}${at.action}.`, question: null, map: null });
+  };
+  const focusPath = useMemo(() => {
+    const at = shownStep !== null ? steps[shownStep] : null;
+    return at && at.floorId === state.floorId ? at.path : null;
+  }, [shownStep, steps, state.floorId]);
+  const lit = hoverStep !== null ? steps[hoverStep] : shownStep !== null ? steps[shownStep] : null;
+  const highlight = lit && lit.floorId === state.floorId && lit.path.length > 1 ? lit.path : null;
+
+  // The map fills the screen; FINNI's column (laptops) or bar and sheet (phones) cover part of it.
+  const showPanel = panelOpen && (state.messages.length > 0 || state.busy || !!state.error) && !(walking && !wide);
+  const sheet = showPanel && !wide ? sheetHeight(snap, window.height) : 0;
+  const inset: Inset = wide
+    ? { left: COLUMN_PX + 16, top: walking ? 96 : 0, right: 72, bottom: 0 }
+    : { left: 0, top: walking ? 120 : 132, right: inside ? 64 : 0, bottom: sheet };
+  const controlsBottom = wide ? 24 : sheet + 16;
+  const mapLeft = wide ? COLUMN_PX + 32 : 12;
+
+  const openHere = () => {
+    if (!inside && floors.length) dispatch({ type: 'floor', floorId: (floors.find((f) => f.level === 0) ?? floors[0]).id });
+    setToast('Tap the floor where you are. FINNI starts your routes there.');
+  };
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 4500);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  const panel = showPanel ? (
+    <Panel wide={wide} messages={state.messages} question={state.question} map={state.map} steps={steps} summary={sum}
+           busy={state.busy} error={state.detail ? state.error : null} note={state.note}
+           activeStep={hoverStep ?? shownStep} snap={snap} onSnap={setSnap}
+           onOption={(label) => void ask(label)} onClose={() => setPanelOpen(false)}
+           onStepHover={setHoverStep} onStepPick={(index) => setPickedStep(index)}
+           onStart={() => walkTo(0)} />
+  ) : null;
+  const search = (
+    <SearchBar busy={state.busy} mode={sphere} mic={voice.mic} notice={voice.notice}
+               onSubmit={(text) => void ask(text)} onCancel={dropAnswer} onMic={voice.toggle}
+               building={current} buildings={buildings} onPickBuilding={pickOther} categories={quick} />
+  );
 
   return (
     <View style={styles.screen}>
       <StatusBar style="dark" />
-      <View style={[styles.map, { left: map.x, top: map.y, width: map.w, height: map.h }]} testID="map-layer">
+      <View style={styles.map} testID="map-layer">
         {state.view === 'loading' && !state.error ? <ActivityIndicator color={colours.accent} style={{ flex: 1 }} /> : null}
         {state.outline && (state.view === 'outside' || state.view === 'flying') ? (
           <BuildingBlocks
             outline={state.outline}
+            spaces={state.detail?.spaces}
+            map={state.map}
             focusFloorId={state.view === 'flying' ? state.floorId : null}
             onArrived={() => dispatch({ type: 'arrived' })}
             onPickFloor={(floorId) => dispatch({ type: 'floor', floorId })}
-            spin={state.view === 'outside'}
-            width={map.w}
-            height={map.h}
+            spin={state.view === 'outside' && !state.map?.route}
+            width={window.width}
+            height={window.height}
+            inset={inset}
           />
         ) : null}
         {state.detail && state.floorId && inside ? (
-          threeD ? (
-            <FloorScene detail={state.detail} floorId={state.floorId} map={state.map} footprints={footprints}
-                        width={map.w} height={map.h} onTapFloor={tapHere} />
+          view !== 'plan' ? (
+            <FloorScene tilt={view === 'top' ? TOP_TILT : TILT} detail={state.detail} floorId={state.floorId} map={state.map} footprints={footprints}
+                        width={window.width} height={window.height} onTapFloor={tapHere} controls={false}
+                        handleRef={handle} inset={inset} highlight={highlight} focus={focusPath} />
           ) : (
-            <FloorPlan detail={state.detail} floorId={state.floorId} map={state.map} width={map.w} height={map.h}
-                       onTapFloor={tapHere} />
+            <FloorPlan detail={state.detail} floorId={state.floorId} map={state.map} width={window.width} height={window.height}
+                       onTapFloor={tapHere} controls={false} handleRef={handle} inset={inset} highlight={highlight}
+                       focus={focusPath} />
           )
         ) : null}
-
-        {inside && (
-          <View style={styles.topRow} pointerEvents="box-none">
-            <Pressable testID="building" accessibilityLabel="Back to the whole building" onPress={() => dispatch({ type: 'back' })}
-                       style={styles.buildingButton}>
-              <Text style={styles.buildingText}>‹ Building</Text>
-            </Pressable>
-            {floorName ? <Text testID="floor-name" style={styles.floorName}>{floorName}</Text> : null}
-            <View style={styles.toggle}>
-              {(['3D', '2D'] as const).map((mode) => {
-                const active = (mode === '3D') === threeD;
-                return (
-                  <Pressable key={mode} testID={`view-${mode}`} onPress={() => setThreeD(mode === '3D')}
-                             accessibilityRole="tab" accessibilityState={{ selected: active }}
-                             style={[styles.toggleItem, active && styles.toggleActive]}>
-                    <Text style={[styles.toggleText, active && styles.toggleTextActive]}>{mode}</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </View>
-        )}
-        {inside && step && stepFloor ? (
-          <Pressable testID="next-step" style={[styles.step, { bottom }]} onPress={() => dispatch({ type: 'floor', floorId: stepFloor.id })}>
-            <Text style={styles.stepText}>Take {step.name ?? step.kind} to {stepFloor.name} ›</Text>
-          </Pressable>
-        ) : null}
-        {state.map?.route && inside ? (
-          <View style={[styles.distance, { bottom: bottom + (step && stepFloor ? 52 : 0) }]}>
-            <Text style={styles.distanceText}>{Math.round(state.map.route.length_m)} m</Text>
-          </View>
-        ) : null}
       </View>
 
-      <MorphOrb handleRef={orb} onSubmit={ask} onCancel={dropAnswer} area={finni} docked={open}
-                mic={voice.mic} micNotice={voice.notice} onMic={voice.toggle} history={state.messages}
-                notice={state.error || state.note || undefined} />
+      {wide ? (
+        <div className="fi fi-column">
+          {search}
+          {panel}
+        </div>
+      ) : (
+        <>
+          {!walking && search}
+          {panel}
+        </>
+      )}
 
-      <View style={[styles.picker, open && wide ? { left: map.x, width: map.w } : null]} pointerEvents="box-none">
-        <BuildingPicker buildings={buildings} current={current} onPick={pickOther} />
-      </View>
+      {inside && floorName && wide && !walking && (
+        <div className="fi fi-floor" style={{ left: mapLeft + (window.width - mapLeft - 72) / 2 }} data-testid="floor-name">
+          {floorName}
+        </div>
+      )}
+      {inside && step && stepFloor && !walking && (
+        <Pressable testID="next-step" style={[styles.step, { bottom: controlsBottom, left: wide ? mapLeft : 12, right: wide ? undefined : 72 }]}
+                   onPress={() => dispatch({ type: 'floor', floorId: stepFloor.id })}>
+          <Text style={styles.stepText}>Take {step.name ?? step.kind} to {stepFloor.name} ›</Text>
+        </Pressable>
+      )}
+      <MapControls inside={inside} view={view} onView={setView} handle={handle} floors={floors}
+                   floorId={state.floorId} onFloor={(floorId) => dispatch({ type: 'floor', floorId })}
+                   onBuilding={() => dispatch({ type: 'back' })} onHere={openHere} bottom={controlsBottom} />
+      {walking && (
+        <WalkBanner steps={steps} index={state.walk!} left={wide ? mapLeft : 12} right={wide ? 88 : 12}
+                    onNext={() => walkTo(Math.min(steps.length - 1, state.walk! + 1))}
+                    onBack={() => walkTo(Math.max(0, state.walk! - 1))} onStop={() => walkTo(null)} />
+      )}
+      {talking && (
+        <div className="fi fi-voice" style={{ left: wide ? mapLeft + (window.width - mapLeft - 72) / 2 : '50%', top: wide ? 40 : 150 }}
+             data-testid="voice-orb">
+          <OrbMark size={140} mode={voice.mic === 'listening' ? 'listen' : voice.mic === 'speaking' ? 'speak' : 'think'} />
+          <span>{VOICE_LINE[voice.mic]}</span>
+        </div>
+      )}
+      {toast && <div className="fi fi-toast" style={{ bottom: controlsBottom + 4 }} role="status" data-testid="toast">{toast}</div>}
       <Intro />
       {loadFailed && (
-        <Pressable testID="retry" onPress={retry} style={styles.retry}>
-          <Text style={styles.stepText}>Retry</Text>
-        </Pressable>
+        <View style={styles.failed}>
+          <Text style={styles.failedText} testID="error">{state.error}</Text>
+          <Pressable testID="retry" onPress={retry} style={styles.retry}>
+            <Text style={styles.stepText}>Retry</Text>
+          </Pressable>
+        </View>
       )}
     </View>
   );
 }
 
-const PANEL_PX = 400; // FINNI's column beside an open map (laptops)
-const SHEET_SHARE = 0.44; // FINNI's bottom sheet under an open map (phones)
+const COLUMN_PX = 400; // FINNI's column on laptops: the search card and the answer under it
 const SESSION_WAIT_MS = 8000; // a question asked while the building still loads waits this long
-
-/** Where FINNI and the map go: FINNI over the whole building, or beside the open map (column / sheet). */
-export function layout(width: number, height: number, open: boolean, wide: boolean): { finni: Area; map: Area } {
-  if (!open) return { finni: { x: 0, y: 0, w: width, h: height }, map: { x: 0, y: 0, w: width, h: height } };
-  if (wide) {
-    return { finni: { x: 0, y: 0, w: PANEL_PX, h: height }, map: { x: PANEL_PX, y: 0, w: width - PANEL_PX, h: height } };
-  }
-  const sheet = Math.round(height * SHEET_SHARE);
-  return { finni: { x: 0, y: height - sheet, w: width, h: sheet }, map: { x: 0, y: 0, w: width, h: height - sheet } };
-}
+const DONE_MS = 1300; // the orb stays green this long after an answer
+const VOICE_LINE = { off: '', listening: "Listening… pause when you're done", thinking: 'Thinking…', speaking: 'Speaking… tap the mic to interrupt' };
 
 /** The value once it's there (polled), or null after a while. */
 async function until<T>(get: () => T | null, timeoutMs = 20000): Promise<T | null> {
@@ -294,31 +365,14 @@ async function until<T>(get: () => T | null, timeoutMs = 20000): Promise<T | nul
   return get();
 }
 
-const edge = { borderWidth: StyleSheet.hairlineWidth, borderColor: colours.blockEdge };
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colours.background, overflow: 'hidden' },
-  map: { position: 'absolute' },
-  picker: { position: 'absolute', top: 18, left: 0, right: 0, alignItems: 'center', zIndex: 3 },
+  map: { position: 'absolute', left: 0, top: 0, right: 0, bottom: 0 },
   title: { fontSize: 18, fontWeight: '700', color: colours.text },
-  topRow: { position: 'absolute', left: 12, right: 12, top: 60, flexDirection: 'row', alignItems: 'flex-start',
-            justifyContent: 'space-between' },
-  buildingButton: { height: 34, paddingHorizontal: 14, borderRadius: 17, justifyContent: 'center',
-                    backgroundColor: colours.background, ...edge },
-  buildingText: { color: colours.text, fontWeight: '700', fontSize: 13 },
-  floorName: { marginTop: 8, color: colours.muted, fontSize: 13, fontWeight: '600', backgroundColor: 'rgba(255,255,255,0.85)',
-               paddingHorizontal: 10, paddingVertical: 3, borderRadius: 10, overflow: 'hidden' },
-  toggle: { flexDirection: 'row', backgroundColor: colours.chip, borderRadius: 18, padding: 3, marginRight: 48 },
-  toggleItem: { paddingHorizontal: 12, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
-  toggleActive: { backgroundColor: colours.background, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 3,
-                  shadowOffset: { width: 0, height: 1 }, elevation: 1 },
-  toggleText: { color: colours.muted, fontWeight: '700', fontSize: 13 },
-  toggleTextActive: { color: colours.accent },
-  retry: { position: 'absolute', top: 110, alignSelf: 'center', backgroundColor: colours.accent, borderRadius: 20,
-           paddingHorizontal: 18, paddingVertical: 10, zIndex: 4 },
-  step: { position: 'absolute', alignSelf: 'center', backgroundColor: colours.accent, borderRadius: 20,
-          paddingHorizontal: 16, paddingVertical: 10 },
-  stepText: { color: '#FFFFFF', fontWeight: '600' },
-  distance: { position: 'absolute', right: 12, backgroundColor: colours.background, borderRadius: 14,
-              paddingHorizontal: 10, paddingVertical: 6, ...edge },
-  distanceText: { color: colours.accent, fontWeight: '700' },
+  step: { position: 'absolute', backgroundColor: colours.accent, borderRadius: 22, paddingHorizontal: 18, paddingVertical: 12,
+          shadowColor: colours.accent, shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
+  stepText: { color: '#FFFFFF', fontWeight: '700' },
+  failed: { position: 'absolute', top: '40%', left: 24, right: 24, alignItems: 'center', gap: 12 },
+  failedText: { color: colours.error, textAlign: 'center' },
+  retry: { backgroundColor: colours.accent, borderRadius: 20, paddingHorizontal: 18, paddingVertical: 10 },
 });

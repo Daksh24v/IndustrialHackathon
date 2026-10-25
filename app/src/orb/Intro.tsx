@@ -1,5 +1,5 @@
 /** The opening (web, once per visit): "Find using FINNI" over the turning building, then it shrinks into the
- * "Ask FINNI" label above the orb. A click, a tap or a key skips it; reduced motion only fades. With
+ * search bar while the floor stack is already there. A click, a tap or a key skips it; reduced motion only fades. With
  * EXPO_PUBLIC_GOOGLE_MAPS_KEY set, the backdrop is a live Google 3D fly-around of the venue (GoogleIntro);
  * without it, or if Google doesn't load in time, our own building shows through. */
 import { useEffect, useState } from "react";
@@ -8,7 +8,7 @@ import { GoogleIntro, googleKey } from "./GoogleIntro";
 
 const SEEN_KEY = "finni-intro-seen";
 const SHOW_MS = 1700; // the words alone
-const LEAVE_MS = 800; // shrinking into "Ask FINNI"
+const LEAVE_MS = 800; // shrinking into the search bar
 const GOOGLE_SHOW_MS = 5200; // longer when there is a city to fly round
 
 /** Once per visit, never in a test run (?intro=0) and never when it was skipped before in this tab. */
