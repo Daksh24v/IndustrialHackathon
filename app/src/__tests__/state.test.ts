@@ -17,6 +17,13 @@ const map: MapView = {
 };
 
 describe('state machine', () => {
+  it('moves the dot on a tap and keeps the route', () => {
+    const here = { label: 'Kitchen 0.28', floor_id: 'F0', position: [7, 7] as [number, number], space_id: 'k' };
+    const shown = reduce({ ...loaded, map }, { type: 'here', place: here });
+    expect(shown.map).toMatchObject({ you_are_here: here, route: map.route, target: map.target });
+    expect(reduce(loaded, { type: 'here', place: here }).map?.you_are_here).toEqual(here);
+  });
+
   it('asks back without leaving the outside view', () => {
     let state = reduce(loaded, { type: 'send', text: 'Where is the toilet?' });
     expect(state.busy).toBe(true);

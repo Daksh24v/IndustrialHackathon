@@ -16,6 +16,7 @@ from navcore.engine import Building
 
 LOG_DIRECTORY = Path("agent_output") / "logs"
 DOUBLE_CHECK_ENVIRONMENT_VARIABLE = "NAVAGENT_DOUBLE_CHECK"
+CALL_TIMEOUT_S = 180  # one Claude call; a stalled one is retried instead of blocking the run
 
 _client: anthropic.Anthropic | None = None
 USAGE: Counter = Counter()  # tokens of every agent run in this process, for cost reports
@@ -24,7 +25,7 @@ USAGE: Counter = Counter()  # tokens of every agent run in this process, for cos
 def client() -> anthropic.Anthropic:
     global _client
     if _client is None:
-        _client = anthropic.Anthropic(max_retries=5)
+        _client = anthropic.Anthropic(max_retries=5, timeout=CALL_TIMEOUT_S)
     return _client
 
 
@@ -51,9 +52,18 @@ def answer(
         double_check = bool(os.environ.get(DOUBLE_CHECK_ENVIRONMENT_VARIABLE))
     if not double_check:
         return run_once(building_directory, question_text, question_id)
-    replies = [run_once(building_directory, question_text, f"{question_id}-{n}" if question_id else None) for n in (1, 2)]
-    if answer_line(replies[0]) != answer_line(replies[1]):
-        replies.append(run_once(building_directory, question_text, f"{question_id}-3" if question_id else None))
+
+    def attempt(n: int) -> str | None:  # a failed run (API error, ...) doesn't spoil the others
+        try:
+            return run_once(building_directory, question_text, f"{question_id}-{n}" if question_id else None)
+        except Exception:
+            return None
+
+    replies = [reply for reply in (attempt(1), attempt(2)) if reply is not None]
+    if len(replies) < 2 or answer_line(replies[0]) != answer_line(replies[-1]):
+        replies += [reply for reply in (attempt(3),) if reply is not None]
+    if not replies:
+        return run_once(building_directory, question_text, question_id)  # let the error through
     votes = Counter(answer_line(reply) for reply in replies if answer_line(reply))
     if not votes:
         return replies[0]

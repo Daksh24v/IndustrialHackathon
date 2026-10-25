@@ -40,7 +40,7 @@ from voice.speech import DIDNT_GET_IT, keyterms, match_option, speakable, spoken
 BACKEND = os.environ.get("NAV_BACKEND_URL", "http://localhost:8000")
 # v4 Turbo ignores ElevenLabs' speed setting, so players speed up instead (pitch kept)
 PLAYBACK_RATE = float(os.environ.get("VOICE_PLAYBACK_RATE") or 1.15)
-# Each turn is sent as spoken: the backend's agent then answers in one short sentence for the ear, at lower
+# Each turn is sent as spoken: the backend's agent then answers in two short sentences for the ear, at lower
 # effort (faster). VOICE_BRIEF=0 sends the words as a normal chat turn.
 BRIEF = os.environ.get("VOICE_BRIEF", "1") != "0"
 MAX_AUDIO_BYTES = 10_000_000

@@ -1,12 +1,15 @@
 """The HTTP backend, with a scripted fake Claude (no API calls)."""
 
 import math
+import shutil
+import threading
+import time
 
 import pytest
 from fastapi.testclient import TestClient
 
 from server import app as server
-from tests.fake_claude import FakeClient
+from tests.fake_claude import FakeClient, text_of
 
 BUILDING = "proc-factory-dev-003"
 
@@ -36,6 +39,31 @@ def test_buildings_list_and_detail(http):
     assert {"polygon", "area_m2", "anchor", "type", "name"} <= set(space)
     assert detail["openings"] and detail["assets"]
     assert http.get("/buildings/nope").status_code == 404
+
+
+def test_buildings_list_names_and_sources(http):
+    rows = {row["id"]: row for row in http.get("/buildings").json()}
+    assert rows[BUILDING] == {"id": BUILDING, "split": "dev", "name": "Fertigung Ost 27", "source": "procedural"}
+    assert all(row["name"] and row["source"] for row in rows.values())
+
+
+def test_a_building_dropped_in_shows_up_without_a_restart(http, monkeypatch, tmp_path):
+    from tests.conftest import DATA
+
+    monkeypatch.setattr(server, "DATA", tmp_path)
+    server.forget_buildings()
+    shutil.copytree(DATA / "dev" / BUILDING, tmp_path / "dev" / BUILDING)
+    try:
+        assert [row["id"] for row in http.get("/buildings").json()] == [BUILDING]
+        shutil.copytree(DATA / "dev" / BUILDING, tmp_path / "sunday" / "sunday-1")
+        assert http.get("/buildings/sunday-1").status_code == 200  # found on a miss
+        assert {row["id"]: row["split"] for row in http.get("/buildings").json()}["sunday-1"] == "sunday"
+        shutil.copytree(DATA / "dev" / BUILDING, tmp_path / "sunday" / "sunday-2")
+        assert http.post("/buildings/reload").json() == {"buildings": 3}
+        assert http.post("/sessions", json={"building_id": "sunday-2"}).status_code == 200
+    finally:
+        monkeypatch.undo()
+        server.forget_buildings()
 
 
 def vertical_cost(kind: str, rise_m: float) -> float:
@@ -138,6 +166,54 @@ def test_sessions_are_separate_and_can_end(http):
     assert http.post(f"/sessions/{second}/chat", json={"text": ""}).status_code == 422
 
 
+def test_two_quick_messages_wait_for_each_other(http):
+    """A second message in the same conversation waits for the first answer: the history never interleaves."""
+    session_id = http.post("/sessions", json={"building_id": BUILDING}).json()["session_id"]
+    agent = server._sessions[session_id]
+    running, overlaps, order = [0], [], []
+
+    def slow_ask(text, spoken=False):
+        running[0] += 1
+        overlaps.append(running[0])
+        time.sleep(0.2)
+        order.append(text)
+        running[0] -= 1
+        return f"answer to {text}"
+
+    agent.ask = slow_ask
+    replies = {}
+    threads = [threading.Thread(target=lambda text=text: replies.setdefault(
+        text, server.chat(session_id, server.ChatRequest(text=text))["reply"])) for text in ("one", "two")]
+    for thread in threads:
+        thread.start()
+        time.sleep(0.05)
+    for thread in threads:
+        thread.join()
+    assert max(overlaps) == 1 and order == ["one", "two"]
+    assert replies == {"one": "answer to one", "two": "answer to two"}
+
+
+def test_a_crash_in_a_turn_is_a_clear_500(http):
+    session_id = http.post("/sessions", json={"building_id": BUILDING}).json()["session_id"]
+
+    def broken(text, spoken=False):
+        raise KeyError("floor")
+
+    server._sessions[session_id].ask = broken
+    response = http.post(f"/sessions/{session_id}/chat", json={"text": "hi"})
+    assert response.status_code == 500 and "KeyError" in response.json()["detail"]
+    server._sessions[session_id].ask = lambda text, spoken=False: "fine again"
+    assert http.post(f"/sessions/{session_id}/chat", json={"text": "hi"}).json()["reply"] == "fine again"
+
+
+def test_the_demo_building_is_warmed_up_at_start(http):
+    for _ in range(100):
+        if server.load(server.DEMO_BUILDING)._graphs:
+            break
+        time.sleep(0.05)
+    assert server.load(server.DEMO_BUILDING)._graphs
+
+
 def test_outline_has_one_footprint_set_per_floor(http):
     from shapely.geometry import Polygon
     from shapely.ops import unary_union
@@ -162,12 +238,32 @@ def test_position_from_the_phone_is_used_without_asking(http):
     placed = http.post(f"/sessions/{session}/position", json={"space": "Quality lab 0.21 (Ground floor)"}).json()
     assert placed["label"] == "Quality lab 0.21 (Ground floor)"
     body = http.post(f"/sessions/{session}/chat", json={"text": "Where is office 1.04?"}).json()
-    sent = fake.requests[0]["messages"][-1]["content"]
-    assert sent.startswith("[Position from the phone: the person is in Quality lab 0.21 (Ground floor)]")
+    sent = text_of(fake.requests[0]["messages"][-1]["content"])
+    assert sent.startswith("[Position: the person is in Quality lab 0.21 (Ground floor) "
+                           "(id proc-factory-dev-003-F0-S021), from the phone.]")
     assert sent.endswith("Where is office 1.04?")
     assert body["map"]["you_are_here"]["label"] == "Quality lab 0.21 (Ground floor)"  # the map shows it too
     assert http.post(f"/sessions/{session}/position", json={"space": "Nowhere 9.99"}).status_code == 422
     assert http.post("/sessions/nope/position", json={"space": "0.21"}).status_code == 404
+
+
+def test_tapped_point_history_and_forgetting(http):
+    session = http.post("/sessions", json={"building_id": BUILDING}).json()["session_id"]
+    detail = http.get(f"/buildings/{BUILDING}").json()
+    lab = next(space for space in detail["spaces"] if space["name"] == "Quality lab 0.21")
+    x, y = lab["anchor"]
+    tapped = http.post(f"/sessions/{session}/position", json={"floor": "Ground floor", "x": x, "y": y}).json()
+    assert tapped["space_id"] == lab["id"] and tapped["point"] == [x, y]
+    http.post(f"/sessions/{session}/position", json={"space": "the locker room"})  # a forgiving name
+    state = http.get(f"/sessions/{session}/position").json()
+    assert state["position"]["label"] == "Locker room 0.39 (Ground floor)"
+    assert state["history"][0]["label"] == "Quality lab 0.21 (Ground floor)"
+    far = http.post(f"/sessions/{session}/position", json={"floor": "Ground floor", "x": 1e6, "y": 1e6})
+    assert far.status_code == 422
+    typo = http.post(f"/sessions/{session}/position", json={"space": "Qualty lab 0.21"})
+    assert typo.status_code == 422 and typo.json()["detail"]["candidates"][0]["space_id"] == lab["id"]
+    assert http.delete(f"/sessions/{session}/position").json() == {"position": None}
+    assert http.get(f"/sessions/{session}/position").json()["position"] is None
 
 
 def test_voice_is_served_by_the_backend(http):
@@ -181,10 +277,31 @@ def test_voice_is_served_by_the_backend(http):
 
 
 def test_the_backend_serves_the_website_and_the_api_still_wins(http):
-    from server.app import WEB
-
-    if not (WEB / "index.html").exists():
+    if not (server.WEB / "index.html").exists():
         pytest.skip("the website isn't built (npm run build in app/)")
     page = http.get("/")
     assert page.status_code == 200 and "<html" in page.text.lower()
     assert http.get("/buildings").headers["content-type"].startswith("application/json")
+
+
+def test_a_moved_machine_reaches_the_map_over_http(http):
+    """The facility manager's "I moved the CMM to office 1.04": the chat reply carries it for the map."""
+    http.script(([("move_thing", {"thing": "coordinate measuring machine", "to_room": "Office 1.04 (Floor 1)"})],
+                 "Moved it."))
+    session_id = http.post("/sessions", json={"building_id": BUILDING}).json()["session_id"]
+    body = http.post(f"/sessions/{session_id}/chat", json={"text": "I moved the CMM to office 1.04"}).json()
+    moved = body["map"]["changes"]["moved"]
+    assert [item["space_id"] for item in moved] == ["proc-factory-dev-003-F1-S004"]
+    assert server._sessions[session_id].session.overview()["moved"][0]["room"] == "Office 1.04 (Floor 1)"
+
+
+def test_a_shared_link_needs_its_access_code(http, monkeypatch):
+    monkeypatch.setenv("FINNI_ACCESS_CODE", "pretzel")
+    assert http.get("/buildings").status_code == 200  # the site and the building data stay open
+    assert http.post("/sessions", json={"building_id": BUILDING}).status_code == 401
+    assert http.post("/voice/speak", json={"text": "hi"}).status_code == 401
+    ok = http.post("/sessions", json={"building_id": BUILDING}, headers={"x-finni-code": "pretzel"})
+    assert ok.status_code == 200
+    assert http.post("/sessions?code=pretzel", json={"building_id": BUILDING}).status_code == 200
+    monkeypatch.delenv("FINNI_ACCESS_CODE")
+    assert http.post("/sessions", json={"building_id": BUILDING}).status_code == 200  # no code set: open

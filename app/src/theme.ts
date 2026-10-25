@@ -1,33 +1,28 @@
-/** Dark map, one accent colour: orange is "you" and "your way". Same look as the orb screen (src/orb/orb.css). */
+/** Minimal white map with one accent colour: orange is "you" and "your way". */
 export const colours = {
-  background: '#000000',
-  surface: '#1C1C1E',
-  surfaceRaised: '#2C2C2E',
-  line: 'rgba(255, 255, 255, 0.10)',
-  block: '#1C1C1E', // the building from outside: walls facing left
-  blockSide: '#141416', // walls facing right
-  blockTop: '#2A2A2E',
-  blockEdge: '#3A3A3E',
-  blockShadow: '#0D0D0F',
-  room: '#18181B',
-  corridor: '#232327',
-  hall: '#1D1D20',
-  shaft: '#2C2C31',
-  outdoor: '#142019',
-  wall: '#3F3F45',
-  wallFace: [42, 70] as const, // grey levels of 3D walls: away from the light .. lit
-  slab: '#121214',
-  slabSide: '#0E0E10',
-  label: '#8E8E93',
-  text: '#F2F2F7',
-  muted: '#8E8E93',
-  chip: '#1C1C1E',
-  chipText: '#E5E5EA',
+  background: '#FFFFFF',
+  block: '#F4F4F4',
+  blockTop: '#FFFFFF',
+  blockEdge: '#D8D8D8',
+  room: '#FAFAFA',
+  corridor: '#F1F1F1',
+  hall: '#F6F6F6',
+  shaft: '#ECECEC',
+  outdoor: '#F3F7F1',
+  wall: '#CFCFCF',
+  label: '#9A9A9A',
+  text: '#1F1F1F',
+  muted: '#8A8A8A',
+  chip: '#F3F3F3',
+  chipText: '#2A2A2A',
   accent: '#FF7A00',
   accentSoft: 'rgba(255, 122, 0, 0.35)',
-  accentFaint: 'rgba(255, 122, 0, 0.16)',
-  accentChip: 'rgba(255, 122, 0, 0.12)',
-  error: '#FF6B6B',
+  accentFaint: 'rgba(255, 122, 0, 0.12)',
+  error: '#C62828',
+  closed: '#E53935', // building edits: closed doors, lifts and rooms
+  closedFaint: 'rgba(229, 57, 53, 0.16)',
+  added: '#2E9E44', // new doors
+  moved: '#2F6FED', // things moved to a new place
 } as const;
 
 export const spaceFill: Record<string, string> = {
@@ -38,3 +33,7 @@ export const spaceFill: Record<string, string> = {
   lift: colours.shaft,
   outdoor: colours.outdoor,
 };
+
+/** Screens at least this wide get the chat as a panel beside the map (desktop); narrower ones the phone layout. */
+export const WIDE_PX = 900;
+export const isWide = (width: number) => width >= WIDE_PX;

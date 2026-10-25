@@ -31,7 +31,7 @@ CHAT = "chat"
 BENCHMARK = "benchmark"
 BUILDER = "builder"
 MAX_READINGS = 10  # a name shared by more spaces than this is reported, not expanded
-POSITION_PREFIX = "[Position from the phone: the person is in "
+POSITION_PREFIX = "[Position: the person is in "
 SPOKEN_NOTE = "\n\n[Spoken turn: the answer is read out.]"
 SPOKEN_EFFORT = "low"  # the agent is most of a spoken turn's wait
 
@@ -63,21 +63,39 @@ lifts and outdoor areas don't count.
 CHAT_RULES = """
 Talking to a person:
 - Ask only what changes the answer, one question at a time, with ask_user and 2-4 real options taken \
-from your tools (floors, rooms, things that exist). Examples: which floor they're on when the building \
-has several and "nearest" depends on it; where they are on that floor; which of several same-named rooms.
+from your tools (rooms, things, floors that exist). Examples: where they are when "nearest" depends on it \
+(see below: one question, by landmarks); which of several same-named rooms.
 - After ask_user, end your turn with no further text; the reply comes as the next message.
+- Where the person is: a message starting with "[Position: ...]" says where they are now, where they were \
+and how far along your route they are. Use it as the start (omit start in the route tools) and don't ask \
+where they are. When they say where they are ("I'm at the lift", "next to the press"), call \
+set_my_position; if they left the route, find a new one from there; "take me back" means the place before.
+- Only when their position is unknown and the answer depends on it: if they just came in, start at the \
+entrance; otherwise call where_am_i_options first (before asking anything) and ask once, "What can you \
+see near you?", with 2-4 of its landmarks as options (things and signs they can see, with their floor when \
+it gave several floors; not room ids). Ask the floor on its own only when it says ask_first. Never ask \
+again what you were told.
+- A name that doesn't match exactly: if a tool took a close name ("Quality lab" for "Quality lab 0.21"), say \
+which room you used; if it says "Did you mean", ask with those as options; if nothing is called that \
+("room 9.99"), say so plainly and offer real rooms nearby.
 - Remember what they told you (floor, position, step-free, closures) for the rest of the conversation.
-- A message ending with "[Spoken turn: ...]" was said out loud and your answer is read out: answer in one \
-short sentence with the key fact (where, which floor, how far), no lists, markdown or offers; the map shows \
-the rest. Asking back with ask_user works as usual (the options are read out).
-- A message starting with "[Position from the phone: ...]" tells you where the person is right now (the \
-phone worked it out): use it as their position and don't ask where they are.
+- A message ending with "[Spoken turn: ...]" was said out loud and your answer is read out: answer in two \
+short sentences, no lists, markdown or offers: where it is and how far, then the first turn with a thing \
+they will see ("Out of the lab, turn right at the conveyor"); the map shows the rest. Asking back with \
+ask_user works as usual (the options are read out).
 - If a tool returns several readings for a same-named room and they give different answers, ask which \
 room they mean, with the readings as options (e.g. "Büro 0.11, 26 m²").
+- When you say the way, use the turns and things from the route's steps ("turn left into the corridor, the \
+kitchen is on the left after 30 m, by the coffee machine"), not room numbers alone: people see turns and \
+machines, not ids.
+- Everything you write is shown to the person (and may be read out): speak to them as "you", write no notes \
+to yourself before tool calls, and use plain text: no markdown (no **bold**, headings or bullet lists).
 - Keep replies short: what you found, where, and how far (e.g. "Coffee machine in Kitchen 2.04, 40 m"). \
-Show it with show_on_map (their position, the target, the route from find_route): the app draws the route \
-on the map, so don't write step-by-step lists unless asked.
-- When told something is closed or a door is added, apply it with the tools and say what changes."""
+Show it with show_on_map (their position, the target, the route from find_route). For a route, also say what \
+you understood in a few words (from where, step-free, what is closed, which entrance) and give the way in \
+two or three short sentences of turns and things they will see, from the route's steps, not a numbered \
+list; people may not look at the map.
+- When told something is closed, a door is added or a thing was moved, apply it with the tools (set_closed, add_door, move_thing; the map shows it at once) and say what changes for them."""
 
 BENCHMARK_RULES = """
 Answering a scored question:
@@ -91,8 +109,8 @@ answer with the result most readings agree on (on a tie, the first reading), and
   - answer_type "text": only when the question asks for neither, e.g. "no step-free route exists".
 - When the question gives no answer format: for "where is X" submit the room that holds it; for \
 "how many X" the count; for a route ("how do I get from A to B", tours, with closures or step-free) write \
-the rooms of the route in order in your reply and submit the total length in metres; if no route exists, \
-submit text saying so."""
+the rooms of the route in order in your reply and submit the total length in metres (code adds the route \
+itself on a 'Route:' line); if no route exists, submit answer_type "text" with exactly "No route exists."."""
 
 BUILDER_RULES = """
 Setting up a new building from its floor plans (a draft, not saved yet):
@@ -151,6 +169,40 @@ def with_readings(function: Callable, kwargs: dict, depth: int = 0) -> dict:
             "all_readings_agree": len(set(answers)) == 1,
             "readings": readings,
         }
+
+
+def cached(messages: list[dict]) -> list[dict]:
+    """The conversation with a cache mark on its newest user message, so every later step and turn reads the
+    history from the prompt cache instead of paying for it again (the system prompt has the other mark)."""
+    marked = list(messages)
+    for index in range(len(marked) - 1, -1, -1):
+        message = marked[index]
+        if message["role"] == "user" and isinstance(message["content"], str):
+            marked[index] = {"role": "user", "content": [
+                {"type": "text", "text": message["content"], "cache_control": {"type": "ephemeral"}}]}
+            break
+    return marked
+
+
+def position_note(session: Session) -> str | None:
+    """'[Position: the person is in X (id ...), from the phone. Before: ... Following a route to ...]', or None.
+    The id is there because a label can be shared (OSM has nine 'Büro (Floor 1)')."""
+    position = session.position
+    if position is None:
+        return None
+    how = {"phone": "from the phone", "told": "as they said"}.get(position.source, position.source)
+    parts = [f"{POSITION_PREFIX}{position.label} (id {position.space_id}), {how}."]
+    if session.history:
+        parts.append("Before: " + ", ".join(item.label for item in reversed(session.history[-3:])) + ".")
+    progress = session.route_progress()
+    if progress.get("arrived"):
+        parts.append(f"They have arrived at {progress['route_to']}.")
+    elif progress.get("on_route"):
+        parts.append(f"Following your route to {progress['route_to']}: next {progress['next']}, "
+                     f"{progress['spaces_left']} spaces left.")
+    elif progress:
+        parts.append(f"They left the route to {progress['route_to']}.")
+    return " ".join(parts) + "]"
 
 
 def make_tools(session: Session, mode: str = CHAT) -> list:
@@ -234,8 +286,8 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
 
     @tool
     def find_route(
-        start: str,
         destination: str,
+        start: str | None = None,
         step_free: bool = False,
         min_width_m: float = 0.0,
         via: list[str] | None = None,
@@ -244,8 +296,9 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
         """Shortest walking route in metres (the official route model), with the rooms it passes.
 
         Args:
-            start: Where the person is: space id, "Name (Floor name)" or exact room name/number.
             destination: Where they want to go.
+            start: Where they start: space id, "Name (Floor name)" or room name/number. Omit to start
+                where the person is known to be (their position).
             step_free: True to avoid stairs and steps.
             min_width_m: Every door on the route must be at least this wide.
             via: Stops to visit in order between start and destination (multi-stop tour).
@@ -254,35 +307,35 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
         return session.route(start, destination, step_free, min_width_m, via, avoid)
 
     @tool
-    def errand_walk(start: str, asset_type: str, destination: str, step_free: bool = False) -> dict:
+    def errand_walk(asset_type: str, destination: str, start: str | None = None, step_free: bool = False) -> dict:
         """Total walk for an errand: from start to the nearest room (by walking distance) that holds a kind
         of thing, pick it up, then on to the destination.
 
         Args:
-            start: Where the person is.
             asset_type: The kind of thing, e.g. "fire extinguisher", "stove", "desk".
             destination: Where it has to go (find it first, e.g. with largest_room).
+            start: Where they start; omit for where the person is known to be.
             step_free: True when it can't be carried on stairs.
         """
         return session.errand_walk(start, asset_type, destination, step_free)
 
     @tool
-    def nearest_with_asset(start: str, asset_type: str, step_free: bool = False) -> dict:
+    def nearest_with_asset(asset_type: str, start: str | None = None, step_free: bool = False) -> dict:
         """The room holding a kind of thing that is the shortest walk from start.
 
         Args:
-            start: Where the person is.
             asset_type: e.g. "coffee machine", "printer", "cnc mill".
+            start: Where they start; omit for where the person is known to be.
             step_free: True to avoid stairs and steps.
         """
         return session.nearest_with_asset(start, asset_type, step_free)
 
     @tool
-    def nearest_exit(room: str, step_free: bool = False) -> dict:
+    def nearest_exit(room: str | None = None, step_free: bool = False) -> dict:
         """Walk from a room to its nearest entrance.
 
         Args:
-            room: The room.
+            room: The room; omit for where the person is known to be.
             step_free: True to avoid stairs and steps.
         """
         return session.nearest_exit(room, step_free)
@@ -399,15 +452,19 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
         return session.list_doors(room, floor, max_width_m, min_width_m, kind, step_free)
 
     @tool
-    def find_assets(asset_type: str, floor: str | None = None, near: str | None = None) -> dict:
-        """Every thing of one type with its room and position; with `near`, sorted by walking distance.
+    def find_assets(
+        asset_type: str, floor: str | None = None, near: str | None = None, step_free: bool = False
+    ) -> dict:
+        """Every thing of one type with its room and position, sorted by walking distance from `near` (or
+        from where the person is, when known).
 
         Args:
             asset_type: e.g. "printer", "cnc mill", "desk".
             floor: Only this floor.
-            near: A space to sort by walking distance from.
+            near: A space to sort by walking distance from; omit for the person's position.
+            step_free: True to measure the walk without stairs and steps.
         """
-        return session.find_assets(asset_type, floor, near)
+        return session.find_assets(asset_type, floor, near, step_free)
 
     tools = [
         search_building,
@@ -488,7 +545,41 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
             """
             return session.add_door(first, second, width_m, step_free)
 
-        tools += [set_closed, add_door]
+        @tool
+        def move_thing(thing: str, to_room: str) -> dict:
+            """A thing now stands in another room (a facility manager moved a machine, a printer, ...): finding
+            it, routes to it and the map use the new place for the rest of the conversation.
+
+            Args:
+                thing: Its name ("CNC mill H-A1-A"), id, or its kind when the building has only one of it.
+                to_room: The room it is in now.
+            """
+            return session.move_thing(thing, to_room)
+
+        @tool
+        def set_my_position(place: str) -> dict:
+            """Record where the person says they are now ("I'm at the lift", "next to the CNC mill H-A1-A",
+            "I just came in the main entrance"). Routes then start there without asking, and if they are
+            following a route the result says how far along they are or that they left it.
+
+            Args:
+                place: A room ("Quality lab 0.21 (Ground floor)", "the quality lab"), a thing next to them
+                    (its name or id) or an entrance.
+            """
+            return session.set_position(place, source="told")
+
+        @tool
+        def where_am_i_options(floor: str | None = None) -> dict:
+            """Landmarks the person could see near them (rare things, stairs and lifts, entrances, rooms with a
+            unique name), nearest to where they were last first. Use it before asking where they are, and offer
+            2-4 of them as ask_user options. Without a known floor it says to ask the floor first.
+
+            Args:
+                floor: The floor they are on, if known.
+            """
+            return session.where_am_i_options(floor)
+
+        tools += [set_closed, add_door, move_thing, set_my_position, where_am_i_options]
 
     if mode == BENCHMARK:
 
@@ -672,8 +763,10 @@ class BuildingAgent:
         spoken: the turn was said and the answer is read out (short, and at lower effort, so it's quick)."""
         self.session.pending_question = None
         self.session.map_view = None
-        if self.session.here:  # the phone knows where the person is: say so, so the agent doesn't ask
-            user_text = f"{POSITION_PREFIX}{self.session.building.label(self.session.here)}]\n{user_text}"
+        self.session.last_route = None  # a route is shown only if it was found this turn
+        known = position_note(self.session)
+        if known:  # where the person is (and was): said every turn, so the agent never asks again
+            user_text = f"{known}\n{user_text}"
         if spoken:
             user_text += SPOKEN_NOTE
         self.messages.append({"role": "user", "content": user_text})
@@ -683,7 +776,7 @@ class BuildingAgent:
             max_iterations=MAX_TOOL_ITERATIONS,
             system=self.system,
             tools=self.tools,
-            messages=list(self.messages),
+            messages=cached(self.messages),
             output_config={"effort": SPOKEN_EFFORT if spoken else EFFORT[self.mode]},
             betas=[FALLBACK_BETA],
             fallbacks="default",
@@ -711,7 +804,8 @@ class BuildingAgent:
         if self.session.submitted is None:
             text += "\n" + self.ask("You didn't call submit_answer. Call it now with your final answer.")
         line = self.session.answer_line()
-        return f"{text}\n{line}" if line else text
+        route = self.session.route_line()  # before the Answer: line, which the scorer reads and must stay last
+        return "\n".join(part for part in (text, route, line) if part)
 
     def track_usage(self, message: object) -> None:
         usage = message.usage

@@ -3,23 +3,27 @@
   uv run --env-file .env uvicorn server.app:app --reload        # http://localhost:8000/docs
 
 Endpoints
-- GET  /buildings                         buildings this server knows
+- GET  /buildings                         buildings this server knows: id, name, source, split
+- POST /buildings/reload                  look for buildings again (one dropped into data/<split>/<id>/)
 - GET  /buildings/{id}                    everything needed to draw it (floors, spaces, doors, lifts, things)
 - GET  /buildings/{id}/outline            per floor: footprint, elevation, height (the 3D outside view)
 - POST /buildings/{id}/route              a route without the agent: length + lines per floor
 - POST /sessions                          start a conversation with the agent about one building
 - POST /sessions/{id}/chat                one turn: {reply, question, map}
-- POST /sessions/{id}/position             where the person is (from the phone's AR, later)
+- POST /sessions/{id}/position            where the person is: a place, or a tapped point on a floor
+- GET/DELETE /sessions/{id}/position      where they are, were and the route they follow / forget it
 - DELETE /sessions/{id}                   end it
 - POST /imports                           set up a new building from floor plans: a builder conversation
 - POST /imports/{session_id}/save         save it (the agent can also save when the person confirms)
-- /                                       the Finni website (app/dist, built with `npm run build` in app/)
 - /voice/...                              speech in and out with ElevenLabs (voice/README.md); GET /voice is
                                           the hands-free demo page. Needs ELEVENLABS_API_KEY in .env.
 """
 
+import json
+import logging
 import threading
 import uuid
+from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
 
@@ -28,7 +32,7 @@ import os
 import anthropic
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
@@ -37,18 +41,56 @@ from shapely.ops import unary_union
 from navagent.agent import BUILDER, CHAT, BuildingAgent
 from navagent.builder import Draft
 from navagent.tools import Session
-from navcore.engine import Building, EngineError
+from navcore.engine import Building, Constraints, EngineError
 from navcore.plans import PlanError
+from navcore.resolve import AmbiguousSpace, NoSuchSpace
 from voice import app as voice_service
 
 DATA = Path(__file__).resolve().parent.parent / "data"
-WEB = Path(__file__).resolve().parent.parent / "app" / "dist"  # the built website
 MAX_SESSIONS = 200
+CALL_TIMEOUT_S = 90  # one Claude call; a stalled one must not hang the demo for minutes
+DEMO_BUILDING = os.environ.get("NAV_DEMO_BUILDING", "proc-factory-dev-003")
+log = logging.getLogger(__name__)
 
-app = FastAPI(title="Talk to your building", version="1.0")
+
+def warm_up() -> None:
+    """Build the demo building's route graph before anyone asks, so the first route in the demo is fast."""
+    try:
+        load(DEMO_BUILDING).graph(Constraints())
+    except Exception:  # a missing or broken demo building must not stop the server
+        log.exception("Couldn't warm up %s", DEMO_BUILDING)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    threading.Thread(target=warm_up, name="warm-up", daemon=True).start()
+    yield
+
+
+app = FastAPI(title="Talk to your building", version="1.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+# A shared link (QR code) is public: with FINNI_ACCESS_CODE set, the calls that cost credits (conversations,
+# imports, voice) need it, as the header x-finni-code or ?code=. The site and the building data stay open.
+ACCESS_HEADER = "x-finni-code"
+PAID_PATHS = ("/sessions", "/imports", "/voice/")
+
+
+def access_code() -> str:
+    return os.environ.get("FINNI_ACCESS_CODE", "").strip()
+
+
+@app.middleware("http")
+async def require_access_code(request, call_next):
+    code = access_code()
+    if code and request.method in ("POST", "PUT", "DELETE") and request.url.path.startswith(PAID_PATHS):
+        given = request.headers.get(ACCESS_HEADER) or request.query_params.get("code")
+        if given != code:
+            return JSONResponse({"detail": "This needs the access code: open the link from the QR code."}, 401)
+    return await call_next(request)
+
 _sessions: dict[str, BuildingAgent] = {}
+_turns: dict[str, threading.Lock] = {}  # one turn at a time per conversation, so histories never interleave
 _lock = threading.Lock()
 _client: anthropic.Anthropic | None = None
 
@@ -57,7 +99,7 @@ def client() -> anthropic.Anthropic:
     """The Claude client; tests replace this function with a fake."""
     global _client
     if _client is None:
-        _client = anthropic.Anthropic(max_retries=3)
+        _client = anthropic.Anthropic(max_retries=3, timeout=CALL_TIMEOUT_S)
     return _client
 
 
@@ -69,8 +111,17 @@ def building_paths() -> dict[str, Path]:
 def building_path(building_id: str) -> Path:
     path = building_paths().get(building_id)
     if path is None:
+        building_paths.cache_clear()  # maybe it was dropped in after start (the Sunday building)
+        path = building_paths().get(building_id)
+    if path is None:
         raise HTTPException(404, f"Unknown building '{building_id}'.")
     return path
+
+
+@lru_cache(maxsize=1024)
+def building_info(path: Path, modified: float) -> dict:
+    """The building.json's `building` object (name, source, ...); read once per file version."""
+    return json.loads((path / "building.json").read_text(encoding="utf-8"))["building"]
 
 
 @lru_cache(maxsize=32)
@@ -83,10 +134,24 @@ def load(building_id: str) -> Building:
 
 @app.get("/buildings")
 def list_buildings() -> list[dict]:
+    building_paths.cache_clear()  # a glob is cheap; a building dropped in shows up without a restart
     rows = []
     for building_id, path in building_paths().items():
-        rows.append({"id": building_id, "split": path.parent.name})
+        try:
+            info = building_info(path, (path / "building.json").stat().st_mtime)
+        except (OSError, ValueError, KeyError):
+            info = {}  # half-copied or broken: still listed, the detail call says what's wrong
+        rows.append({"id": building_id, "split": path.parent.name, "name": info.get("name") or building_id,
+                     "source": info.get("source") or path.parent.name})
     return rows
+
+
+@app.post("/buildings/reload")
+def reload_buildings() -> dict:
+    """Forget everything read so far and look for buildings again."""
+    forget_buildings()
+    building_info.cache_clear()
+    return {"buildings": len(building_paths())}
 
 
 @app.get("/buildings/{building_id}")
@@ -167,11 +232,19 @@ def start_session(request: SessionRequest) -> dict:
     agent = BuildingAgent(Session(Building.load(building_path(request.building_id))), client(), mode=CHAT)
     session_id = uuid.uuid4().hex
     with _lock:
-        if len(_sessions) >= MAX_SESSIONS:
-            _sessions.pop(next(iter(_sessions)))  # forget the oldest conversation
-        _sessions[session_id] = agent
+        remember(session_id, agent)
     return {"session_id": session_id, "building_id": request.building_id,
             "building_name": agent.session.building.info["name"]}
+
+
+def remember(session_id: str, agent: BuildingAgent) -> None:
+    """Keep a new conversation (call with _lock held)."""
+    if len(_sessions) >= MAX_SESSIONS:
+        oldest = next(iter(_sessions))  # forget the oldest conversation
+        _sessions.pop(oldest)
+        _turns.pop(oldest, None)
+    _sessions[session_id] = agent
+    _turns[session_id] = threading.Lock()
 
 
 def agent_for(session_id: str) -> BuildingAgent:
@@ -187,16 +260,25 @@ def chat(session_id: str, request: ChatRequest) -> dict:
     buttons and a voice front end can read out; the person's pick is sent back as the next `text`.
     `map` (if any) is what to draw: their position, the target and the route lines per floor."""
     agent = agent_for(session_id)
-    try:
-        reply = agent.ask(request.text, spoken=request.spoken)
-    except anthropic.APIStatusError as error:
-        raise HTTPException(502, f"Claude API error {error.status_code}") from error
-    except anthropic.APIConnectionError as error:
-        raise HTTPException(503, "Can't reach the Claude API") from error
-    draft = agent.session.draft
-    if draft is not None and draft.saved_to is not None:
-        forget_buildings()  # the agent saved it: make it visible to GET /buildings and new sessions
-    return {"reply": reply, "question": agent.session.pending_question, "map": agent.session.map_view}
+    with _lock:
+        turn = _turns.setdefault(session_id, threading.Lock())
+    with turn:  # a second message waits for the first answer
+        try:
+            reply = agent.ask(request.text, spoken=request.spoken)
+        except anthropic.APIStatusError as error:
+            raise HTTPException(502, f"Claude API error {error.status_code}") from error
+        except anthropic.APIConnectionError as error:
+            raise HTTPException(503, "Can't reach the Claude API") from error
+        except HTTPException:
+            raise
+        except Exception as error:
+            log.exception("Chat turn failed in session %s", session_id)
+            raise HTTPException(500, f"Finni hit an error answering that ({type(error).__name__}); "
+                                     "please try again.") from error
+        draft = agent.session.draft
+        if draft is not None and draft.saved_to is not None:
+            forget_buildings()  # the agent saved it: make it visible to GET /buildings and new sessions
+        return {"reply": reply, "question": agent.session.pending_question, "map": agent.session.map_view}
 
 
 # ---------- new buildings from floor plans (Level 4) ----------
@@ -234,9 +316,7 @@ def start_import(request: ImportRequest) -> dict:
     agent = BuildingAgent(session, client(), mode=BUILDER)
     session_id = uuid.uuid4().hex
     with _lock:
-        if len(_sessions) >= MAX_SESSIONS:
-            _sessions.pop(next(iter(_sessions)))
-        _sessions[session_id] = agent
+        remember(session_id, agent)
     return {"session_id": session_id, "building_id": building_id, "summary": draft.summary()}
 
 
@@ -254,24 +334,51 @@ def save_import(session_id: str, request: SaveRequest) -> dict:
 
 
 class PositionRequest(BaseModel):
-    space: str = Field(min_length=1, description="where the person is: a space id or 'Name (Floor name)'")
+    space: str | None = Field(None, min_length=1, description="a room ('Name (Floor name)', a name, a number, "
+                                                             "an id), a thing next to them, or an entrance id")
+    floor: str | None = Field(None, description="with x and y: the floor of a point (a tap on the map, AR later)")
+    x: float | None = None
+    y: float | None = None
 
 
 @app.post("/sessions/{session_id}/position")
 def set_position(session_id: str, request: PositionRequest) -> dict:
-    """Where the person is, as the phone worked it out (the AR camera, later). From then on the agent uses it
-    instead of asking, and the map shows it as 'you are here'."""
+    """Where the person is: a place, or a point on a floor (tap on the map; the AR camera later). From then on
+    the agent uses it instead of asking, routes start there, and the map shows it as 'you are here'. If they
+    are following a route, the answer says how far along they are. A name shared by several rooms answers 422
+    with `candidates` to pick from."""
     agent = agent_for(session_id)
     try:
-        return agent.session.set_position(request.space)
+        return agent.session.set_position(request.space, request.floor, request.x, request.y, source="phone")
+    except AmbiguousSpace as error:
+        building = agent.session.building
+        raise HTTPException(422, {"message": str(error), "candidates": [
+            {"space_id": space_id, "label": building.label(space_id)} for space_id in error.candidates]}) from error
+    except NoSuchSpace as error:
+        building = agent.session.building
+        raise HTTPException(422, {"message": str(error), "candidates": [
+            {"space_id": space_id, "label": building.label(space_id)} for space_id in error.suggestions]}) from error
     except EngineError as error:
-        raise HTTPException(422, str(error)) from error
+        raise HTTPException(422, {"message": str(error), "candidates": []}) from error
+
+
+@app.get("/sessions/{session_id}/position")
+def get_position(session_id: str) -> dict:
+    """Where the person is now, where they were, and the route they are following."""
+    return agent_for(session_id).session.position_state()
+
+
+@app.delete("/sessions/{session_id}/position")
+def clear_position(session_id: str) -> dict:
+    """Forget the position (e.g. the person put the phone away and walked off)."""
+    return agent_for(session_id).session.clear_position()
 
 
 @app.delete("/sessions/{session_id}")
 def end_session(session_id: str) -> dict:
     with _lock:
         _sessions.pop(session_id, None)
+        _turns.pop(session_id, None)
     return {"ended": True}
 
 
@@ -286,7 +393,7 @@ if "NAV_BACKEND_URL" not in os.environ:
     def _voice_backend() -> TestClient:
         global _in_process
         if _in_process is None:
-            _in_process = TestClient(app, raise_server_exceptions=False)
+            _in_process = TestClient(app, raise_server_exceptions=False, headers={ACCESS_HEADER: access_code()})
         return _in_process
 
     voice_service.backend = _voice_backend
@@ -300,6 +407,8 @@ def voice_page() -> FileResponse:
 
 # ---------- the website ----------
 
-# Last, so every API path above wins: everything else is the built Finni site (one address for site and API).
+# Last, so every API path above wins: everything else is the built Finni site (`npm run build` in app/), so site
+# and API share one address. Without a build the API works as before.
+WEB = Path(__file__).resolve().parent.parent / "app" / "dist"
 if (WEB / "index.html").exists():
     app.mount("/", StaticFiles(directory=WEB, html=True), name="web")

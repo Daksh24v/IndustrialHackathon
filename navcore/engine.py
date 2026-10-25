@@ -26,6 +26,7 @@ from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import linemerge, nearest_points
 
 OUTSIDE = "outside"
+DEFAULT_FLOOR_HEIGHT_M = 3.0  # for a floor without elevation_m
 DOOR_PREFIX = "door:"
 # Vertical movement in walking metres per metre of height (the floors' elevation_m).
 STAIRS_M_PER_RISE = 2.0
@@ -73,6 +74,8 @@ class WalkArea:
     """The walkable part of a space (15 cm off the walls) and the corners a walk can bend round."""
 
     def __init__(self, polygon: Polygon) -> None:
+        if polygon.geom_type != "Polygon":  # an outline that only repairs into pieces: walk in the largest
+            polygon = max(getattr(polygon, "geoms", [polygon]), key=lambda part: part.area)
         walkable = polygon.buffer(-WALL_CLEARANCE_M)
         if walkable.is_empty or walkable.geom_type != "Polygon":
             walkable = polygon
@@ -152,8 +155,45 @@ class Route:
     hop_lengths: list[float] = field(default_factory=list)
 
 
+def complete(data: dict) -> dict:
+    """Fill in what an unseen building.json might leave out, so one missing field never stops every answer:
+    names from numbers or ids, room types from the kind of space, heights from levels (3 m a floor), empty
+    lists for missing parts. Stairs or lifts whose floors and spaces don't pair up are left out."""
+    data.setdefault("building", {})
+    info = data["building"]
+    info.setdefault("id", "building")
+    info.setdefault("name", info["id"])
+    info.setdefault("source", "unknown")
+    for key in ("floors", "spaces", "openings", "vertical_connectors", "assets"):
+        data[key] = data.get(key) or []
+    for index, floor in enumerate(data["floors"]):
+        floor.setdefault("level", index)
+        level = floor["level"]
+        floor.setdefault("name", "Ground floor" if level == 0 else f"Floor {level}" if level > 0 else f"Basement {-level}")
+        floor.setdefault("elevation_m", DEFAULT_FLOOR_HEIGHT_M * level)
+    for space in data["spaces"]:
+        space.setdefault("type", "room")
+        space.setdefault("room_type", space["type"])
+        space["name"] = space.get("name") or space.get("ref") or space["id"]
+    for opening in data["openings"]:
+        opening.setdefault("kind", "door")
+    connectors = []
+    for index, connector in enumerate(data["vertical_connectors"]):
+        if len(connector.get("floor_ids") or []) != len(connector.get("space_ids") or []):
+            continue
+        connector.setdefault("kind", "stairs")
+        connector.setdefault("name", f"{connector['kind'].capitalize()} {index + 1}")
+        connectors.append(connector)
+    data["vertical_connectors"] = connectors
+    for asset in data["assets"]:
+        asset.setdefault("type", "thing")
+        asset["name"] = asset.get("name") or asset["type"].replace("_", " ")
+    return data
+
+
 class Building:
     def __init__(self, data: dict) -> None:
+        data = complete(data)
         self.data = data
         self.info = data["building"]
         self.floors = {floor["id"]: floor for floor in data["floors"]}
@@ -181,10 +221,11 @@ class Building:
         return self.floors[floor_id]["level"]
 
     def floor_by_level(self, level: int) -> str:
-        for floor in self.floors.values():
-            if floor["level"] == level:
-                return floor["id"]
-        raise EngineError(f"No floor at level {level}.")
+        """The floor at a level; with two (a mezzanine), the lower one."""
+        found = [floor for floor in self.floors.values() if floor["level"] == level]
+        if not found:
+            raise EngineError(f"No floor at level {level}.")
+        return min(found, key=lambda floor: floor["elevation_m"])["id"]
 
     def floor_name(self, floor_id: str) -> str:
         return self.floors[floor_id]["name"]
@@ -407,10 +448,7 @@ class Building:
                 last["then"] = {"kind": connector["kind"], "via": how, "name": connector["name"], "to_floor_id": floor_id}
                 pieces.append({"floor_id": floor_id, "points": [list(point)], "then": None})
                 continue
-            walk = self.walk_area(how).path(self.landing(how, previous, extra_openings),
-                                            self.landing(how, current, extra_openings))
-            last["points"].extend(list(p) for p in walk)
-            last["points"].append(list(point))
+            last["points"].extend(list(p) for p in self.hop_points(previous, current, how, extra_openings)[1:])
         for piece in pieces:  # a door's landing can be the door itself, a centre point its own landing
             cleaned = [piece["points"][0]]
             for point in piece["points"][1:]:
@@ -418,6 +456,17 @@ class Building:
                     cleaned.append(point)
             piece["points"] = cleaned
         return pieces
+
+    def hop_points(
+        self, previous: str, current: str, space_id: str, extra_openings: tuple[dict, ...] = ()
+    ) -> list[tuple[float, float]]:
+        """The walk of one hop through a space, as drawn: from one node, via its landing and the corners the
+        walk bends round, to the next node."""
+        start = self.node_point(previous, extra_openings)[1]
+        end = self.node_point(current, extra_openings)[1]
+        walk = self.walk_area(space_id).path(self.landing(space_id, previous, extra_openings),
+                                             self.landing(space_id, current, extra_openings))
+        return [tuple(start), *(tuple(p) for p in walk), tuple(end)]
 
     def tour(self, stops: list[str], constraints: Constraints = Constraints()) -> list[Route]:
         return [self.route(first, second, constraints) for first, second in itertools.pairwise(stops)]

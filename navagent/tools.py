@@ -1,8 +1,13 @@
 """What the agent can do in one building. Plain functions that return JSON-ready dicts, so they are tested
 without the API; agent.py wraps them as Claude tools. Every fact the agent states comes from here."""
 
+import itertools
 import math
-from dataclasses import dataclass, field
+import re
+import time
+from dataclasses import asdict, dataclass, field
+
+from shapely.geometry import Point
 
 from navcore.engine import (
     DOOR_PREFIX,
@@ -18,9 +23,80 @@ from navcore.engine import (
     EngineError,
     Route,
 )
-from navcore.resolve import asset_types, find_element, find_floor, find_space, find_type, normalise, room_types
+from navcore.resolve import (
+    NoSuchSpace,
+    asset_names,
+    asset_types,
+    find_element,
+    find_floor,
+    find_space,
+    find_type,
+    fold,
+    normalise,
+    room_types,
+)
 
 MAX_RESULTS = 25
+NO_ROUTE = re.compile(r"\bno\b.*\broute\b|\bunreachable\b|\bnot reachable\b|\bcan(?:no|')t be reached\b", re.I)
+NO_ROUTE_ANSWER = "No route exists."
+MAX_HISTORY = 10
+NEAREST_SPACE_M = 3.0  # a tapped point this close to a space (on a wall, in a doorway) counts as in it
+MAX_LANDMARKS = 8
+LANDMARK_MAX_PER_FLOOR = 2  # a kind of thing that occurs at most this often on a floor is a landmark
+MAX_FLOORS_IN_ONE_QUESTION = 4  # more floors than this: ask the floor first, then landmarks
+TURN_REACH_M = 2.0  # a turn is judged over the 2 m before and after a door
+STRAIGHT_DEG = 30.0
+AROUND_DEG = 150.0
+LANDMARK_NEAR_DOOR_M = 3.0  # a rare thing this close to a door is named in the step
+
+
+@dataclass
+class Position:
+    """Where the person is: a space, and the exact point when the phone knows it (a tap, AR later).
+    source: 'phone' (set from outside), 'told' (they said so), 'route' (they confirmed a step)."""
+
+    space_id: str
+    floor_id: str
+    label: str
+    point: tuple[float, float] | None = None
+    source: str = "told"
+    time: float = field(default_factory=time.time)
+
+
+def find_asset_type(building: Building, words: str) -> str:
+    return find_type(words, asset_types(building), asset_names(building))
+
+
+def heading(points: list[tuple[float, float]], at_end: bool) -> tuple[float, float] | None:
+    """Which way someone walks over the last (at_end) or first TURN_REACH_M of a path; None if it has no length."""
+    path = list(reversed(points)) if at_end else points
+    walked = 0.0
+    for first, second in itertools.pairwise(path):
+        walked += math.dist(first, second)
+        if walked >= TURN_REACH_M:
+            break
+    far = second if len(path) > 1 else path[0]
+    vector = (path[0][0] - far[0], path[0][1] - far[1]) if at_end else (far[0] - path[0][0], far[1] - path[0][1])
+    return vector if math.hypot(*vector) > 1e-6 else None
+
+
+def turn_word(incoming: tuple[float, float] | None, outgoing: tuple[float, float] | None) -> str:
+    """'turn left', 'turn right', 'go straight' or 'turn around' (x east, y north: counter-clockwise is left)."""
+    if incoming is None or outgoing is None:
+        return "go"
+    cross = incoming[0] * outgoing[1] - incoming[1] * outgoing[0]
+    dot = incoming[0] * outgoing[0] + incoming[1] * outgoing[1]
+    angle = math.degrees(math.atan2(cross, dot))
+    if abs(angle) < STRAIGHT_DEG:
+        return "go straight"
+    if abs(angle) > AROUND_DEG:
+        return "turn around and go"
+    return "turn left" if angle > 0 else "turn right"
+
+
+def bare_name(name: str) -> str:
+    """A name without its numbers: 'Quality lab 0.21' -> 'quality lab' (for 'is this name unique?')."""
+    return fold(" ".join(word for word in normalise(name).split() if not any(char.isdigit() for char in word)))
 
 
 def rounded(value: float) -> float:
@@ -46,11 +122,26 @@ class Session:
     closed: set[str] = field(default_factory=set)
     new_openings: list[dict] = field(default_factory=list)
     pending_question: dict | None = None  # set by ask_user; the app shows it as option chips
-    here: str | None = None  # where the person is (a space id), when the phone knows it (AR, later)
+    position: Position | None = None  # where the person is now
+    history: list[Position] = field(default_factory=list)  # where they were before, newest last
+    active_route: dict | None = None  # the route they are following: stops, spaces in order, progress
     submitted: dict | None = None  # set by submit_answer in benchmark mode
+    moved: dict[str, dict] = field(default_factory=dict)  # things moved in this conversation, by asset id
     last_route: list[Route] | None = None  # legs of the most recent find_route, for show_on_map
     map_view: dict | None = None  # what the app should draw after this turn (show_on_map)
     draft: object | None = None  # navagent.builder.Draft while a building is being set up from plans
+
+    @property
+    def here(self) -> str | None:
+        return self.position.space_id if self.position else None
+
+    def start_or_here(self, start: str | None) -> str:
+        """The start the agent named, else where the person is known to be."""
+        if start:
+            return find_space(self.building, start)
+        if self.position:
+            return self.position.space_id
+        raise EngineError("Where is the person? Not known yet: call where_am_i_options and ask them once.")
 
     def constraints(
         self, step_free: bool = False, min_width_m: float = 0.0, closed: list[str] | None = None
@@ -118,6 +209,8 @@ class Session:
             "asset_types": sorted(asset_types(building)),
             "closed": sorted(self.closed),
             "added_doors": [opening["id"] for opening in self.new_openings],
+            "moved": [{"id": asset["id"], "name": asset["name"], "room": building.label(asset["space_id"])}
+                      for asset in self.moved.values()],
         }
 
     def search(self, query: str, floor: str | None = None) -> dict:
@@ -158,7 +251,7 @@ class Session:
     def count_assets(self, asset_type: str, floor: str | None = None) -> dict:
         """How many things of exactly one type there are (optionally on one floor), and where."""
         building = self.building
-        wanted = find_type(asset_type, asset_types(building))
+        wanted = find_asset_type(building, asset_type)
         floor_id = find_floor(building, floor) if floor else None
         found = [
             asset
@@ -269,20 +362,30 @@ class Session:
 
     def route(
         self,
-        start: str,
+        start: str | None,
         destination: str,
         step_free: bool = False,
         min_width_m: float = 0.0,
         via: list[str] | None = None,
         avoid: list[str] | None = None,
     ) -> dict:
-        """Shortest route, optionally through stops in order; step-free / minimum door width / avoiding things."""
+        """Shortest route, optionally through stops in order; step-free / minimum door width / avoiding things.
+        No start: from where the person is. The route becomes the one they follow (active_route)."""
         building = self.building
         constraints = self.constraints(step_free, min_width_m, avoid)
-        stops = [find_space(building, start), *[find_space(building, stop) for stop in via or []]]
+        stops = [self.start_or_here(start), *[find_space(building, stop) for stop in via or []]]
         stops.append(find_space(building, destination))
-        legs = building.tour(stops, constraints)
+        try:
+            legs = building.tour(stops, constraints)
+        except EngineError:
+            self.active_route = None  # they asked for another way: the old route is not the one they follow
+            raise
         self.last_route = legs
+        spaces: list[str] = []
+        for leg in legs:
+            spaces += [space for space in leg.space_path if not spaces or spaces[-1] != space]
+        self.active_route = {"stops": stops, "spaces": spaces, "destination": stops[-1], "progress": 0,
+                             "step_free": step_free, "min_width_m": min_width_m}
         return {
             "from": building.label(stops[0]),
             "to": building.label(stops[-1]),
@@ -300,9 +403,12 @@ class Session:
         }
 
     def directions(self, route: Route) -> list[str]:
-        """Followable steps: one line per door into another space and per stair or lift, with the metres."""
+        """Followable steps: one line per door into another space and per stair or lift, with the metres, the
+        turn (left / right / straight, from the walk itself) and a rare thing next to the door when there is
+        one ("by the Air compressor H-C5")."""
         building = self.building
         openings = {opening["id"]: opening for opening in [*building.openings.values(), *self.new_openings]}
+        added = tuple(self.new_openings)
         steps = []
         walked = 0.0
         following = [*route.hops[1:], None]
@@ -320,25 +426,45 @@ class Session:
                     steps.append(f"Walk about {walked:.0f} m and leave the building through the entrance.")
                     walked = 0.0
                 elif after[2] in building.spaces and after[2] != how:
+                    incoming = heading(building.hop_points(previous, current, how, added), at_end=True)
+                    outgoing = heading(building.hop_points(current, after[1], after[2], added), at_end=False)
                     passage = "through the door" if opening["kind"] == "door" else "through the opening"
-                    steps.append(f"Walk about {walked:.0f} m {passage} into {building.spaces[after[2]]['name']}.")
+                    near = self.thing_near(opening)
+                    landmark = f" (by the {near})" if near else ""
+                    steps.append(f"Walk about {walked:.0f} m, then {turn_word(incoming, outgoing)} "
+                                 f"{passage} into {building.spaces[after[2]]['name']}{landmark}.")
                     walked = 0.0
         if not route.nodes[-1].startswith(DOOR_PREFIX):
             steps.append(f"Walk about {walked:.0f} m. You have arrived at {building.label(route.nodes[-1])}.")
         return steps
 
-    def nearest_exit(self, room: str, step_free: bool = False) -> dict:
-        """Walk from a room out of the building through its nearest entrance, with this conversation's changes."""
+    def thing_near(self, opening: dict) -> str | None:
+        """The rare thing (at most 2 of its kind on the floor) closest to a door, if within 3 m: a landmark."""
         building = self.building
-        space_id = find_space(building, room)
+        floor_id = opening["floor_id"]
+        kinds: dict[str, int] = {}
+        for asset in building.assets.values():
+            if asset["floor_id"] == floor_id:
+                kinds[asset["type"]] = kinds.get(asset["type"], 0) + 1
+        near = [(math.dist(asset["position"], opening["position"]), asset["name"]) for asset in building.assets.values()
+                if asset["floor_id"] == floor_id and kinds[asset["type"]] <= LANDMARK_MAX_PER_FLOOR
+                and set(opening["space_ids"]) & {asset["space_id"]}]
+        distance, name = min(near, default=(math.inf, None))
+        return name if distance <= LANDMARK_NEAR_DOOR_M else None
+
+    def nearest_exit(self, room: str | None = None, step_free: bool = False) -> dict:
+        """Walk from a room (default: where the person is) out of the building through its nearest entrance,
+        with this conversation's changes."""
+        building = self.building
+        space_id = self.start_or_here(room)
         route = building.exit_route(space_id, self.constraints(step_free))
         self.last_route = [route]
         return {"from": building.label(space_id), "walk_m": rounded(route.length_m), "steps": self.directions(route)}
 
-    def nearest_with_asset(self, start: str, asset_type: str, step_free: bool = False) -> dict:
+    def nearest_with_asset(self, start: str | None, asset_type: str, step_free: bool = False) -> dict:
         building = self.building
-        start_id = find_space(building, start)
-        wanted = find_type(asset_type, asset_types(building))
+        start_id = self.start_or_here(start)
+        wanted = find_asset_type(building, asset_type)
         space_id, distance = building.nearest_space_with_asset(start_id, wanted, self.constraints(step_free))
         return {
             "asset_type": wanted,
@@ -347,11 +473,12 @@ class Session:
             "walk_m": rounded(distance),
         }
 
-    def errand_walk(self, start: str, asset_type: str, destination: str, step_free: bool = False) -> dict:
-        """Walk from start to the nearest room holding an asset type, then on to the destination."""
+    def errand_walk(self, start: str | None, asset_type: str, destination: str, step_free: bool = False) -> dict:
+        """Walk from start (default: where the person is) to the nearest room holding an asset type, then on
+        to the destination."""
         building = self.building
-        start_id, target_id = find_space(building, start), find_space(building, destination)
-        wanted = find_type(asset_type, asset_types(building))
+        start_id, target_id = self.start_or_here(start), find_space(building, destination)
+        wanted = find_asset_type(building, asset_type)
         constraints = self.constraints(step_free)
         via, first_leg = building.nearest_space_with_asset(start_id, wanted, constraints)
         total = building.errand(start_id, wanted, target_id, constraints)[1]
@@ -423,6 +550,7 @@ class Session:
             self.closed.add(element_id)
         else:
             self.closed.discard(element_id)
+        self.show_change(self.floor_of(element_id))
         return {"element_id": element_id, "closed": closed, "all_closed": sorted(self.closed)}
 
     def add_door(self, first: str, second: str, width_m: float = 0.9, step_free: bool = True) -> dict:
@@ -430,7 +558,63 @@ class Session:
         door = building.door_between(find_space(building, first), find_space(building, second))
         door.update(width_m=width_m, step_free=step_free, id=f"{door['floor_id']}-O-new{len(self.new_openings) + 1}")
         self.new_openings.append(door)
+        self.show_change(door["floor_id"])
         return {"added": door}
+
+    def move_thing(self, thing: str, to_room: str) -> dict:
+        """A thing (machine, printer, ...) now stands in another room: from now on finding it, routing to it and
+        the map use the new place. It stands at the room's centre."""
+        building = self.building
+        asset = self.find_thing(thing)
+        space_id = find_space(building, to_room)
+        before = building.label(asset["space_id"])
+        asset.update(space_id=space_id, floor_id=building.spaces[space_id]["floor_id"],
+                     position=[round(value, 3) for value in building.anchor(space_id)])
+        self.moved[asset["id"]] = asset
+        self.show_change(asset["floor_id"])
+        return {"moved": asset["name"], "from": before, "to": building.label(space_id)}
+
+    def find_thing(self, thing: str) -> dict:
+        """One thing by id, by name ('CNC mill H-A1-A'), or by kind when the building has only one of it."""
+        building = self.building
+        if thing in building.assets:
+            return building.assets[thing]
+        named = [asset for asset in building.assets.values() if fold(asset["name"]) == fold(thing)]
+        if len(named) == 1:
+            return named[0]
+        kind = find_asset_type(building, thing)
+        of_kind = [asset for asset in building.assets.values() if asset["type"] == kind]
+        if len(of_kind) == 1:
+            return of_kind[0]
+        listed = "; ".join(f"{asset['name']} in {building.label(asset['space_id'])}" for asset in of_kind[:8])
+        raise EngineError(f"There are {len(of_kind)} of those: {listed}. Which one?")
+
+    def floor_of(self, element_id: str) -> str | None:
+        building = self.building
+        if element_id in building.spaces:
+            return building.spaces[element_id]["floor_id"]
+        if element_id in building.openings:
+            return building.openings[element_id]["floor_id"]
+        if element_id in building.connectors:
+            return building.connectors[element_id]["floor_ids"][0]
+        return None
+
+    def changes(self) -> dict | None:
+        """What this conversation changed, for the map: closed doors, stairs, lifts and rooms, new doors, moved
+        things. None when nothing changed."""
+        if not (self.closed or self.new_openings or self.moved):
+            return None
+        return {
+            "closed": sorted(self.closed),
+            "new_doors": [{"id": door["id"], "floor_id": door["floor_id"], "position": door["position"],
+                           "width_m": door.get("width_m")} for door in self.new_openings],
+            "moved": [{"asset_id": asset["id"], "label": asset["name"], "space_id": asset["space_id"],
+                       "floor_id": asset["floor_id"], "position": asset["position"]} for asset in self.moved.values()],
+        }
+
+    def show_change(self, floor_id: str | None) -> None:
+        """A change shows on the map at once, on its floor (the agent can still show a route after it)."""
+        self.show_on_map(floor=floor_id) if floor_id else self.show_on_map()
 
     # ---------- general queries (for questions no specific tool covers) ----------
 
@@ -545,18 +729,22 @@ class Session:
             "doors": rows[: MAX_RESULTS * 2],
         }
 
-    def find_assets(self, asset_type: str, floor: str | None = None, near: str | None = None) -> dict:
-        """Every thing of one type with its room and position; with `near`, sorted by walking distance."""
+    def find_assets(
+        self, asset_type: str, floor: str | None = None, near: str | None = None, step_free: bool = False
+    ) -> dict:
+        """Every thing of one type with its room and position; sorted by walking distance (with this
+        conversation's closures and new doors) from `near`, or from where the person is when that's known."""
         building = self.building
-        wanted = find_type(asset_type, asset_types(building))
+        wanted = find_asset_type(building, asset_type)
         floor_id = find_floor(building, floor) if floor else None
-        distances = building.distances_from(find_space(building, near)) if near else {}
+        origin = find_space(building, near) if near else self.here
+        distances = building.distances_from(origin, self.constraints(step_free)) if origin else {}
         found = [
             asset
             for asset in building.assets.values()
             if asset["type"] == wanted and (floor_id is None or asset["floor_id"] == floor_id)
         ]
-        if near:
+        if origin:
             found.sort(key=lambda asset: distances.get(asset["space_id"], math.inf))
         return {
             "asset_type": wanted,
@@ -574,12 +762,187 @@ class Session:
             ],
         }
 
-    def set_position(self, place: str) -> dict:
-        """Where the person is, as the phone determined it (AR camera, later): a space name or id."""
-        space_id = find_space(self.building, place)
-        self.here = space_id
-        return {"space_id": space_id, "label": self.building.label(space_id),
-                "floor_id": self.building.spaces[space_id]["floor_id"]}
+    # ---------- where the person is ----------
+
+    def set_position(
+        self,
+        place: str | None = None,
+        floor: str | None = None,
+        x: float | None = None,
+        y: float | None = None,
+        source: str = "phone",
+    ) -> dict:
+        """Where the person is: a room, a thing next to them ('the CNC mill H-A1-A'), an entrance, or a point
+        on a floor (a tap on the map, AR later). The old position goes into the history; if they are following
+        a route, it says how far along they are, or that they left it."""
+        building = self.building
+        if x is not None and y is not None:
+            if not floor:
+                raise EngineError("A point needs its floor.")
+            point = (float(x), float(y))
+            space_id = self.space_at(find_floor(building, floor), point)
+        elif place:
+            space_id, point = self.place_of(place)
+        else:
+            raise EngineError("Say where: a room, a thing, an entrance, or a floor with x and y.")
+        if self.position and self.position.space_id != space_id:
+            self.history = [*self.history, self.position][-MAX_HISTORY:]
+        self.position = Position(space_id, building.spaces[space_id]["floor_id"], building.label(space_id),
+                                 point, source)
+        return {**self.position_summary(self.position), **self.route_progress()}
+
+    def clear_position(self) -> dict:
+        if self.position:
+            self.history = [*self.history, self.position][-MAX_HISTORY:]
+        self.position = None
+        return {"position": None}
+
+    def space_at(self, floor_id: str, point: tuple[float, float]) -> str:
+        """The space a point on a floor is in (the smallest, if outlines overlap), else the nearest within 3 m."""
+        building = self.building
+        spaces = building.spaces_on(floor_id)
+        inside = [space["id"] for space in spaces if building.polygons[space["id"]].covers(Point(point))]
+        if inside:
+            return min(inside, key=building.area)
+        distance, nearest = min(((building.polygons[space["id"]].distance(Point(point)), space["id"])
+                                 for space in spaces), default=(math.inf, None))
+        if nearest is None or distance > NEAREST_SPACE_M:
+            raise EngineError(f"That point is not inside the building on {building.floor_name(floor_id)}.")
+        return nearest
+
+    def place_of(self, place: str) -> tuple[str, tuple[float, float] | None]:
+        """A place someone names: a space, else a thing (by id or name) or an entrance, with its exact point."""
+        building = self.building
+        try:
+            return find_space(building, place), None
+        except NoSuchSpace as error:
+            missed = error
+        wanted = fold(place)
+        assets = [asset for asset in building.assets.values()
+                  if place == asset["id"] or wanted == fold(asset["name"])]
+        if len(assets) == 1:
+            return assets[0]["space_id"], tuple(assets[0]["position"])
+        entrances = [opening for opening in building.openings.values() if OUTSIDE in opening["space_ids"]]
+        named = [opening for opening in entrances if place == opening["id"]]
+        if not named and wanted in {"entrance", "main entrance", "eingang", "front door", "the entrance"}:
+            named = entrances if len(entrances) == 1 else []
+            if len(entrances) > 1:
+                raise EngineError(f"There are {len(entrances)} entrances: " + "; ".join(
+                    f"{opening['id']} into {building.label(self.inside_of(opening))}" for opening in entrances[:8])
+                    + ". Which one?")
+        if named:
+            return self.inside_of(named[0]), tuple(named[0]["position"])
+        raise missed
+
+    @staticmethod
+    def inside_of(opening: dict) -> str:
+        return next(space_id for space_id in opening["space_ids"] if space_id != OUTSIDE)
+
+    def position_summary(self, position: Position) -> dict:
+        summary = {key: value for key, value in asdict(position).items() if key != "time"}
+        summary["floor"] = self.building.floor_name(position.floor_id)
+        return summary
+
+    def route_progress(self) -> dict:
+        """How far along the active route the person is; moves the progress forward when they confirm a step."""
+        route, position = self.active_route, self.position
+        if not route or not position:
+            return {}
+        spaces, building = route["spaces"], self.building
+        destination = building.label(route["destination"])
+        if position.space_id not in spaces:
+            return {"on_route": False, "route_to": destination,
+                    "note": "Not on the route any more: find a new route from here."}
+        step = max(index for index, space_id in enumerate(spaces) if space_id == position.space_id)
+        route["progress"] = max(route["progress"], step)
+        following = spaces[step + 1] if step + 1 < len(spaces) else None
+        return {"on_route": True, "route_to": destination, "arrived": position.space_id == route["destination"],
+                "next": building.label(following) if following else None,
+                "spaces_left": len(spaces) - 1 - step}
+
+    def position_state(self) -> dict:
+        """Everything known about where the person is: now, before, and the route they are following."""
+        route = self.active_route
+        return {
+            "position": self.position_summary(self.position) if self.position else None,
+            "history": [{"label": item.label, "source": item.source} for item in reversed(self.history)],
+            "active_route": {
+                "to": self.building.label(route["destination"]),
+                "spaces": [self.building.label(space_id) for space_id in route["spaces"]],
+                "progress": route["progress"],
+            } if route else None,
+        }
+
+    def where_am_i_options(self, floor: str | None = None) -> dict:
+        """Landmarks to ask 'what's near you?' with, taken from this building's own data: things that are rare
+        on the floor, stairs and lifts, entrances, rooms with a name nothing else has. Nearest to the last known
+        position first, else the rarest first. With the floor unknown and up to 4 floors, the landmarks span
+        the floors (each says its floor), so one question finds floor and place together."""
+        building = self.building
+        floor_id = find_floor(building, floor) if floor else self.position.floor_id if self.position else None
+        last = self.position or (self.history[-1] if self.history else None)
+        distances = building.distances_from(last.space_id, self.constraints()) if last else {}
+        how = "Ask once, 'What can you see near you?', with 2-4 of these as options."
+        ordered = sorted(building.floors.values(), key=lambda item: item["level"])
+        if floor_id is None and len(ordered) > 1:
+            if len(ordered) > MAX_FLOORS_IN_ONE_QUESTION:
+                return {"ask_first": "Which floor are you on?", "floors": [item["name"] for item in ordered]}
+            per_floor = max(2, MAX_LANDMARKS // len(ordered))
+            landmarks = [landmark for item in ordered
+                         for landmark in self.floor_landmarks(item["id"], distances)[:per_floor]]
+            return {"floor": None, "last_known": last.label if last else None, "landmarks": landmarks,
+                    "how_to_ask": how + " Each option names its floor, so this one question also finds the floor."}
+        floor_id = floor_id or ordered[0]["id"]
+        return {
+            "floor": building.floor_name(floor_id),
+            "last_known": last.label if last else None,
+            "landmarks": self.floor_landmarks(floor_id, distances)[:MAX_LANDMARKS],
+            "how_to_ask": how,
+        }
+
+    def floor_landmarks(self, floor_id: str, distances: dict[str, float]) -> list[dict]:
+        """Every landmark on one floor, nearest (by walk from the last known place) first, else rarest first."""
+        building = self.building
+        in_building: dict[str, int] = {}
+        on_floor: dict[str, int] = {}
+        for asset in building.assets.values():
+            in_building[asset["type"]] = in_building.get(asset["type"], 0) + 1
+            if asset["floor_id"] == floor_id:
+                on_floor[asset["type"]] = on_floor.get(asset["type"], 0) + 1
+        landmarks, seen = [], set()
+        for asset in building.assets.values():
+            if asset["floor_id"] != floor_id or on_floor[asset["type"]] > LANDMARK_MAX_PER_FLOOR:
+                continue
+            if (asset["type"], asset["space_id"]) in seen:
+                continue
+            seen.add((asset["type"], asset["space_id"]))
+            landmarks.append({"kind": "thing", "label": asset["name"], "in": building.label(asset["space_id"]),
+                              "space_id": asset["space_id"], "rarity": in_building[asset["type"]]})
+        for connector in building.connectors.values():
+            for stop_floor, stop_space in zip(connector["floor_ids"], connector["space_ids"]):
+                if stop_floor == floor_id:
+                    landmarks.append({"kind": connector["kind"], "label": connector["name"],
+                                      "in": building.label(stop_space), "space_id": stop_space, "rarity": 1})
+        for opening in building.openings.values():
+            if OUTSIDE in opening["space_ids"] and opening["floor_id"] == floor_id:
+                inside = self.inside_of(opening)
+                landmarks.append({"kind": "entrance", "label": f"Entrance into {building.spaces[inside]['name']}",
+                                  "in": building.label(inside), "space_id": inside, "rarity": 1})
+        bare_names: dict[str, int] = {}
+        for space in building.spaces.values():
+            bare_names[bare_name(space["name"])] = bare_names.get(bare_name(space["name"]), 0) + 1
+        for space in building.spaces_on(floor_id):
+            bare = bare_name(space["name"])
+            if bare and bare_names[bare] == 1 and space["type"] in ("room", "hall"):
+                landmarks.append({"kind": "room", "label": space["name"], "in": building.label(space["id"]),
+                                  "space_id": space["id"], "rarity": 1})
+        for landmark in landmarks:
+            walk = distances.get(landmark["space_id"])
+            landmark["walk_m"] = rounded(walk) if walk is not None else None
+            landmark["floor"] = building.floor_name(floor_id)
+        landmarks.sort(key=lambda item: (item["walk_m"] if item["walk_m"] is not None else math.inf,
+                                         item["rarity"], item["label"]))
+        return [{key: value for key, value in item.items() if key != "rarity"} for item in landmarks]
 
     # ---------- map ----------
 
@@ -591,15 +954,18 @@ class Session:
         last computed route as lines per floor. Nothing is guessed: positions and lines come from the data."""
         building = self.building
         view: dict = {"you_are_here": None, "target": None, "route": None, "focus_floor_id": None}
-        you_are_here = you_are_here or self.here
         if you_are_here:
-            space_id = find_space(building, you_are_here)
-            x, y = building.anchor(space_id)
+            space_id, point = self.place_of(you_are_here)
+        elif self.position:
+            space_id, point = self.position.space_id, self.position.point
+        else:
+            space_id = None
+        if space_id:
+            x, y = point or building.anchor(space_id)
             view["you_are_here"] = {"space_id": space_id, "label": building.label(space_id),
                                     "floor_id": building.spaces[space_id]["floor_id"], "position": [x, y]}
         if target:
-            asset = building.assets.get(target) or next(
-                (a for a in building.assets.values() if normalise(a["name"]) == normalise(target)), None)
+            asset = self.target_asset(target)
             if asset:
                 view["target"] = {"asset_id": asset["id"], "space_id": asset["space_id"], "label": asset["name"],
                                   "floor_id": asset["floor_id"], "position": list(asset["position"])}
@@ -621,9 +987,28 @@ class Session:
             first = view["you_are_here"] or (view["route"] and {"floor_id": view["route"]["pieces"][0]["floor_id"]}) \
                 or view["target"]
             view["focus_floor_id"] = first["floor_id"] if first else None
+        view["changes"] = self.changes()
         self.map_view = view
         return {"shown": True, "focus_floor": building.floor_name(view["focus_floor_id"])
                 if view["focus_floor_id"] else None}
+
+    def target_asset(self, target: str) -> dict | None:
+        """A thing to show: by id or name, else the nearest thing of that type ('coffee machine') to the person,
+        None when the target is a room."""
+        building = self.building
+        asset = building.assets.get(target) or next(
+            (item for item in building.assets.values() if fold(item["name"]) == fold(target)), None)
+        if asset:
+            return asset
+        try:
+            find_space(building, target)
+            return None
+        except NoSuchSpace:
+            pass
+        wanted = find_asset_type(building, target)
+        found = [item for item in building.assets.values() if item["type"] == wanted]
+        distances = building.distances_from(self.here, self.constraints()) if self.here else {}
+        return min(found, key=lambda item: (distances.get(item["space_id"], math.inf), item["id"]))
 
     # ---------- conversation ----------
 
@@ -662,10 +1047,26 @@ class Session:
         elif answer_type == "text":
             if not text or not text.strip():
                 raise EngineError("A text answer needs the text.")
-            self.submitted = {"type": "text", "text": " ".join(text.split())}
+            text = " ".join(text.split())
+            if NO_ROUTE.search(text):  # one fixed wording, without room numbers a number-reading scorer could misread
+                text = NO_ROUTE_ANSWER
+            self.submitted = {"type": "text", "text": text}
         else:
             raise EngineError("answer_type must be 'number', 'room' or 'text'.")
         return {"recorded": self.submitted, "answer_line": self.answer_line()}
+
+    def route_line(self) -> str | None:
+        """'Route: A (Floor) → B (Floor) → … | spaces: id, id | doors and stairs: id, id' for the route found
+        last (all legs of a tour), so a grader can check the route itself; None if no route was found."""
+        if not self.last_route:
+            return None
+        spaces: list[str] = []
+        elements: list[str] = []
+        for leg in self.last_route:
+            spaces += [space for space in leg.space_path if not spaces or spaces[-1] != space]
+            elements += leg.element_path
+        names = " → ".join(self.building.label(space) for space in spaces if space in self.building.spaces)
+        return f"Route: {names} | spaces: {', '.join(spaces)} | doors and stairs: {', '.join(elements)}"
 
     def answer_line(self) -> str | None:
         """'Answer: 42.17' or 'Answer: Office 0.21, 18.40 m²', exactly as the scorer expects."""

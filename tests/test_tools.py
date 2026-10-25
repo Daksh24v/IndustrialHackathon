@@ -71,7 +71,7 @@ def test_claude_tools_have_schemas_and_turn_errors_into_tool_errors(session: Ses
     tools = {tool.name: tool for tool in make_tools(session)}
     assert {"find_route", "list_rooms", "room_details", "reachable_rooms", "what_if_door"} <= set(tools)
     schema = tools["find_route"].to_dict()["input_schema"]
-    assert schema["required"] == ["start", "destination"]
+    assert schema["required"] == ["destination"]  # no start: from where the person is
     assert json.loads(tools["list_rooms"].call({"floor": "Ground floor"}))["count"] == 3
     with pytest.raises(ToolError):
         tools["room_details"].call({"room": "nowhere"})

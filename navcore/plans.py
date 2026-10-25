@@ -481,3 +481,48 @@ def scale(building: dict, factor: float) -> dict:
     for asset in building["assets"]:
         asset["position"] = [round(v * factor, 4) for v in asset["position"]]
     return building
+
+
+def enrich_from_equipment(building: dict, rows: list[dict]) -> list[str]:
+    """Fill in what plans can't say from an equipment list (equipment.csv): every row names its room (number,
+    name, type, floor level) and the thing in it. Rooms are matched by floor level and room number, else by
+    name; a thing keeps its x/y when that lands inside its room, else it stands at the room's centre (the
+    plan's frame can be shifted). Returns notes on what was filled in."""
+    levels = {floor["id"]: floor["level"] for floor in building["floors"]}
+    by_ref = {(levels[space["floor_id"]], str(space.get("ref") or "").strip()): space for space in building["spaces"]}
+    by_name = {(levels[space["floor_id"]], space["name"].strip().lower()): space for space in building["spaces"]}
+    named, assets = set(), []
+    for row in rows:
+        try:
+            level = int(float(row.get("floor_level") or ""))
+        except ValueError:
+            continue
+        space = by_ref.get((level, str(row.get("room_ref") or "").strip())) or by_name.get(
+            (level, str(row.get("space_name") or "").strip().lower()))
+        if space is None:
+            continue
+        if space["id"] not in named:
+            named.add(space["id"])
+            space["name"] = row.get("space_name") or space["name"]
+            space["room_type"] = row.get("room_type") or space["room_type"]
+        polygon = Polygon(space["polygon"]).buffer(0)
+        try:
+            point = Point(float(row["x_m"]), float(row["y_m"]))
+        except (KeyError, ValueError):
+            point = None
+        if point is None or not polygon.contains(point):
+            point = polygon.representative_point()
+        assets.append({
+            "id": row.get("asset_id") or f"{space['id']}-A{len(assets) + 1:05d}",
+            "name": row.get("name") or row.get("type", "thing"),
+            "category": row.get("category") or "equipment",
+            "type": row.get("type") or "thing",
+            "space_id": space["id"],
+            "floor_id": space["floor_id"],
+            "position": [round(point.x, 3), round(point.y, 3)],
+            "footprint": {"width_m": float(row.get("width_m") or 0.5), "depth_m": float(row.get("depth_m") or 0.5),
+                          "rotation_deg": float(row.get("rotation_deg") or 0.0)},
+            "source": "equipment.csv",
+        })
+    building["assets"] = assets
+    return [f"From the equipment list: names and room types for {len(named)} rooms, {len(assets)} things placed."]

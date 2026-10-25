@@ -1,8 +1,19 @@
 > **Our project.** `navcore/` is the engine (route graph and geometry), `navagent/` the Claude agent that
 > reads every question and answers with the engine's tools. See [BENCHMARK.md](BENCHMARK.md) for the
-> one-command run. Tests: `uv run pytest` (free, offline); `--holdout` checks the locked hold-out buildings,
+> one-command run, [ARCHITECTURE.md](ARCHITECTURE.md) for the architecture and tech stack, and
+> [LOCATING.md](LOCATING.md) for how we find where the person and things are. Tests: `uv run pytest` (free, offline); `--holdout` checks the locked hold-out buildings,
 > `--live` runs the paid API tests. Chat with a building:
 > `uv run --env-file .env python -m navagent data/dev/proc-factory-dev-003`.
+>
+> **The website (FINNI).** Put `ANTHROPIC_API_KEY` and `ELEVENLABS_API_KEY` in `.env` (see `.env.example`), then
+> `cd app && npm install && npm run build`, and from the repo root
+> `uv run --env-file .env uvicorn server.app:app --host 0.0.0.0 --port 8000`; open http://localhost:8000. It opens
+> map-first, like a map app: the building as a floor stack from the first second, a search bar to ask FINNI (typing,
+> the mic or a quick search such as "Toilets"), the route with what FINNI understood and steps to follow, and
+> **Start** to walk it step by step; views in 3D, bird's eye or flat 2D, turned all the way round.
+> To share it with a public HTTPS link (QR code, mic on phones): `scripts/share.sh`. Details: `app/README.md`,
+> the demo script: [DEMO.md](DEMO.md).
+>
 > The challenge brief from the student kit (version 1.1.0, see [KIT_CHANGELOG.md](KIT_CHANGELOG.md)) follows unchanged.
 
 # Track 01 — Google Maps for Every Building: student kit

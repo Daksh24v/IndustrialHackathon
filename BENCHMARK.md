@@ -12,12 +12,28 @@ uv run --env-file .env python -m navagent.benchmark <input> --out <answers.csv>
 | Input | Example |
 |---|---|
 | A split directory with `<building_id>/questions.jsonl` | `data/test` |
-| One building directory with `building.json` and `questions.jsonl` (the Sunday building) | `data/sunday/<building_id>` |
-| A `questions.csv` or `.jsonl` with `id`, `building_id`, `question`, next to the building directories | `data/test/questions.csv` |
+| One building directory with `building.json` and a questions file (the Sunday building) | `data/sunday/<building_id>` |
+| A questions `.csv` or `.jsonl` next to the building directories | `data/test/questions.csv` |
+| One building directory with **only floor plans** (`floor_*.svg`, no `building.json`) | built first, see below |
+
+It takes what it is given:
+- the question id from `id`, `question_id` or `qid` (else `<building>-Q001` …), the text from `question`,
+  `text` or `prompt`;
+- any `*question*.jsonl` / `.csv` file name (`questions.jsonl` first);
+- the building by `building_id`, by the id inside a `building.json`, or the only building there is. A
+  `building_id` that isn't there is an error row for that question, never another building;
+- **plans only:** the building is built from `floor_*.svg` once, without a conversation (`navcore/plans.py`),
+  names, room types and things are filled in from `equipment.csv` when it is there, and it is saved as
+  `building.json` (the run prints what was assumed: floor heights 3.5 m, doors 0.9 m and step-free).
 
 Options: `--per-kind N` (first N questions of each kind), `--buildings <file>` (only these building ids),
-`--double-check` (each question twice, a third run on disagreement), `--resume` (keep answers already in
-`--out`; an interrupted run never pays twice). The CSV is rewritten after every question.
+`--double-check` (each question twice, a third run on disagreement; a run that fails doesn't spoil the
+others), `--resume` (keep the answers already in `--out`, answer the rest **and every error row or row without
+an `Answer:` line again**; an interrupted run never pays twice), `--force` (replace an `--out` file that has
+more answers than this run: without it a short test run refuses to overwrite a full submission). A question that
+fails becomes an error row, never a stopped run, and an answer key the scorer doesn't know shows `?` instead of
+stopping the run. The CSV is replaced after every question (written aside, then moved, so stopping the run never
+leaves half a file). Each Claude call times out after 180 s and is retried.
 
 ## How it answers
 
@@ -27,6 +43,10 @@ Options: `--per-kind N` (first N questions of each kind), `--buildings <file>` (
   shared walls, stacking, reachability, what-if doors. The tools return its numbers.
 - **The `Answer:` line is written by code** from Claude's `submit_answer` call (a number copied from a tool
   result, or a room id; room areas come from the engine), so the format the scorer needs never depends on prose.
+- **Routes are written out by code too:** for a route or tour, a `Route:` line before the `Answer:` line lists
+  the rooms in order with their ids and the doors, stairs and lifts used (`Route: A (Floor) → B (Floor) … |
+  spaces: … | doors and stairs: …`); the `Answer:` line stays last with the length. A route that doesn't
+  exist is always `Answer: No route exists.`
 - Every question's full tool log is saved to `agent_output/logs/<question_id>.json`.
 
 ## Hold-out
@@ -37,21 +57,24 @@ checks the hold-out and is run only at checkpoints. The kit's `data/test` is a s
 
 ## Results
 
-All live runs use the Claude agent (benchmark mode) with the engine's tools.
+All live runs use the Claude agent (benchmark mode) with the engine's tools, scored against the kit 1.1.0
+answers (the organisers' route rules: door to door, stairs and lifts by height, no way round the outside).
 
-| Run (date 2026-10-24) | Buildings | Correct |
+| Run (date 2026-10-24, kit 1.1.0) | Buildings | Correct |
 |---|---|---|
-| Smoke test, one question per kind | build | 9 / 9 |
 | Benchmark questions, 3 per kind | build | 24 / 24 |
 | Warm-up questions (where is, how many, routes, step-free, closures, tours) | build | 18 / 18 |
 | Both sets reworded by Claude (casual, terse, formal, roundabout) | build | 41 / 41 |
-| **Hold-out, run once, nothing tuned on it** | **hold-out** | **34 / 36 (94%)** |
-| After the same-name fix and definitions-as-parameters: benchmark, warm-up, reworded | build | 83 / 83 |
 | Novel questions the dataset never asks (16 kinds, `evals/novel.py`) | build | 31 / 31 |
+| **Hold-out, run once, nothing tuned on it** | **hold-out** | **35 / 36 (97%)** |
 
-The two hold-out misses (`osm-way37850565-H03`, `osm-way52060470-H06`) name a room whose name exists more
-than once on its floor ("Büro" three times, "Genusswerk" twice), so the question doesn't say which one is
-meant. This was known before the split (see the Phase 1 notes); the hold-out questions themselves were not read.
+Build sets: 114/114, $4.46. After the code-written `Route:` line and the fixed no-route answer were added, the benchmark and warm-up sets were run again: 24/24 and 18/18 ($2.20). Hold-out: benchmark 23/24 and warm-up 12/12, $1.59; the one miss is a
+room-stacked question, and as for every hold-out run its questions were not read and nothing was changed
+for it. The engine alone (`tests/test_dataset.py`, free) reproduces every route, step-free route, closure,
+tour, errand, what-if and reachability answer of all build and hold-out buildings to the centimetre.
+
+Before kit 1.1.0 (old route rules, old answers) the same sets gave build 83/83 and hold-out 34/36; those
+numbers are kept only for the record.
 
 Offline checks (`uv run pytest`, free): tools + code-written answer lines on every build-set benchmark
 question; warm-up routes exact to the centimetre; an independent router; invariance under renaming,
@@ -61,24 +84,38 @@ Cost: about $0.03–0.04 per question (prompt caching on).
 
 ## The test-set submission
 
-`submission/team_answers.csv` (145 answers) was made on 2026-10-24 by the Claude agent with
+`submission/team_answers.csv` (145 answers) was made on 2026-10-24, after the kit 1.1.0 route rules, by the
+Claude agent with
 
 ```bash
-uv run --env-file .env python -m navagent.benchmark data/test --out agent_output/test_run.csv --resume
+uv run --env-file .env python -m navagent.benchmark data/test --out agent_output/test_run.csv --double-check --resume
 ```
 
-(single run, $3.99), then checked for free with
+(every question twice, a third run only on disagreement: the two runs agreed on 145/145, so none was needed;
+290 runs, $6.54), then checked for free with
 `uv run python -m evals.check_submission submission/team_answers.csv --reference <other run>`:
-format OK (UTF-8, header, every test id once, under 5 MB), every answer line readable by the scorer, and
-145/145 answers agree with an independent earlier run (the Phase 1 template reader, 138/138 on dev).
-No answer was edited by hand.
+format OK (UTF-8, header, every test id once, under 5 MB) and every answer line readable by the scorer.
+
+Against the previous submission (made with the 1.0.0 route rules) 124/145 answers are the same; the 21 that
+changed are exactly the route-dependent ones the new rules move (19 errands, 2 what-if doors), and each new
+answer equals the engine's 1.1.0 result computed directly from the question. The 18 wide-delivery counts did
+not change. No answer was edited by hand.
 
 ## Sunday dry run
 
-From a fresh clone of this repository: `uv sync`, create `.env`, then the command above on one test building
-directory (`data/test/osm-way363805324`, 7 questions): a valid CSV in 44 s (about 6 s per question, run one
-after another), all 7 answers the same as in the submission. A Sunday building with 20 questions takes about
+From a fresh clone of this repository (2026-10-24, after kit 1.1.0): `uv sync` (1 s with the uv cache),
+create `.env`, then the command above on one test building directory (`data/test/osm-way363805324`,
+7 questions): a valid CSV in 43 s (about 6 s per question, run one after another), every answer line readable
+by the scorer, all 7 answers the same as in the submission. A Sunday building with 20 questions takes about
 2–3 minutes and costs under $1.
+
+Again after the input hardening (fresh clone of e4b9e83):
+- `data/test/questions.csv --per-kind 1` (the kit's table, `question_id` column): 8 answers in 54 s, the same as
+  in the submission;
+- a plans-only copy of `data/test/resplan-3573` (its `building.json` deleted): built from the plan with
+  `equipment.csv` (names and room types for 9 rooms, 31 things), 5 answers in 40 s; 4 of 5 are the same as with
+  the real `building.json`. The fifth, a wide-delivery count, can't be right from plans alone: plans don't
+  record door widths, so every door is taken as 0.9 m.
 
 ## Level 4: buildings from floor plans
 

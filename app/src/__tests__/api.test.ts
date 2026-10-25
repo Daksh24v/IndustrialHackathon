@@ -1,4 +1,4 @@
-import { api, ApiError, pickBuilding } from '../api';
+import { api, ApiError, pickBuilding, placeOf } from '../api';
 
 function fakeFetch(status: number, body: unknown): typeof fetch {
   return (async () =>
@@ -22,6 +22,19 @@ describe('api', () => {
       throw new TypeError('network');
     }) as unknown as typeof fetch;
     await expect(api.buildings(down)).rejects.toMatchObject({ status: 0 });
+  });
+
+  it('sends a tapped point as the position and draws the dot there', async () => {
+    let sent: RequestInit | undefined;
+    const position = { space_id: 'S1', floor_id: 'F0', label: 'Lab 0.21 (Ground floor)', point: [3, 4], source: 'phone', floor: 'Ground floor' };
+    const fetcher = (async (_url: string, init?: RequestInit) => {
+      sent = init;
+      return { ok: true, status: 200, statusText: 'x', json: async () => position } as Response;
+    }) as unknown as typeof fetch;
+    const placed = await api.setPositionAt('s1', 'F0', [3, 4], fetcher);
+    expect(JSON.parse(String(sent?.body))).toEqual({ floor: 'F0', x: 3, y: 4 });
+    expect(placeOf(placed, { spaces: [{ id: 'S1', anchor: [9, 9] }] }).position).toEqual([3, 4]);
+    expect(placeOf({ ...placed, point: null }, { spaces: [{ id: 'S1', anchor: [9, 9] }] }).position).toEqual([9, 9]);
   });
 
   it('picks the building to open', () => {
