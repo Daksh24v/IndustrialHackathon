@@ -146,6 +146,44 @@ def test_text_written_before_a_question_reaches_the_person(tiny: Building):
     assert agent.session.pending_question["question"] == "Which floor?"
 
 
+NUMBERED_ROUTE = """I found a step-free route to Lab 1.04, 59 m, about 1 minute.
+
+1. Leave the office and turn **right** into the corridor.
+2. After about 15 m, turn left into the Middle lift and go up to Floor 1.
+3. Come out of the lift and turn left into the corridor.
+4. After about 14 m, turn right through the door into Lab 1.04.
+5) The lab is the second door"""
+
+
+def test_route_steps_become_short_prose():
+    from navagent.agent import MAP_NOTE, as_prose
+
+    reply = as_prose(NUMBERED_ROUTE, route=True)
+    assert reply.splitlines()[0] == "I found a step-free route to Lab 1.04, 59 m, about 1 minute."
+    assert "\n1. " not in reply and "**" not in reply
+    assert ("Leave the office and turn right into the corridor. After about 15 m, turn left into the Middle lift "
+            "and go up to Floor 1. Come out of the lift and turn left into the corridor. After about 14 m, turn "
+            "right through the door into Lab 1.04.") in reply
+    assert "second door" not in reply and reply.endswith(MAP_NOTE)
+
+
+def test_prose_keeps_other_lists_whole_and_plain_replies_as_they_are():
+    from navagent.agent import as_prose
+
+    assert as_prose("- Lab 0.12\n- Lab 0.14\n- Lab 0.16\n- Lab 0.18\n- Lab 0.20") == (
+        "Lab 0.12. Lab 0.14. Lab 0.16. Lab 0.18. Lab 0.20.")
+    plain = "Coffee machine in Kitchen 2.04, 40 m.\n\nTurn left out of the lab; it is on your right."
+    assert as_prose(plain, route=True) == plain
+
+
+def test_chat_replies_are_prose_but_benchmark_replies_untouched(tiny: Building):
+    chat = BuildingAgent(Session(tiny), FakeClient([([], "Two ways:\n1. Left\n2. Right")]), mode=CHAT)
+    assert chat.ask("which way?") == "Two ways:\nLeft. Right."
+    client = FakeClient([([("submit_answer", {"answer_type": "number", "value": 3})], "Counted:\n1. A\n2. B")])
+    reply = BuildingAgent(Session(tiny), client, mode=BENCHMARK).answer_benchmark("How many?")
+    assert "1. A\n2. B" in reply and reply.splitlines()[-1] == "Answer: 3"
+
+
 def test_chat_rules_ask_for_what_was_understood_and_followable_directions():
     """Interaction is judged on "shows what it understood" and "directions people can follow": the chat prompt
     asks for both; the benchmark prompt stays as it was."""
