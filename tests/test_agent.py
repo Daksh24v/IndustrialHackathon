@@ -66,6 +66,13 @@ def test_missing_submit_gets_one_reminder(tiny: Building):
     assert len(client.requests) == 2 and reply.endswith("Answer: 3")
 
 
+def test_only_the_code_written_answer_line_is_kept(tiny: Building):
+    client = FakeClient([([("submit_answer", {"answer_type": "number", "value": 3})],
+                          "There are three.\n\n**Answer:** 3.0")])
+    reply = BuildingAgent(Session(tiny), client, mode=BENCHMARK).answer_benchmark("How many?")
+    assert reply == "There are three.\nAnswer: 3"
+
+
 def test_room_answer_uses_the_engine_area(tiny: Building):
     client = FakeClient([([("largest_room", {"floor": "Ground floor", "room_type": "office"}),
                            ("submit_answer", {"answer_type": "room", "room": "T-F0-S1", "include_area": True})],

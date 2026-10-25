@@ -123,3 +123,20 @@ def test_scoring_trouble_never_stops_the_run_and_a_short_run_never_replaces_a_fu
         benchmark.run(questions, out)
     benchmark.run(questions, out, force=True)
     assert list(benchmark.read_existing(out)) == ["Q1"]
+
+
+def test_out_json_writes_answers_json_and_resumes_from_it(tmp_path, monkeypatch):
+    rows = [{"id": "Q1", "building_id": "b", "kind": "errand", "question": "Way?"},
+            {"id": "Q2", "building_id": "b", "kind": "errand", "question": "Way?"}]
+    monkeypatch.setattr(benchmark, "ensure_building", lambda building: None)
+    monkeypatch.setattr(benchmark, "select", lambda items, per_kind, buildings: [
+        benchmark.Item(id=row["id"], question=row, building=tmp_path, problem=None) for row in rows])
+    monkeypatch.setattr(benchmark, "load_questions", lambda source: [])
+    monkeypatch.setattr(benchmark, "answer", lambda *args, **kwargs: "Over there.\nAnswer: 12")
+    out = tmp_path / "answers.json"
+    benchmark.run(tmp_path, out)
+    assert json.loads(out.read_text(encoding="utf-8")) == {"Q1": "Over there.\nAnswer: 12", "Q2": "Over there.\nAnswer: 12"}
+
+    monkeypatch.setattr(benchmark, "answer", lambda *args, **kwargs: pytest.fail("answered again"))
+    benchmark.run(tmp_path, out, resume=True)  # every row already has an Answer: line
+    assert list(benchmark.read_existing(out)) == ["Q1", "Q2"]

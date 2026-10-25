@@ -1,6 +1,7 @@
 """One command from questions to the submission CSV (documented in SUBMISSION/BENCHMARK.md).
 
   uv run --env-file .env python -m navagent.benchmark data/test --out submission.csv
+  uv run --env-file .env python -m navagent.benchmark data/test --out answers.json   # {question_id: full reply}
 
 The input can be
 - a split directory with <building_id>/questions.jsonl (data/test, data/dev),
@@ -167,6 +168,8 @@ def finished(reply: str) -> bool:
 def read_existing(out: Path) -> dict[str, str]:
     if not out.exists():
         return {}
+    if out.suffix == ".json":
+        return json.loads(out.read_text(encoding="utf-8"))
     with out.open(encoding="utf-8", newline="") as handle:
         return {row["question_id"]: row["answer"] for row in csv.DictReader(handle)}
 
@@ -204,7 +207,7 @@ def run(
             except Exception as error:
                 reply = f"{ERROR_PREFIX}{type(error).__name__}: {error}"
         rows[entry.id] = reply
-        write_csv(out, rows)  # after every question, so an interrupted run keeps what it paid for
+        write_answers(out, rows)  # after every question, so an interrupted run keeps what it paid for
         mark = "   "
         if isinstance(question.get("answer"), dict):
             try:  # scoring is only a check: an answer key in another format must not stop the run
@@ -224,20 +227,24 @@ def run(
     return results
 
 
-def write_csv(out: Path, rows: dict[str, str]) -> None:
-    """Written to a temporary file and moved into place, so stopping the run never leaves half a CSV."""
+def write_answers(out: Path, rows: dict[str, str]) -> None:
+    """A CSV (question_id,answer), or answers.json ({question_id: full reply}) when --out ends in .json. Written
+    to a temporary file and moved into place, so stopping the run never leaves half a file."""
     partial = out.with_name(out.name + ".partial")
-    with partial.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(("question_id", "answer"))
-        writer.writerows(rows.items())
+    if out.suffix == ".json":
+        partial.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    else:
+        with partial.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(("question_id", "answer"))
+            writer.writerows(rows.items())
     partial.replace(out)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="navagent.benchmark", description=__doc__.splitlines()[0])
     parser.add_argument("source", type=Path, help="split directory, building directory or questions file")
-    parser.add_argument("--out", type=Path, default=Path("submission.csv"), help="CSV to write")
+    parser.add_argument("--out", type=Path, default=Path("submission.csv"), help="answers to write: .csv, or .json for answers.json")
     parser.add_argument("--per-kind", type=int, default=None, help="only the first N questions of each kind")
     parser.add_argument("--buildings", type=Path, default=None, help="file with building ids to keep, one per line")
     parser.add_argument("--double-check", action="store_true", help="run each question twice (+1 on disagreement)")

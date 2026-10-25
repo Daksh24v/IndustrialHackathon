@@ -1,10 +1,34 @@
 # Benchmark run
 
+## Run it on your secret building
+
+You need [uv](https://docs.astral.sh/uv/) and an Anthropic API key. From a fresh clone:
+
+```bash
+git clone https://github.com/Daksh24v/IndustrialHackathon.git
+cd IndustrialHackathon
+uv sync
+echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
+uv run --env-file .env python -m navagent.benchmark <building folder> --out answers.json
+```
+
+`<building folder>` is the building in the kit's format, e.g. `data/sunday/<building_id>` with `building.json`
+and `questions.jsonl` (the same layout as `data/test/<building_id>`). A folder holding several buildings works
+too, and so does a building given only as floor plans (see the table below). `answers.json` is written as
+`{question_id: full reply}`, the same as `SUBMISSION/answers.json`; `--out answers.csv` writes the kit's
+`question_id,answer` CSV instead. Every reply ends with the `Answer:` line the scorer reads.
+
+Nothing is tuned to the test buildings: Claude reads each question and the engine computes from the building's
+own data. About 6 s and $0.03–0.04 per question (20 questions: 2–3 minutes, under $1). A question that fails
+becomes an error row, never a stopped run; run the same command again with `--resume` to redo only those.
+
+## The command in full
+
 One command, no manual steps between input and output:
 
 ```bash
 uv sync
-uv run --env-file .env python -m navagent.benchmark <input> --out <answers.csv>
+uv run --env-file .env python -m navagent.benchmark <input> --out <answers.json or answers.csv>
 ```
 
 `.env` holds `ANTHROPIC_API_KEY=...` (gitignored, so create it in a fresh clone). `<input>` can be any of:

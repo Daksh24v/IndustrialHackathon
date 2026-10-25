@@ -19,6 +19,7 @@ import anthropic
 from anthropic import beta_tool
 from anthropic.lib.tools import ToolError
 
+from benchmark.score import ANSWER_LINE  # what the scorer reads as an answer line
 from navagent.tools import Session
 from navcore.engine import EngineError
 from navcore.resolve import AmbiguousSpace
@@ -915,6 +916,8 @@ class BuildingAgent:
         if self.session.submitted is None:
             text += "\n" + self.ask("You didn't call submit_answer. Call it now with your final answer.")
         line = self.session.answer_line()
+        if line:  # the code-written line is the answer: drop any 'Answer:' Claude wrote itself, so there is one
+            text = "\n".join(said for said in text.splitlines() if not ANSWER_LINE.match(said)).strip()
         route = self.session.route_line()  # before the Answer: line, which the scorer reads and must stay last
         return "\n".join(part for part in (text, route, line) if part)
 
