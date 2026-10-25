@@ -1,15 +1,24 @@
-This is a factory. Two floors, eighty rooms, five hundred machines and things. And the only map is a PDF on a wall. Meet Finni: Google Maps for every building.
+DEMO
 
-Finni opens on the building itself. Every floor is a slab you can turn, tilt and step into.
+This factory has two floors, eighty rooms and five hundred machines. Meet Finni: Google Maps for every building.
 
-Just ask. Where's the coffee machine? Finni never asks for room numbers. It asks one thing: what can you see near you? Tap the air compressor, and there's your route, in words people actually follow. Turn right into the main aisle, past the shoe cabinet, the kitchen is on your left. Press Start, and it walks you there, step by step.
+Where's the coffee machine? Finni asks one thing: what can you see near you? Tap the air compressor. Turn right into the main aisle, past the shoe cabinet, the kitchen is on your left. Press Start, and it walks you there.
 
-Now something breaks. The office lift is broken. Finni reports it for everyone. The lift turns red on every map, maintenance gets the message, and a colleague in a wheelchair hears the honest answer: there is no step-free way up right now.
+The office lift is broken. Finni reports it for everyone. The lift turns red on every map, and maintenance is told.
 
-People aren't the only ones moving. Switch to forklift. Aisle B2 is blocked by a pallet. Finni drives you around it, and tells you why: twenty metres longer, under a minute.
+Driving a forklift? Aisle B2 is blocked. Finni goes around it, and tells you why: twenty metres longer, under a minute.
 
-And when it really matters, press the shield. The map dims to exits, fire extinguishers and stairs. Nearest exit: one tap, instantly.
+In an emergency, press the shield. Nearest exit: one tap.
 
-Under the hood, Claude is only the conversation. Every distance comes from a deterministic map of rooms, doors, stairs and lifts. That's why Finni got thirty-five of thirty-six right on buildings it had never seen. Give it nothing but floor plans, and it builds the building itself, stairs included.
 
-Any building. Any person. Any vehicle. Finni.
+HOW IT WORKS
+
+How it works. Claude is only the conversation layer. It understands the person, asks at most one question, and calls tools. It never guesses a distance.
+
+Every answer comes from a deterministic core: a graph of rooms, doors, corridors, stairs and lifts, with real walking paths inside each room, and a shortest-path search.
+
+A wheelchair, a trolley or a forklift only changes the graph: door widths, no steps, and a forklift only through halls and aisles.
+
+Give Finni only floor plans, and it reads the drawings, lines up the floors, and finds the stairs, even when none are drawn.
+
+On buildings we locked away and never tuned on: thirty-five of thirty-six questions right. Any building, one command. Finni.
