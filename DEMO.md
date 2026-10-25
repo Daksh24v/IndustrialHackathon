@@ -17,8 +17,10 @@ building has ("Toilets", "Exit", "Coffee"…). FINNI's answer opens under it (a 
 question with options to tap, or for a route **From → To**, the metres and minutes, the steps ("Turn right into
 Office corridor 0.16, by the Coordinate measuring machine") and **Start**, which walks the route one step at a time
 (Next goes up the stairs to the next floor). Hover a step and it lights up on the map. The buttons bottom right:
-I'm here, the floor stack (the whole building on top), 3D / Top (bird's eye) / 2D, the compass and zoom. Turn the
-map all the way round with Shift+drag or right-drag (two fingers on a phone).
+I'm here, the floor stack, 3D / Top (bird's eye) / 2D, turn left / right with the compass between (click it for
+north up, drag it sideways to turn all the way round; the building turns the same way) and zoom. "‹ Building" at the
+top of a floor (or Escape) goes back to the whole building. Shift+drag or right-drag turns the map too (two fingers on
+a phone).
 
 **Optional, the real venue:** with `EXPO_PUBLIC_GOOGLE_MAPS_KEY` in `app/.env` (see app/README.md) the opening flies
 round Munich Urban Colab in Google's photorealistic 3D before our building takes over. Add `?intro=1` to the

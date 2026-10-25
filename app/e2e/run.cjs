@@ -56,6 +56,19 @@ const expect = (ok, message) => {
     await page.waitForTimeout(800);
     await shot('1-home');
 
+    // turn the whole building with the buttons and by dragging the compass; the compass follows
+    const compassTurn = () => page.$eval('[data-testid="compass"] svg', (svg) => svg.style.transform);
+    await page.click('[data-testid="turn-right"]');
+    await page.waitForTimeout(700);
+    expect((await compassTurn()) !== 'rotate(0deg)', 'the turn button did not turn the building');
+    const compass = await (await page.$('[data-testid="compass"]')).boundingBox();
+    await page.mouse.move(compass.x + compass.width / 2, compass.y + compass.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(compass.x - 150, compass.y + compass.height / 2, { steps: 12 });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+    await shot('1a-turned-building');
+
     // hover a floor of the stack (laptop), then open it and come back with the whole-building button
     if (size === 'laptop') {
       const box = await (await page.$('[data-testid="block-1"]')).boundingBox();
@@ -70,7 +83,22 @@ const expect = (ok, message) => {
     await page.waitForSelector('[data-testid="floor-scene"]', { timeout: 15000 });
     await page.waitForTimeout(800);
     await shot('1c-floor');
-    await page.click('[data-testid="building"]');
+    // turn the floor all the way round from the compass, then back out to the whole building (Escape or the button)
+    const before = await compassTurn();
+    const dial = await (await page.$('[data-testid="compass"]')).boundingBox();
+    await page.mouse.move(dial.x + dial.width / 2, dial.y + dial.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(dial.x - 200, dial.y + dial.height / 2, { steps: 12 });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+    expect((await compassTurn()) !== before, 'dragging the compass did not turn the floor');
+    await shot('1d-floor-turned');
+    if (size === 'laptop') {
+      await page.evaluate(() => document.activeElement && document.activeElement.blur());
+      await page.keyboard.press('Escape');
+    } else {
+      await page.click('[data-testid="building"]');
+    }
     await page.waitForSelector('[data-testid="building-blocks"]', { timeout: 15000 });
 
     // a quick search: one tap asks FINNI

@@ -141,10 +141,17 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
   useEffect(() => () => {
     if (turning.current !== null) cancelAnimationFrame(turning.current);
   }, []);
+  // The middle of the part of the map you can see (not under the panel): the view turns about it.
+  const middle = (): Point => {
+    const box = insetRef.current;
+    return [box.left + (size.current.width - box.left - box.right) / 2, box.top + (size.current.height - box.top - box.bottom) / 2];
+  };
+  const insetRef = useRef(inset);
+  insetRef.current = inset;
   const turnBy = (angle: number) => {
     if (turning.current !== null) return;
     const start = camera.current;
-    const pivot = unproject3d(start, [width / 2, height / 2]);
+    const pivot = unproject3d(start, middle());
     const began = Date.now();
     const step = () => {
       const t = Math.min(1, (Date.now() - began) / TURN_MS);
@@ -163,19 +170,30 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
   zoomRef.current = zoomBy;
   const northRef = useRef(north);
   northRef.current = north;
+  const turnRef = useRef(turnBy);
+  turnRef.current = turnBy;
+  const middleRef = useRef(middle);
+  middleRef.current = middle;
   useEffect(() => {
     if (!handleRef) return;
-    handleRef.current = {
+    const mine: MapHandle = {
       zoomBy: (k) => zoomRef.current(k),
       north: () => northRef.current(),
+      turnBy: (angle) => turnRef.current(angle),
+      beginTurn: () => {
+        const start = camera.current;
+        const pivot = unproject3d(start, middleRef.current());
+        return (angle) => setCam(rotateAbout(start, pivot, angle));
+      },
       watchYaw: (watch) => {
         watchers.current.add(watch);
         watch(camera.current.yaw);
         return () => watchers.current.delete(watch);
       },
     };
+    handleRef.current = mine;
     return () => {
-      handleRef.current = null;
+      if (handleRef.current === mine) handleRef.current = null; // the next view may have set its own already
     };
   }, [handleRef]);
 
@@ -216,7 +234,7 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
     const node = frame.current as unknown as HTMLElement | null;
     if (!node || typeof node.addEventListener !== 'function') return;
     let drag: { x: number; start: Camera; pivot: Point; id: number } | null = null;
-    const pivotOf = (cam: Camera) => unproject3d(cam, [size.current.width / 2, size.current.height / 2]);
+    const pivotOf = (cam: Camera) => unproject3d(cam, middleRef.current());
     const onDown = (event: PointerEvent) => {
       if (event.pointerType !== 'mouse' || !(event.button === 2 || event.shiftKey || event.altKey)) return;
       event.preventDefault(); // no pan (and no "I'm here") while turning

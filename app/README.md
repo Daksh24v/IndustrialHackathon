@@ -18,7 +18,9 @@ again), which shrinks into the search bar.
 - **Start** (`src/ui/WalkBanner.tsx`): one step at a time in an orange banner; the map flies to each step, turned so
   you walk up the screen; Next at the stairs goes to the next floor; read out in a spoken conversation.
 - **Map buttons** (`src/ui/MapControls.tsx`, bottom right): I'm here, the floor stack (the open floor orange; the
-  top button shows the whole building), 3D / Top (bird's eye, straight down) / 2D, the compass and zoom.
+  top button shows the whole building), 3D / Top (bird's eye, straight down) / 2D, turn left / right 45° with the
+  compass between them (click: north up; drag sideways: turn all the way round), and zoom. The building and the
+  floors turn the same way. Inside a floor, "‹ Building" at the top (or Escape) goes back to the whole building.
 - **Voice:** while you talk to FINNI its orb grows big over the map ("Listening…", "Speaking…").
 
 The building (`src/components/BuildingBlocks.tsx`): a floor stack, every floor a slab with its rooms drawn on it,

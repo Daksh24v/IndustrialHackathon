@@ -4,14 +4,15 @@
  * round (it also turns slowly by itself until touched); the floor under the cursor turns grey with its name,
  * and a click (tap) opens it. When a floor is chosen (by the agent or a click) the view zooms onto it, the
  * floors above fade away, and onArrived() hands over to the floor view. */
-import { type ComponentRef, useEffect, useMemo, useRef, useState } from 'react';
+import { type ComponentRef, type MutableRefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, PanResponder, Platform, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, G, Path, Text as SvgText } from 'react-native-svg';
 
 import type { MapView, Outline, Point, Space } from '../api';
 import { boundsOf, isoDepth, isoProject, pointInPolygon, signedArea, type Iso } from '../geometry';
 import { colours, spaceFill } from '../theme';
-import { type Inset, LABEL_FONT, NO_INSET } from './FloorScene';
+import type { MapHandle } from '../ui/MapControls';
+import { type Inset, LABEL_FONT, NO_INSET, wrapAngle } from './FloorScene';
 
 const ZOOM_MS = 1300;
 const ZOOM_SCALE = 2.4;
@@ -21,6 +22,7 @@ const DRAG_TURN = 0.008; // radians per pixel dragged
 const SPIN_PER_S = (2 * Math.PI) / 90; // the idle turn: once round in 90 s
 const SPIN_PAUSE_MS = 5000; // after a touch the building holds still this long
 const TAP_SLOP_PX = 5;
+const TURN_MS = 450;
 const HOVER_TOP = '#E4E4E8';
 const HOVER_WALL = '#D6D6DB';
 
@@ -35,6 +37,8 @@ interface Props {
   /** The route across the floors, you and the target. */
   map?: MapView | null;
   inset?: Inset;
+  /** For the map buttons: turn (45° steps, or by hand with the compass) and back to the first view. */
+  handleRef?: MutableRefObject<MapHandle | null>;
   focusFloorId: string | null;
   onArrived?: () => void;
   /** A click (tap) on a floor's block. */
@@ -110,7 +114,7 @@ function floorFaces(iso: Iso, footprints: Point[][], bottom: number, top: number
 }
 
 export function BuildingBlocks({ outline, spaces = [], map = null, focusFloorId, onArrived, onPickFloor, spin = false,
-                               width, height, inset = NO_INSET }: Props) {
+                               width, height, inset = NO_INSET, handleRef }: Props) {
   const floors = useMemo(() => [...outline.floors].sort((a, b) => a.elevation_m - b.elevation_m), [outline]);
   const all = useMemo(() => floors.flatMap((floor) => floor.footprints.flat()), [floors]);
   const plan = boundsOf(all);
@@ -166,6 +170,52 @@ export function BuildingBlocks({ outline, spaces = [], map = null, focusFloorId,
 
   // Turning: by itself while untouched, by dragging otherwise.
   const touched = useRef(0);
+
+  // The map buttons: turn by 45°, by hand (dragging the compass), or back to the first view; the compass follows.
+  const angleRef = useRef(angle);
+  angleRef.current = angle;
+  const watchers = useRef(new Set<(yaw: number) => void>());
+  useLayoutEffect(() => watchers.current.forEach((watch) => watch(angle - VIEW_ANGLE)), [angle]);
+  const turning = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (turning.current !== null) cancelAnimationFrame(turning.current);
+  }, []);
+  useEffect(() => {
+    if (!handleRef) return;
+    const animate = (by: number) => {
+      if (turning.current !== null) cancelAnimationFrame(turning.current);
+      const start = angleRef.current;
+      const began = Date.now();
+      const step = () => {
+        touched.current = Date.now();
+        const t = Math.min(1, (Date.now() - began) / TURN_MS);
+        setAngle(start + by * Easing.inOut(Easing.cubic)(t));
+        turning.current = t < 1 ? requestAnimationFrame(step) : null;
+      };
+      turning.current = requestAnimationFrame(step);
+    };
+    const mine: MapHandle = {
+      zoomBy: () => {},
+      north: () => animate(-wrapAngle(angleRef.current - VIEW_ANGLE)),
+      turnBy: animate,
+      beginTurn: () => {
+        const start = angleRef.current;
+        return (by) => {
+          touched.current = Date.now();
+          setAngle(start + by);
+        };
+      },
+      watchYaw: (watch) => {
+        watchers.current.add(watch);
+        watch(angleRef.current - VIEW_ANGLE);
+        return () => watchers.current.delete(watch);
+      },
+    };
+    handleRef.current = mine;
+    return () => {
+      if (handleRef.current === mine) handleRef.current = null; // the next view may have set its own already
+    };
+  }, [handleRef]);
   useEffect(() => {
     if (!spin || focus) return;
     let raf = 0;

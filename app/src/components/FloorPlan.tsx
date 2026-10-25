@@ -82,9 +82,10 @@ export function FloorPlan({ detail, floorId, map, width, height, onTapFloor, con
   zoomRef.current = zoomBy;
   useEffect(() => {
     if (!handleRef) return;
-    handleRef.current = { zoomBy: (k) => zoomRef.current(k), north: () => {} }; // the plan is always north up
+    const mine: MapHandle = { zoomBy: (k) => zoomRef.current(k), north: () => {} }; // the plan is always north up
+    handleRef.current = mine;
     return () => {
-      handleRef.current = null;
+      if (handleRef.current === mine) handleRef.current = null;
     };
   }, [handleRef]);
   useEffect(() => {

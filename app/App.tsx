@@ -238,9 +238,20 @@ function Guide() {
   const sheet = showPanel && !wide ? sheetHeight(snap, window.height) : 0;
   const inset: Inset = wide
     ? { left: COLUMN_PX + 16, top: walking ? 96 : 0, right: 72, bottom: 0 }
-    : { left: 0, top: walking ? 120 : 132, right: inside ? 64 : 0, bottom: sheet };
+    : { left: 0, top: walking ? 120 : inside ? 196 : 132, right: inside ? 64 : 0, bottom: sheet };
   const controlsBottom = wide ? 24 : sheet + 16;
   const mapLeft = wide ? COLUMN_PX + 32 : 12;
+
+  // Escape inside a floor (not while typing or walking): back out to the whole building.
+  useEffect(() => {
+    if (!inside || walking) return;
+    const onKey = (event: KeyboardEvent) => {
+      const tag = (event.target as HTMLElement | null)?.tagName;
+      if (event.key === 'Escape' && tag !== 'INPUT' && tag !== 'TEXTAREA') dispatch({ type: 'back' });
+    };
+    globalThis.addEventListener('keydown', onKey);
+    return () => globalThis.removeEventListener('keydown', onKey);
+  }, [inside, walking]);
 
   const openHere = () => {
     if (!inside && floors.length) dispatch({ type: 'floor', floorId: (floors.find((f) => f.level === 0) ?? floors[0]).id });
@@ -283,6 +294,7 @@ function Guide() {
             width={window.width}
             height={window.height}
             inset={inset}
+            handleRef={handle}
           />
         ) : null}
         {state.detail && state.floorId && inside ? (
@@ -310,9 +322,13 @@ function Guide() {
         </>
       )}
 
-      {inside && floorName && wide && !walking && (
-        <div className="fi fi-floor" style={{ left: mapLeft + (window.width - mapLeft - 72) / 2 }} data-testid="floor-name">
-          {floorName}
+      {inside && !walking && (
+        <div className="fi fi-floor" style={wide ? { left: mapLeft + (window.width - mapLeft - 72) / 2 } : { left: 12, top: 160, transform: 'none' }}>
+          <button type="button" className="fi-back" data-testid="building" aria-label="Back to the whole building (Escape)"
+                  title="Back to the whole building (Esc)" onClick={() => dispatch({ type: 'back' })}>
+            ‹ Building
+          </button>
+          {floorName && <span data-testid="floor-name">{floorName}</span>}
         </div>
       )}
       {inside && step && stepFloor && !walking && (
@@ -323,7 +339,8 @@ function Guide() {
       )}
       <MapControls inside={inside} view={view} onView={setView} handle={handle} floors={floors}
                    floorId={state.floorId} onFloor={(floorId) => dispatch({ type: 'floor', floorId })}
-                   onBuilding={() => dispatch({ type: 'back' })} onHere={openHere} bottom={controlsBottom} />
+                   onBuilding={() => dispatch({ type: 'back' })} onHere={openHere} bottom={controlsBottom}
+                   mapKey={`${state.view}:${state.floorId}:${view}`} />
       {walking && (
         <WalkBanner steps={steps} index={state.walk!} left={wide ? mapLeft : 12} right={wide ? 88 : 12}
                     onNext={() => walkTo(Math.min(steps.length - 1, state.walk! + 1))}
