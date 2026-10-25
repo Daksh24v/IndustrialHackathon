@@ -100,7 +100,11 @@ list; people may not look at the map.
 floor 2 is broken"), report it for everyone with report_problem: no more questions unless it is ambiguous which one \
 (then ask, with the options). Confirm in one sentence what you understood and that maintenance has been told, \
 then what it means for them. When they say it works again, report_problem with fixed=True. Use set_closed only \
-for "what if" questions and changes for this conversation alone."""
+for "what if" questions and changes for this conversation alone.
+- How they move: when they say they use a wheelchair, push a trolley or drive a forklift, call set_mobility \
+(with the width if they give it; block_aisle for a blocked aisle); every route then fits it. With a profile, \
+say it in one line with the reason from find_route's why_detour and its extra_m and time_s ("Forklift: \
+around the blocked Main aisle H-B2, 20 m longer, about 1 min")."""
 
 BENCHMARK_RULES = """
 Answering a scored question:
@@ -599,7 +603,34 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
             """
             return session.report_problem(element, problem, fixed)
 
-        tools += [set_closed, add_door, move_thing, report_problem, set_my_position, where_am_i_options]
+        @tool
+        def set_mobility(profile: str, width_m: float | None = None) -> dict:
+            """How the person moves from now on, for every route and "nearest" in this conversation: "walk",
+            "wheelchair" (step-free, 0.90 m doors), "trolley" (step-free, its width + 0.1 m) or "forklift"
+            (step-free, 1.6 m, only through halls, aisles and storage; other rooms only as the destination).
+
+            Args:
+                profile: walk, wheelchair, trolley or forklift.
+                width_m: The wheelchair's, trolley's or forklift's width if they say it.
+            """
+            try:
+                return session.set_mobility(profile, width_m)
+            except ValueError as error:
+                raise EngineError(str(error)) from error
+
+        @tool
+        def block_aisle(space: str, blocked: bool = True) -> dict:
+            """An aisle, corridor or hall is blocked right now (a pallet, a spill) for the rest of this
+            conversation: routes go around it.
+
+            Args:
+                space: The aisle, corridor or hall, e.g. "Main aisle H-B2".
+                blocked: False when it is clear again.
+            """
+            return session.block_aisle(space, blocked)
+
+        tools += [set_closed, add_door, move_thing, report_problem, set_mobility, block_aisle, set_my_position,
+                  where_am_i_options]
 
     if mode == BENCHMARK:
 

@@ -1,7 +1,7 @@
 // End-to-end check of the web build, like a person would use it, on a phone and a laptop: the map is there from
 // the start (the floor stack behind the opening); hover and open a floor; a quick search; ask, tap an option, the
 // route with its steps; walk it with Start (up the stairs to Floor 1); turn the map; a broken lift reported for
-// everyone, safety mode and the nearest exit, Fixed; compass, bird's eye, 2D; back to the
+// everyone, safety mode and the nearest exit, Fixed; the Forklift chip; compass, bird's eye, 2D; back to the
 // whole building; Escape drops a question without moving the map.
 // No Claude API calls: the /chat answers are canned, but the map in them is a real route from the server.
 //
@@ -219,6 +219,15 @@ const expect = (ok, message) => {
     await page.click(`[data-testid="fixed-${LIFT}"]`);
     await page.waitForSelector('[data-testid="reports-alert"]', { state: 'detached', timeout: 10000 });
     await page.click('[data-testid="panel-close"]');
+
+    // how you move: the Forklift chip; its quick searches come first (the loading dock, the charger), Walk again
+    await page.click('[data-testid="mobility-forklift"]');
+    await page.waitForSelector('[data-testid="mobility-forklift"][aria-checked="true"]');
+    await page.waitForSelector('[data-testid="category-Loading dock"]');
+    await page.waitForTimeout(300);
+    await shot('8g-forklift');
+    await page.click('[data-testid="mobility-walk"]');
+    await page.waitForSelector('[data-testid="category-Loading dock"]', { state: 'detached' });
     await page.click('[data-testid="compass"]');
     // the bird's eye view: straight down, still turns
     await page.click('[data-testid="view-top"]');

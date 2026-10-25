@@ -31,6 +31,9 @@ export interface Summary {
   floors: number; // floors changed
   up: boolean;
   stepFree: boolean;
+  /** With a profile (the chip): who it's for and "Why this way: Main aisle H-B2 is closed · 20 m longer · about 44 s". */
+  profile?: string;
+  why?: string;
 }
 
 /** The label without its floor: "Office 1.04 (Floor 1)" -> "Office 1.04". */
@@ -168,11 +171,26 @@ export function summary(map: MapView | null, detail: BuildingDetail | null): Sum
     (piece) => piece.floor_id === opening.floor_id && piece.points.some((p) => dist(p, opening.position) < 0.5)));
   return {
     length_m: Math.round(route.length_m),
-    minutes: Math.max(1, Math.round((route.length_m / WALK_M_PER_S + lifts * LIFT_S) / 60)),
+    minutes: route.time_s != null ? Math.max(1, Math.round(route.time_s / 60))
+      : Math.max(1, Math.round((route.length_m / WALK_M_PER_S + lifts * LIFT_S) / 60)),
     floors: changes.length,
     up: level(last) >= level(first),
     stepFree: !changes.some((piece) => piece.then?.kind === 'stairs') && !stepped,
+    ...(route.profile ? { profile: route.profile, why: whyThisWay(route) } : {}),
   };
+}
+
+const duration = (seconds: number) => (seconds < 90 ? `about ${Math.max(1, Math.round(seconds))} s` : `about ${Math.round(seconds / 60)} min`);
+
+/** The line under the metres when a profile is set: the reason the route isn't the plain walk, the extra metres and
+ * the time at that profile's speed. */
+export function whyThisWay(route: NonNullable<MapView['route']>): string {
+  const time = route.time_s != null ? duration(route.time_s) : '';
+  const reasons = route.why_detour ?? [];
+  if (!reasons.length) return [`The direct way fits a ${(route.profile ?? '').toLowerCase()}`, time].filter(Boolean).join(' · ');
+  const said = reasons.join('; ');
+  const extra = route.extra_m ? `${Math.round(route.extra_m)} m longer` : '';
+  return [`Why this way: ${said.charAt(0).toUpperCase()}${said.slice(1)}`, extra, time].filter(Boolean).join(' · ');
 }
 
 /** The spaces a route passes through (and where it starts and ends), floor by floor: the things in them are the

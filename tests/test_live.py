@@ -111,3 +111,21 @@ def test_a_facility_manager_closes_the_lift_and_moves_a_machine():
     route = agent.session.active_route
     assert route is None or route["step_free"], "with the only lift closed there is no step-free way up"
     assert "lift" in reply.lower() and "step-free" in reply.lower(), "it says why"
+
+
+def test_a_forklift_driver_gets_a_forklift_route_around_the_blocked_aisle():
+    agent = factory_agent()
+    reply = agent.ask("I'm driving a forklift in Warehouse zone H-C1 and Main aisle H-B2 is blocked by a pallet. "
+                      "Take me to Logistics zone H-C5.")
+    session = agent.session
+    assert session.profile is not None and session.profile.name == "forklift"
+    assert "proc-factory-dev-003-F0" in str(session.closed) and session.active_route is not None
+    assert "H-B2" not in " ".join(session.building.spaces[s]["name"] for s in session.active_route["spaces"])
+    assert "forklift" in reply.lower()
+
+
+def test_a_wheelchair_user_hears_why_the_route_goes_round():
+    agent = factory_agent()
+    reply = agent.ask("I use a wheelchair. I'm at Staircase 0.17, how do I get to Staircase 1.02?")
+    assert agent.session.profile is not None and agent.session.profile.name == "wheelchair"
+    assert "lift" in reply.lower() and ("step" in reply.lower() or "stairs" in reply.lower())

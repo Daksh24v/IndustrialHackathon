@@ -147,7 +147,9 @@ export function Panel(props: Props) {
             <strong data-testid="route-length">{summary.length_m} m</strong>
             <span>about {summary.minutes} min{summary.floors ? ` · ${summary.floors} floor${summary.floors > 1 ? 's' : ''} ${summary.up ? 'up' : 'down'}` : ''}</span>
             {summary.stepFree && <span className="fi-tag">step-free</span>}
+            {summary.profile && <span className="fi-tag fi-tag-profile" data-testid="route-profile">{summary.profile}</span>}
           </div>
+          {summary.why && <p className="fi-why" data-testid="route-why">{summary.why}</p>}
           <button type="button" className="fi-start" data-testid="start" onClick={props.onStart}>Start</button>
           <ol className="fi-steps" data-testid="steps">
             {steps.map((step, index) => (

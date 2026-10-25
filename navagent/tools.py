@@ -24,6 +24,8 @@ from navcore.engine import (
     EngineError,
     Route,
 )
+from navcore.profiles import Profile, door_width, find_profile
+from navcore.profiles import apply as with_profile
 from navcore.resolve import (
     NoSuchSpace,
     asset_names,
@@ -132,6 +134,7 @@ class Session:
     submitted: dict | None = None  # set by submit_answer in benchmark mode
     moved: dict[str, dict] = field(default_factory=dict)  # things moved in this conversation, by asset id
     last_route: list[Route] | None = None  # legs of the most recent find_route, for show_on_map
+    last_how: dict = field(default_factory=dict)  # with a profile: who it's for, why this way, time (how_it_goes)
     map_view: dict | None = None  # what the app should draw after this turn (show_on_map)
     draft: object | None = None  # navagent.builder.Draft while a building is being set up from plans
     # What people reported broken for the whole building (live app only, server/reports.py), by element id:
@@ -139,6 +142,9 @@ class Session:
     reported: dict[str, dict] = field(default_factory=dict)
     # The server's way to file a report for everyone (and tell maintenance); None outside the live app.
     on_report: Callable[[dict, bool], dict] | None = None
+    # How the person moves (live app only: set_mobility or the app's chip): None is on foot, as the benchmark.
+    profile: Profile | None = None
+    vehicle_width_m: float | None = None  # a width they gave for their wheelchair, trolley or forklift
 
     @property
     def here(self) -> str | None:
@@ -156,12 +162,35 @@ class Session:
         self, step_free: bool = False, min_width_m: float = 0.0, closed: list[str] | None = None
     ) -> Constraints:
         extra_closed = {find_element(self.building, item) for item in closed or []}
-        return Constraints(
+        constraints = Constraints(
             step_free=step_free,
             min_width_m=min_width_m,
             closed=frozenset(self.closed | set(self.reported) | extra_closed),
             extra_openings=tuple(self.new_openings),
         )
+        return with_profile(self.profile, constraints, self.vehicle_width_m) if self.profile else constraints
+
+    def set_mobility(self, profile: str, width_m: float | None = None) -> dict:
+        """How the person moves from now on: walk, wheelchair, trolley or forklift (and its width)."""
+        chosen = find_profile(profile)
+        if width_m is not None and not 0.3 <= width_m <= 4.0:
+            raise EngineError("A width should be between 0.3 and 4 m.")
+        self.profile = None if chosen.name == "walk" else chosen
+        self.vehicle_width_m = width_m if self.profile else None
+        return self.mobility()
+
+    def mobility(self) -> dict:
+        profile = self.profile or find_profile("walk")
+        return {"profile": profile.name, "label": profile.label, "step_free": profile.step_free,
+                "door_width_m": door_width(profile, self.vehicle_width_m), "speed_m_s": profile.speed_mps,
+                "drives_only_through": sorted(profile.through_types) if profile.through_types else None}
+
+    def block_aisle(self, space: str, blocked: bool = True) -> dict:
+        """An aisle, corridor or hall is blocked (a pallet, a spill) for the rest of this conversation."""
+        space_id = find_space(self.building, space)
+        (self.closed.add if blocked else self.closed.discard)(space_id)
+        self.show_change(self.building.spaces[space_id]["floor_id"])
+        return {"space": self.building.label(space_id), "blocked": blocked, "all_closed": sorted(self.closed)}
 
     def space_summary(self, space_id: str) -> dict:
         space = self.building.spaces[space_id]
@@ -395,6 +424,7 @@ class Session:
             spaces += [space for space in leg.space_path if not spaces or spaces[-1] != space]
         self.active_route = {"stops": stops, "spaces": spaces, "destination": stops[-1], "progress": 0,
                              "step_free": step_free, "min_width_m": min_width_m}
+        how = self.last_how = self.how_it_goes(legs, constraints) if self.profile else {}
         return {
             "from": building.label(stops[0]),
             "to": building.label(stops[-1]),
@@ -409,7 +439,19 @@ class Session:
                 for leg in legs
             ],
             "constraints": {"step_free": step_free, "min_width_m": min_width_m, "closed": sorted(constraints.closed)},
+            **how,
         }
+
+    def how_it_goes(self, legs: list[Route], constraints: Constraints) -> dict:
+        """With a profile: who the route is for, why it isn't the plain walk (and how much longer) and the time."""
+        reasons, extra = [], 0.0
+        for leg in legs:
+            why = self.building.why_detour(leg.start, leg.destination, constraints)
+            reasons += [reason for reason in why["reasons"] if reason not in reasons]
+            extra += why["extra_m"] or 0.0
+        length = sum(leg.length_m for leg in legs)
+        return {"profile": self.profile.label, "why_detour": reasons, "extra_m": rounded(extra),
+                "time_s": round(length / self.profile.speed_mps)}
 
     def directions(self, route: Route) -> list[str]:
         """Followable steps: one line per door into another space and per stair or lift, with the metres, the
@@ -467,7 +509,7 @@ class Session:
         building = self.building
         space_id = self.start_or_here(room)
         route = building.exit_route(space_id, self.constraints(step_free))
-        self.last_route = [route]
+        self.last_route, self.last_how = [route], {}
         return {"from": building.label(space_id), "walk_m": rounded(route.length_m), "steps": self.directions(route)}
 
     def nearest_with_asset(self, start: str | None, asset_type: str, step_free: bool = False) -> dict:
@@ -1050,7 +1092,8 @@ class Session:
             added = tuple(self.new_openings)
             pieces = [piece for leg in self.last_route
                       for piece in building.polyline(leg, through_anchors=False, extra_openings=added)]
-            view["route"] = {"length_m": rounded(sum(leg.length_m for leg in self.last_route)), "pieces": pieces}
+            view["route"] = {"length_m": rounded(sum(leg.length_m for leg in self.last_route)), "pieces": pieces,
+                             **self.last_how}
         if floor:
             view["focus_floor_id"] = find_floor(building, floor)
         else:

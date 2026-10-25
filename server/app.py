@@ -8,11 +8,12 @@ Endpoints
 - GET  /buildings/{id}                    everything needed to draw it (floors, spaces, doors, lifts, things)
 - GET  /buildings/{id}/outline            per floor: footprint, elevation, height (the 3D outside view)
 - GET  /buildings/{id}/context            the OpenStreetMap neighbourhood around it (empty lists if none)
-- POST /buildings/{id}/route              a route without the agent: length + lines per floor
+- POST /buildings/{id}/route              a route without the agent: length + lines per floor (profile optional)
 - POST /sessions                          start a conversation with the agent about one building
 - POST /sessions/{id}/chat                one turn: {reply, question, map}
 - POST /sessions/{id}/position            where the person is: a place, or a tapped point on a floor
 - POST /sessions/{id}/nearest             safety mode: the nearest exit / fire extinguisher / defibrillator
+- POST /sessions/{id}/mobility            how they move: walk, wheelchair, trolley or forklift (and its width)
 - GET  /buildings/{id}/reports            what people reported broken (everyone's routes avoid it)
 - POST /buildings/{id}/reports            report something broken; DELETE /buildings/{id}/reports/{element} fixed
 - GET  /maintenance                       the maintenance inbox (also emailed with RESEND_API_KEY, MAINTENANCE_EMAIL)
@@ -238,17 +239,21 @@ class RouteRequest(BaseModel):
     min_width_m: float = 0.0
     via: list[str] = []
     avoid: list[str] = []
+    profile: str | None = Field(None, description="walk, wheelchair, trolley or forklift")
+    width_m: float | None = Field(None, description="the wheelchair's, trolley's or forklift's width")
 
 
 @app.post("/buildings/{building_id}/route")
 def route(building_id: str, request: RouteRequest) -> dict:
     session = Session(load(building_id))
     try:
+        if request.profile:
+            session.set_mobility(request.profile, request.width_m)
         summary = session.route(
             request.start, request.destination, request.step_free, request.min_width_m, request.via, request.avoid
         )
         session.show_on_map(you_are_here=request.start, target=request.destination, show_last_route=True)
-    except EngineError as error:
+    except (EngineError, ValueError) as error:
         raise HTTPException(422, str(error)) from error
     return {"summary": summary, "map": session.map_view}
 
@@ -504,6 +509,22 @@ def end_session(session_id: str) -> dict:
         _turns.pop(session_id, None)
         _building_of.pop(session_id, None)
     return {"ended": True}
+
+
+class MobilityRequest(BaseModel):
+    profile: str = Field(description="walk, wheelchair, trolley or forklift")
+    width_m: float | None = None
+
+
+@app.post("/sessions/{session_id}/mobility")
+def mobility(session_id: str, request: MobilityRequest) -> dict:
+    """The app's profile chip: how the person moves, for every route in this conversation from now on."""
+    agent = agent_for(session_id)
+    with _turns.setdefault(session_id, threading.Lock()):
+        try:
+            return agent.session.set_mobility(request.profile, request.width_m)
+        except (EngineError, ValueError) as error:
+            raise HTTPException(422, str(error)) from error
 
 
 class NearestRequest(BaseModel):

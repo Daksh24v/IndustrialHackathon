@@ -71,6 +71,17 @@ export interface Place {
   asset_id?: string;
 }
 
+/** How someone moves (navcore/profiles.py): the chip under the search bar. */
+export type Mobility = 'walk' | 'wheelchair' | 'trolley' | 'forklift';
+
+/** With a profile set: who the route is for, why it isn't the plain walk, how much longer, and the time. */
+export interface RouteHow {
+  profile?: string;
+  why_detour?: string[];
+  extra_m?: number;
+  time_s?: number;
+}
+
 export interface RoutePiece {
   floor_id: string;
   points: Point[];
@@ -122,7 +133,7 @@ export interface MapChanges {
 export interface MapView {
   you_are_here: Place | null;
   target: Place | null;
-  route: { length_m: number; pieces: RoutePiece[] } | null;
+  route: ({ length_m: number; pieces: RoutePiece[] } & RouteHow) | null;
   focus_floor_id: string | null;
   changes?: MapChanges | null;
 }
@@ -221,6 +232,10 @@ export const api = {
   nearest: (sessionId: string, kind: SafetyKind, fetcher?: typeof fetch) =>
     call<{ found: { kind: string; label: string; room: string; walk_m: number }; map: MapView }>(
       `/sessions/${sessionId}/nearest`, { method: 'POST', body: JSON.stringify({ kind }) }, fetcher),
+  /** How the person moves from now on: every route in this conversation fits it. */
+  mobility: (sessionId: string, profile: Mobility, fetcher?: typeof fetch) =>
+    call<{ profile: Mobility; label: string; door_width_m: number }>(
+      `/sessions/${sessionId}/mobility`, { method: 'POST', body: JSON.stringify({ profile }) }, fetcher),
   /** Where the person is, by a point on a floor: a tap on the map ("I'm here"). */
   setPositionAt: (sessionId: string, floorId: string, [x, y]: Point, fetcher?: typeof fetch) =>
     call<Position>(

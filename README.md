@@ -11,7 +11,8 @@
 > map-first, like a map app: the building as a floor stack from the first second, a search bar to ask FINNI (typing,
 > the mic or a quick search such as "Toilets"), the route with what FINNI understood and steps to follow, and
 > **Start** to walk it step by step; views in 3D, bird's eye or flat 2D, turned all the way round. "The lift is broken"
-> reroutes everyone and tells maintenance; the shield (Safety) dims the map to exits, extinguishers and first aid.
+> reroutes everyone and tells maintenance; the shield (Safety) dims the map to exits, extinguishers and first aid;
+> Walk · Wheelchair · Trolley · Forklift under the search bar fits every route to how you move, with why it goes round.
 > To share it with a public HTTPS link (QR code, mic on phones): `scripts/share.sh`. Details: `app/README.md`,
 > the demo script: [DEMO.md](DEMO.md).
 >
