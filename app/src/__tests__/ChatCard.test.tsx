@@ -13,7 +13,7 @@ describe('ChatCard', () => {
     const onSend = jest.fn();
     const onMic = jest.fn();
     await render(<ChatCard messages={[]} question={null} busy={false} onSend={onSend} onMic={onMic} />);
-    expect(screen.getByPlaceholderText('Talk to Finni…')).toBeTruthy();
+    expect(screen.getByPlaceholderText('Talk to FINNI…')).toBeTruthy();
     await fireEvent.press(screen.getByTestId('mic'));
     expect(onMic).toHaveBeenCalled();
     expect(screen.queryByTestId('chat-card')).toBeNull();

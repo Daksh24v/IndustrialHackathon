@@ -16,6 +16,7 @@ export interface State {
   busy: boolean;
   error: string | null;
   note: string | null; // a quiet line in the chat, e.g. a new conversation was started
+  walk: number | null; // walking the route: the step shown ("Start")
 }
 
 export type Event =
@@ -23,6 +24,8 @@ export type Event =
   | { type: 'loaded'; detail: BuildingDetail; outline: Outline; sessionId: string }
   | { type: 'renewed'; sessionId: string; note: string } // the old conversation was lost; the messages stay
   | { type: 'send'; text: string }
+  | { type: 'cancel' } // the question in flight was dropped (Escape)
+  | { type: 'walk'; step: number | null }
   | { type: 'reply'; reply: ChatReply }
   | { type: 'arrived' }
   | { type: 'floor'; floorId: string }
@@ -32,7 +35,7 @@ export type Event =
 
 export const initial: State = {
   view: 'loading', detail: null, outline: null, sessionId: null, messages: [], question: null, map: null,
-  floorId: null, busy: false, error: null, note: null,
+  floorId: null, busy: false, error: null, note: null, walk: null,
 };
 
 export function reduce(state: State, event: Event): State {
@@ -46,20 +49,24 @@ export function reduce(state: State, event: Event): State {
     case 'send':
       return { ...state, busy: true, error: null, note: null, question: null,
                messages: [...state.messages, { from: 'you', text: event.text }] };
+    case 'cancel':
+      return { ...state, busy: false };
+    case 'walk':
+      return { ...state, walk: event.step };
     case 'reply': {
       const { reply, question, map } = event.reply;
       const messages = reply ? [...state.messages, { from: 'guide' as const, text: reply }] : state.messages;
       const next = { ...state, busy: false, messages, question };
       if (!map || !map.focus_floor_id) return next;
       // Something to show: fly in from outside, or switch straight to the floor if already inside.
-      return { ...next, map, floorId: map.focus_floor_id, view: state.view === 'floor' ? 'floor' : 'flying' };
+      return { ...next, map, walk: null, floorId: map.focus_floor_id, view: state.view === 'floor' ? 'floor' : 'flying' };
     }
     case 'arrived':
       return state.view === 'flying' ? { ...state, view: 'floor' } : state;
     case 'floor':
       return { ...state, floorId: event.floorId, view: state.view === 'outside' ? 'flying' : 'floor' };
     case 'back':
-      return { ...state, view: 'outside', floorId: null };
+      return { ...state, view: 'outside', floorId: null, walk: null };
     case 'here': {
       // "I'm here" from a tap: the dot moves at once; the route and the target stay as they are.
       const base: MapView = state.map ?? { you_are_here: null, target: null, route: null, focus_floor_id: null };

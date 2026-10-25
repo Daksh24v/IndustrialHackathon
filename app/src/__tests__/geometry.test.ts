@@ -89,3 +89,26 @@ describe('nearby', () => {
     expect(kept.green).toHaveLength(0); // ends 60 m from the area
   });
 });
+
+describe('the building view tilted up and down', () => {
+  const { isoProject, ISO_PITCH } = require('../geometry');
+
+  it('is the isometric view at its default pitch', () => {
+    const iso = { angle: 0.4, centre: [1, 2] };
+    for (const [p, z] of [[[5, -3], 0], [[-2, 7], 4]] as const) {
+      const [x, y] = isoProject(iso, p, z);
+      const [tx, ty] = isoProject({ ...iso, pitch: ISO_PITCH }, p, z);
+      expect(tx).toBeCloseTo(x, 9);
+      expect(ty).toBeCloseTo(y, 9);
+    }
+  });
+
+  it('shows the floor plan longer and the heights shorter when looking more from above', () => {
+    const steep = { angle: 0, centre: [0, 0], pitch: 1.2 };
+    const flat = { angle: 0, centre: [0, 0], pitch: 0.3 };
+    const depth = (iso: object) => Math.abs(isoProject(iso, [10, 10], 0)[1] - isoProject(iso, [0, 0], 0)[1]);
+    const height = (iso: object) => Math.abs(isoProject(iso, [0, 0], 10)[1] - isoProject(iso, [0, 0], 0)[1]);
+    expect(depth(steep)).toBeGreaterThan(depth(flat));
+    expect(height(steep)).toBeLessThan(height(flat));
+  });
+});

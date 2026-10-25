@@ -58,7 +58,44 @@ export const map = {
   rail: '#262B36',
   green: '#0F2018',
   water: '#0D1D2D',
+  tree: '#1F5C38',
+  treeEdge: '#2E7D4F',
 } as const;
+
+/** The neighbourhood's land, by its use: dim, so the building stays the subject, but each kind its own hue. */
+const AREA_FILL: Record<string, string> = {
+  industrial: '#1C1830', commercial: '#132037', retail: '#271A2D', residential: '#1E1C17', parking: '#191D24',
+  grass: '#11261A', park: '#12301E', forest: '#0C2614', farmland: '#202310', meadow: '#15281A', sports: '#0F2A27',
+  construction: '#272216', brownfield: '#241F17', cemetery: '#14241C', allotments: '#18281A', railway: '#1A1C22',
+};
+export const areaFill = (kind: string) => AREA_FILL[kind] ?? map.green;
+
+/** Next door's buildings, by what they are: a top and the two wall shades. */
+const NEAR_TOP: Record<string, string> = {
+  industrial: '#2A2440', commercial: '#1D2C45', office: '#1D2C45', retail: '#38213C', residential: '#2F2A21',
+  public: '#183530', religious: '#2E2A3A', parking: '#23272E',
+};
+export function nearStyle(kind?: string): { top: string; wall: string; wallDark: string } {
+  const top = NEAR_TOP[kind ?? ''] ?? map.nearTop;
+  return { top, wall: shade(top, 0.8), wallDark: shade(top, 0.62) };
+}
+
+/** Roads by class: big roads warmer and wider-looking, paths thin and dim, rail dashed. */
+export function roadStyle(kind: string): { fill: string; edge: string; dashed?: boolean } {
+  switch (kind) {
+    case 'motorway': case 'trunk': case 'motorway_link': case 'trunk_link':
+      return { fill: '#4A3B22', edge: 'rgba(230, 180, 90, 0.5)' };
+    case 'primary': case 'primary_link': case 'secondary': case 'secondary_link':
+      return { fill: '#3A3426', edge: 'rgba(215, 190, 130, 0.4)' };
+    case 'tertiary': case 'residential': case 'unclassified': case 'living_street':
+      return { fill: '#252E3B', edge: 'rgba(130, 160, 195, 0.4)' };
+    case 'footway': case 'path': case 'cycleway': case 'pedestrian': case 'steps': case 'track': case 'bridleway':
+      return { fill: '#1F2833', edge: 'rgba(120, 150, 180, 0.25)' };
+    case 'rail': case 'tram': case 'light_rail': case 'subway': case 'narrow_gauge':
+      return { fill: map.rail, edge: 'rgba(170, 180, 200, 0.55)', dashed: true };
+    default: return { fill: map.road, edge: map.roadEdge };
+  }
+}
 
 export interface RoomStyle {
   fill: string;

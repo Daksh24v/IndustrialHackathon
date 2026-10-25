@@ -94,7 +94,13 @@ export function centre(polygon: Point[]): Point {
 export interface Iso {
   angle: number;
   centre: Point;
+  /** How far the view looks down (radians): ISO_PITCH by default, more for nearly straight down, less for side-on. */
+  pitch?: number;
 }
+
+/** The true isometric view: looking down 35.26°. */
+export const ISO_PITCH = Math.asin(1 / Math.sqrt(3));
+const ISO_SCALE = Math.sqrt(1.5); // keeps the same size on screen as the isometric view at any pitch
 
 const COS30 = Math.cos(Math.PI / 6);
 const SIN30 = 0.5;
@@ -104,7 +110,9 @@ export function isoProject(iso: Iso, [x, y]: Point, z: number): Point {
   const dy = y - iso.centre[1];
   const rx = dx * Math.cos(iso.angle) - dy * Math.sin(iso.angle);
   const ry = dx * Math.sin(iso.angle) + dy * Math.cos(iso.angle);
-  return [(rx - ry) * COS30, -(rx + ry) * SIN30 - z]; // screen: right, down
+  if (iso.pitch === undefined) return [(rx - ry) * COS30, -(rx + ry) * SIN30 - z]; // screen: right, down
+  const away = (rx + ry) / Math.SQRT2;
+  return [(rx - ry) * COS30, -(away * Math.sin(iso.pitch) + z * Math.cos(iso.pitch)) * ISO_SCALE];
 }
 
 /** How far a wall is from the viewer (bigger = nearer, drawn later). */
@@ -139,6 +147,8 @@ export function nearby(context: Context, area: Bounds, reach: number): Context {
     roads: context.roads.filter((item) => near(item.line)),
     green: context.green.filter(near),
     water: context.water.filter(near),
+    areas: (context.areas ?? []).filter((item) => near(item.polygon)),
+    trees: (context.trees ?? []).filter(([x, y]) => x >= box.minX && x <= box.maxX && y >= box.minY && y <= box.maxY),
   };
 }
 

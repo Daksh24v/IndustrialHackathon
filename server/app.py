@@ -33,7 +33,7 @@ import os
 import anthropic
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
@@ -49,6 +49,7 @@ from voice import app as voice_service
 
 DATA = Path(__file__).resolve().parent.parent / "data"
 MAX_SESSIONS = 200
+CALL_TIMEOUT_S = 90  # one Claude call; a stalled one must not hang the demo for minutes
 DEMO_BUILDING = os.environ.get("NAV_DEMO_BUILDING", "proc-factory-dev-003")
 log = logging.getLogger(__name__)
 
@@ -70,6 +71,25 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Talk to your building", version="1.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+# A shared link (QR code) is public: with FINNI_ACCESS_CODE set, the calls that cost credits (conversations,
+# imports, voice) need it, as the header x-finni-code or ?code=. The site and the building data stay open.
+ACCESS_HEADER = "x-finni-code"
+PAID_PATHS = ("/sessions", "/imports", "/voice/")
+
+
+def access_code() -> str:
+    return os.environ.get("FINNI_ACCESS_CODE", "").strip()
+
+
+@app.middleware("http")
+async def require_access_code(request, call_next):
+    code = access_code()
+    if code and request.method in ("POST", "PUT", "DELETE") and request.url.path.startswith(PAID_PATHS):
+        given = request.headers.get(ACCESS_HEADER) or request.query_params.get("code")
+        if given != code:
+            return JSONResponse({"detail": "This needs the access code: open the link from the QR code."}, 401)
+    return await call_next(request)
+
 _sessions: dict[str, BuildingAgent] = {}
 _turns: dict[str, threading.Lock] = {}  # one turn at a time per conversation, so histories never interleave
 _lock = threading.Lock()
@@ -80,7 +100,7 @@ def client() -> anthropic.Anthropic:
     """The Claude client; tests replace this function with a fake."""
     global _client
     if _client is None:
-        _client = anthropic.Anthropic(max_retries=3)
+        _client = anthropic.Anthropic(max_retries=3, timeout=CALL_TIMEOUT_S)
     return _client
 
 
@@ -387,7 +407,7 @@ if "NAV_BACKEND_URL" not in os.environ:
     def _voice_backend() -> TestClient:
         global _in_process
         if _in_process is None:
-            _in_process = TestClient(app, raise_server_exceptions=False)
+            _in_process = TestClient(app, raise_server_exceptions=False, headers={ACCESS_HEADER: access_code()})
         return _in_process
 
     voice_service.backend = _voice_backend

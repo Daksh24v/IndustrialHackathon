@@ -10,13 +10,28 @@ cd app && npx expo start --web          # opens http://localhost:8081
 Or build once and use one address: `cd app && npm run build`, then open http://localhost:8000 (the backend serves
 the site).
 
-**Home is the orb:** the website opens on a black screen with the orb and the "Ask Finni…" pill. Step 1 is asked
-there; Finni's options appear as chips in the orb's card, and when the answer has a route the map screen takes
-over. The rest of the steps run in the map screen as below (the Finni logo goes back to the orb, the orb's "Map"
-button opens the map again).
+**Map-first, like a map app:** "Find using FINNI" shrinks into the search bar and the building is already there as
+a floor stack (every floor a slab with its rooms; hover one, it turns grey; click it to fly in). The search card
+(top left on a laptop, top on a phone) is where you ask: type, the mic, or a quick search made from what this
+building has ("Toilets", "Exit", "Coffee"…). FINNI's answer opens under it (a bottom sheet on a phone): its
+question with options to tap, or for a route **From → To**, the metres and minutes, the steps ("Turn right into
+Office corridor 0.16, by the Coordinate measuring machine") and **Start**, which walks the route one step at a time
+(Next goes up the stairs to the next floor). Hover a step and it lights up on the map. The buttons bottom right:
+I'm here, the floor stack, 3D / Top (bird's eye) / 2D, turn left / right with the compass between (click it for
+north up, drag it sideways to turn all the way round) and zoom. **Hold and drag the map itself**: sideways turns the
+building or the floor all the way round, up and down tilts it (down looks from above, up from the side); Shift+drag or
+right-drag moves a floor, a click on it says "I'm here" (on a phone: one finger moves, two fingers twist).
+"‹ Building" at the top of a floor (or Escape) goes back to the whole building.
 
-Open the website on the factory (default building; on a laptop-wide window the chat sits left of the map, and the building picker at the top switches buildings, e.g. to the Sunday building). Turn the sound on for Finni's voice. Every step below was
-run on the website on 2026-10-24 (steps 1–7 in one conversation, step 8 in a fresh one at desktop width), with the replies shown (Finni's wording
+**Optional, the real venue:** with `EXPO_PUBLIC_GOOGLE_MAPS_KEY` in `app/.env` (see app/README.md) the opening flies
+round Munich Urban Colab in Google's photorealistic 3D before our building takes over. Add `?intro=1` to the
+address to show the opening again.
+
+**For the jury's phones (QR code):** `scripts/share.sh` prints one public HTTPS link with an access code; make the
+QR code from it. The mic works on phones only over that HTTPS link. Turn the tunnel off after judging.
+
+Open the website on the factory (default building; on a laptop-wide window FINNI sits left of the map, and the building picker at the top switches buildings, e.g. to the Sunday building). Turn the sound on for FINNI's voice. Every step below was
+run on the website on 2026-10-24 (steps 1–7 in one conversation, step 8 in a fresh one at desktop width), with the replies shown (FINNI's wording
 varies a little between runs; the landmark options can too, so pick any one on the ground floor).
 
 | # | You say or do | What happened | What it shows off |

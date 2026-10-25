@@ -144,3 +144,16 @@ def test_text_written_before_a_question_reaches_the_person(tiny: Building):
     agent = BuildingAgent(Session(tiny), client, mode=CHAT)
     assert agent.ask("set it up") == "I read 2 floors."
     assert agent.session.pending_question["question"] == "Which floor?"
+
+
+def test_chat_rules_ask_for_what_was_understood_and_followable_directions():
+    """Interaction is judged on "shows what it understood" and "directions people can follow": the chat prompt
+    asks for both; the benchmark prompt stays as it was."""
+    from navagent.agent import BENCHMARK_RULES, CHAT_RULES
+
+    text = " ".join(CHAT_RULES.split())
+    assert "say what you understood" in text
+    assert "two or three short sentences of turns and things they will see" in text
+    assert "don't write step-by-step lists" not in text
+    assert "two short sentences" in text  # spoken turns
+    assert "turns and things" not in " ".join(BENCHMARK_RULES.split())

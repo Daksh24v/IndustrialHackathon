@@ -138,3 +138,37 @@ describe('moving the camera', () => {
     expect(toScreen(moved, [10, 5])[0] - toScreen(moved, [5, 5])[0]).toBeCloseTo(100);
   });
 });
+
+describe('the building turning', () => {
+  const { fitScale } = require('../components/BuildingBlocks');
+  const floors = [
+    { elevation_m: 0, height_m: 4, footprints: [[[0, 0], [40, 0], [40, 10], [0, 10]]] },
+    { elevation_m: 4, height_m: 4, footprints: [[[0, 0], [40, 0], [40, 10], [0, 10]]] },
+  ];
+
+  it('is sized so that it fits at every angle (no jumping while it turns)', () => {
+    const { isoProject } = require('../geometry');
+    const scale = fitScale(floors, [20, 5], 800, 600);
+    for (let step = 0; step < 36; step += 1) {
+      const iso = { angle: (step / 36) * 2 * Math.PI, centre: [20, 5] };
+      for (const floor of floors) {
+        for (const p of floor.footprints[0]) {
+          const [x] = isoProject(iso, p, floor.elevation_m);
+          expect(Math.abs(x) * scale).toBeLessThanOrEqual(800 * 0.82);
+        }
+      }
+    }
+    expect(scale).toBeGreaterThan(0);
+  });
+});
+
+describe('the compass', () => {
+  const { wrapAngle } = require('../components/FloorScene');
+
+  it('turns back to north the short way', () => {
+    expect(wrapAngle(0)).toBeCloseTo(0);
+    expect(wrapAngle(Math.PI / 2)).toBeCloseTo(Math.PI / 2);
+    expect(wrapAngle((3 * Math.PI) / 2)).toBeCloseTo(-Math.PI / 2);
+    expect(wrapAngle(-5 * Math.PI)).toBeCloseTo(Math.PI);
+  });
+});

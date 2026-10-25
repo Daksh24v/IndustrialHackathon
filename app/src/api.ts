@@ -1,4 +1,5 @@
 /** Typed client for the backend server (server/app.py). */
+import { accessHeaders } from './access';
 
 export type Point = [number, number];
 
@@ -80,10 +81,12 @@ export interface RoutePiece {
  * when it has none. */
 export interface Context {
   attribution: string;
-  buildings: { polygon: Point[]; height_m: number }[];
-  roads: { line: Point[]; width_m: number; kind: string }[];
+  buildings: { polygon: Point[]; height_m: number; kind?: string }[]; // kind: industrial, residential, retail, …
+  roads: { line: Point[]; width_m: number; kind: string }[]; // kind: the highway class, or rail, tram, …
   green: Point[][];
   water: Point[][];
+  areas?: { polygon: Point[]; kind: string }[]; // land use: industrial, parking, forest, farmland, …
+  trees?: Point[];
 }
 
 /** Edits a facility manager made to the building in this conversation (absent = none). */
@@ -144,7 +147,7 @@ async function call<T>(path: string, init?: RequestInit, fetcher: typeof fetch =
   try {
     response = await fetcher(`${API_URL}${path}`, {
       ...init,
-      headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
+      headers: { 'content-type': 'application/json', ...accessHeaders(), ...(init?.headers ?? {}) },
     });
   } catch {
     throw new ApiError(`Can't reach the server at ${API_URL}.`, 0);
