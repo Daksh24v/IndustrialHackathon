@@ -125,6 +125,18 @@ def compare(truth: Building, imported: dict) -> dict:
     result["connectors"] = len(true_links)
     result["connectors_found"] = len(true_links & imported_links)
     result["imported_connectors"] = len(imported_links)
+    # The same stairs can be one connector through every floor or one per flight: also count the flights, as
+    # pairs of spaces on consecutive floors that some connector joins (kind aside).
+    levels = {f["id"]: f["level"] for f in truth.floors.values()}
+
+    def flights(stops):
+        stops = sorted(stops, key=lambda stop: levels[stop[0]])
+        return {frozenset((a[1], b[1])) for a, b in zip(stops, stops[1:]) if None not in (a[1], b[1])}
+
+    true_flights = set().union(*(flights(stops) for _, stops in true_links))
+    imported_flights = set().union(*(flights(stops) for _, stops in imported_links))
+    result["flights"] = len(true_flights)
+    result["flights_found"] = len(true_flights & imported_flights)
 
     rebuilt = Building(imported)
     rng = random.Random(truth.id)
@@ -208,6 +220,7 @@ def report(total: Counter) -> None:
     print(f"doors found: {share('doors_found', 'doors')}  (imported {total['imported_doors']})")
     print(f"stairs/lifts linked right: {share('connectors_found', 'connectors')}  "
           f"(imported {total['imported_connectors']})")
+    print(f"stair flights joined right: {share('flights_found', 'flights')}")
     print(f"floors lined up (within 0.1 m; not Swiss): {share('floors_aligned', 'floors_to_align')}")
     print(f"route lengths right: {share('routes_right', 'routes')}")
     print(f"shared walls right: {share('walls_right', 'walls')}")

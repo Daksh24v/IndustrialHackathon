@@ -140,6 +140,9 @@ class Constraints:
     min_width_m: float = 0.0
     closed: frozenset[str] = frozenset()
     extra_openings: tuple[dict, ...] = ()
+    # Space types or room types a route may pass through (a forklift: halls, corridors, storage); any other
+    # space can still be where it starts or ends, never a shortcut. None: any space.
+    through_types: frozenset[str] | None = None
 
 
 @dataclass
@@ -351,10 +354,16 @@ class Building:
             for opening in [*self.openings.values(), *constraints.extra_openings]
             if self._opening_allowed(opening, constraints)
         }
+        pockets: dict[str, list[tuple[str, float]]] = {}  # spaces only to start or end in: centre -> doors
         for space_id in open_spaces:
+            through = self.passes_through(space_id, constraints)
             for first, second, length in self.space_walks(space_id, constraints.extra_openings):
                 if (first == space_id or first in open_doors) and second in open_doors:
-                    graph.add_edge(first, second, weight=round(length, LENGTH_DECIMALS), via=space_id)
+                    if through:
+                        graph.add_edge(first, second, weight=round(length, LENGTH_DECIMALS), via=space_id)
+                    elif first == space_id:
+                        pockets.setdefault(space_id, []).append((second, round(length, LENGTH_DECIMALS)))
+        graph.graph["pockets"] = pockets
         elevations = {floor_id: floor["elevation_m"] for floor_id, floor in self.floors.items()}
         for connector in self.connectors.values():
             if connector["id"] in constraints.closed:
@@ -376,6 +385,24 @@ class Building:
                 graph.add_edge(low_space, high_space, weight=round(cost, LENGTH_DECIMALS), via=connector["id"])
         return graph
 
+    def passes_through(self, space_id: str, constraints: Constraints) -> bool:
+        types = constraints.through_types
+        space = self.spaces[space_id]
+        return types is None or space["type"] in types or space.get("room_type") in types
+
+    @staticmethod
+    def _with_ends(graph: nx.MultiGraph, *spaces: str) -> nx.MultiGraph:
+        """The graph with these spaces joined to their doors, when they are only to start or end in."""
+        pockets = graph.graph.get("pockets", {})
+        wanted = [space_id for space_id in spaces if space_id in pockets]
+        if not wanted:
+            return graph
+        graph = graph.copy()
+        for space_id in wanted:
+            for door, length in pockets[space_id]:
+                graph.add_edge(space_id, door, weight=length, via=space_id)
+        return graph
+
     def exits(self, constraints: Constraints = Constraints()) -> list[str]:
         """Door nodes of the entrances that are open under the constraints."""
         return [
@@ -385,10 +412,16 @@ class Building:
         ]
 
     def distances_from(self, source: str, constraints: Constraints = Constraints()) -> dict[str, float]:
-        graph = self.graph(constraints)
+        graph = self._with_ends(self.graph(constraints), source)
         if source not in graph:
             return {}
-        return nx.single_source_dijkstra_path_length(graph, source, weight="weight")
+        distances = nx.single_source_dijkstra_path_length(graph, source, weight="weight")
+        for space_id, doors in graph.graph.get("pockets", {}).items():  # reached as a destination
+            if space_id != source:
+                reach = [distances[door] + length for door, length in doors if door in distances]
+                if reach:
+                    distances[space_id] = min(reach)
+        return distances
 
     def _route(self, graph: nx.MultiGraph, start: str, destination: str, length: float, nodes: list[str]) -> Route:
         elements: list[str] = []
@@ -413,7 +446,7 @@ class Building:
                      element_path=elements, hops=hops, hop_lengths=hop_lengths)
 
     def route(self, start: str, destination: str, constraints: Constraints = Constraints()) -> Route:
-        graph = self.graph(constraints)
+        graph = self._with_ends(self.graph(constraints), start, destination)
         try:
             length, nodes = nx.single_source_dijkstra(graph, start, destination, weight="weight")
         except (nx.NetworkXNoPath, nx.NodeNotFound) as error:
@@ -422,7 +455,7 @@ class Building:
 
     def exit_route(self, start: str, constraints: Constraints = Constraints()) -> Route:
         """The walk from a space out of the building through its nearest open entrance."""
-        graph = self.graph(constraints)
+        graph = self._with_ends(self.graph(constraints), start)
         exits = [door for door in self.exits(constraints) if door in graph]
         try:
             length, nodes = nx.multi_source_dijkstra(graph, exits, target=start, weight="weight")
@@ -430,6 +463,55 @@ class Building:
             raise EngineError(f"No way out of {self.label(start)}.") from error
         nodes = nodes[::-1]
         return self._route(graph, start, nodes[-1], length, nodes)
+
+    def why_detour(self, start: str, destination: str, constraints: Constraints) -> dict:
+        """Why the route under these constraints is not the plain walk: what the walk would use that isn't
+        allowed (stairs, a narrow door, something closed, a space it can't pass through), and the metres the
+        detour adds (None when there is no way at all)."""
+        plain = Constraints(extra_openings=constraints.extra_openings)
+        try:
+            walk = self.route(start, destination, plain)
+        except EngineError:
+            return {"reasons": [], "extra_m": None, "walk_m": None}
+        reasons = []
+        openings = {o["id"]: o for o in [*self.openings.values(), *constraints.extra_openings]}
+        for element in walk.element_path:
+            if element in constraints.closed:
+                reasons.append(f"{self.element_name(element)} is closed or out of service")
+            elif element in self.connectors:
+                connector = self.connectors[element]
+                if constraints.step_free and not connector.get("step_free", connector["kind"] == "lift"):
+                    reasons.append(f"{connector['name']} ({connector['kind']}) is not step-free")
+            elif element in openings:
+                opening = openings[element]
+                if constraints.step_free and not opening.get("step_free", True):
+                    reasons.append(f"{self.element_name(element)} has a step")
+                elif (opening.get("width_m") or 0.0) < constraints.min_width_m - 1e-9:
+                    reasons.append(f"{self.element_name(element)} is only {opening.get('width_m') or 0:.2f} m wide "
+                                   f"(needs {constraints.min_width_m:.2f} m)")
+        for space_id in walk.space_path[1:-1]:
+            if space_id in constraints.closed:
+                reasons.append(f"{self.label(space_id)} is closed")
+            elif not self.passes_through(space_id, constraints):
+                reasons.append(f"it can't pass through {self.label(space_id)}")
+        reasons = list(dict.fromkeys(reasons))
+        try:
+            length = self.route(start, destination, constraints).length_m
+        except EngineError:
+            return {"reasons": reasons, "extra_m": None, "walk_m": round(walk.length_m, 1)}
+        return {"reasons": reasons if length > walk.length_m + 0.05 else [],
+                "extra_m": round(max(length - walk.length_m, 0.0), 1), "walk_m": round(walk.length_m, 1)}
+
+    def element_name(self, element_id: str) -> str:
+        if element_id in self.connectors:
+            return self.connectors[element_id]["name"]
+        if element_id in self.openings:
+            opening = self.openings[element_id]
+            rooms = " and ".join(self.spaces[s]["name"] for s in opening["space_ids"] if s in self.spaces)
+            return f"the {opening.get('kind', 'door')} {'to' if opening.get('kind') == 'entrance' else 'between'} {rooms}"
+        if element_id in self.spaces:
+            return self.label(element_id)
+        return element_id
 
     def polyline(self, route: Route, through_anchors: bool = True, extra_openings: tuple[dict, ...] = ()) -> list[dict]:
         """The route as lines to draw, one piece per floor, along the walk itself: door -> its landing ->

@@ -31,7 +31,7 @@ address to show the opening again.
 QR code from it. The mic works on phones only over that HTTPS link. Turn the tunnel off after judging.
 
 Open the website on the factory (default building; on a laptop-wide window FINNI sits left of the map, and the building picker at the top switches buildings, e.g. to the Sunday building). Turn the sound on for FINNI's voice. Every step below was
-run on the website on 2026-10-24 (steps 1–7 in one conversation, step 8 in a fresh one at desktop width), with the replies shown (FINNI's wording
+run on the website on 2026-10-24 (steps 1–7 in one conversation, step 8 in a fresh one at desktop width; step 9 added on 2026-10-25, its route and card checked with a canned reply), with the replies shown (FINNI's wording
 varies a little between runs; the landmark options can too, so pick any one on the ground floor).
 
 | # | You say or do | What happened | What it shows off |
@@ -44,6 +44,7 @@ varies a little between runs; the landmark options can too, so pick any one on t
 | 6 | "Take me to room 9.99" | "There's no room 9.99 in this building", with real rooms as options | Wrong input handled honestly, no guess |
 | 7 | Tap the floor somewhere else | The dot jumps to where you tapped; the next route starts there without a question | "I'm here" without GPS or hardware |
 | 8 | Reload, then: "I'm in the quality lab. The office lift is out of service today, and I moved the coordinate measuring machine to office 1.04." | "I've updated three things …"; the lift turns red on the map ("Office lift closed"); on Floor 1 the machine stands in Office 1.04; "there's no step-free route to the machine today" | The facility manager: the map keeps up |
+| 9 | Reload, tap **Forklift** under the search bar, then: "I'm in Warehouse zone H-C1 and Main aisle H-B2 is blocked by a pallet. Take me to the loading dock." (or tap "Loading dock" after saying where you are) | The route goes round through the assembly and additive zones to Logistics zone H-C5, 109 m; the card says "Forklift" and "Why this way: Main aisle H-B2 (Ground floor) is closed · 20 m longer · about 54 s". Then "Nearest forklift charger" | One map for people and vehicles: the profile changes which doors and spaces fit, and FINNI says why |
 
 **The 60-second story (what makes FINNI different):**
 

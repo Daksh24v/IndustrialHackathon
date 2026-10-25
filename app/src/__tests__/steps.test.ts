@@ -4,7 +4,7 @@ import { join } from 'path';
 
 import type { BuildingDetail, MapView, Point } from '../api';
 import { categories } from '../categories';
-import { bare, heading, routeSteps, summary, turnWord } from '../steps';
+import { bare, heading, routeSteps, summary, turnWord, whyThisWay } from '../steps';
 
 const detail: BuildingDetail = JSON.parse(
   readFileSync(join(__dirname, '../../../data/dev/proc-factory-dev-003/building.json'), 'utf-8'));
@@ -102,5 +102,23 @@ describe('the rooms along a route', () => {
     expect(names).not.toContain('Toilet 0.22');
     expect(routeSpaces(null, detail).size).toBe(0);
     expect([...landmarkNames(routeSteps(map, detail))]).toEqual(['Coordinate measuring machine 0.21']);
+  });
+});
+
+describe('profiles', () => {
+  it('says why a forklift goes round, how much longer and how long', () => {
+    const route = { ...map.route!, profile: 'Forklift', why_detour: ['Main aisle H-B2 (Ground floor) is closed'],
+      extra_m: 20.2, time_s: 54 };
+    expect(whyThisWay(route)).toBe('Why this way: Main aisle H-B2 (Ground floor) is closed · 20 m longer · about 54 s');
+    const sum = summary({ ...map, route }, detail);
+    expect(sum).toMatchObject({ profile: 'Forklift', minutes: 1 });
+    expect(whyThisWay({ ...route, why_detour: [], extra_m: 0, time_s: 300 })).toBe('The direct way fits a forklift · about 5 min');
+    expect(summary(map, detail)?.why).toBeUndefined(); // on foot: nothing new
+  });
+
+  it('puts the forklift quick searches first when driving one', () => {
+    const labels = categories(detail, 'forklift').map((category) => category.label);
+    expect(labels.slice(0, 2)).toEqual(['Loading dock', 'Forklift charger']);
+    expect(categories(detail).map((category) => category.label)).not.toContain('Loading dock');
   });
 });

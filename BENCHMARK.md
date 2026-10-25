@@ -128,12 +128,19 @@ builder conversation (`navagent/builder.py`, server `POST /imports`).
 `uv run python -m evals.plans` rebuilds buildings from their own plans and compares with `building.json`
 (geometry floor by floor; floor alignment only where the dataset's floors share one frame):
 
-| Buildings | Rooms | Doors | Stairs/lifts | Floors lined up | Routes | Shared walls | Above/below | Room numbers |
-|---|---|---|---|---|---|---|---|---|
-| Build (192) | 100% | 99.5% | 28% | 79% | 57% | 100% | 100% | 83% |
-| **Hold-out (48), run once** | **100%** | **97%** | **22%** | **95%** | **55%** | **100%** | **100%** | **81%** |
-| Procedural only, build and hold-out | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% |
+| Buildings | Rooms | Doors | Stairs/lifts | Stair flights | Floors lined up | Routes | Shared walls | Above/below | Room numbers |
+|---|---|---|---|---|---|---|---|---|---|
+| Build (192) | 100% | 99.5% | 40% | 89% | 79% | 90% | 100% | 100% | 83% |
+| **Hold-out (48), run once** | **100%** | **97%** | **33%** | **75%** | **95%** | **82%** | **100%** | **100%** | **81%** |
+| Procedural only, build and hold-out | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% |
 
-The low stairs/routes numbers come from Swiss Dwellings, whose stairwells are drawn like corridors (the
-builder asks which spaces are the stairs, with suggestions), and from OSM floors that the data itself maps a
+Swiss Dwellings plans draw no stair or lift shafts: their stairs are corridor-coloured landings. `stair_halls`
+finds them (corridors that open onto two or more other corridors through at most 4 doors, that have only one
+or two doors, or that have the entrance; a flat's own hallway opens into its rooms instead), joins the ones
+that lie over each other floor to floor, and joins the two nearest landings where nothing overlaps (the stairs
+reach every floor). Swiss routes went from 38% to 83% on the build set (hold-out, all sources: 82%, up from
+55% at its earlier run). "Stairs/lifts" counts exact connectors, and the dataset splits the same stairs sometimes into one
+connector through every floor and sometimes one per flight (and adds a lift the plans don't show), so
+"Stair flights" also counts the floor-to-floor joins. The builder shows the stair halls it found and asks if
+they are right and whether there is a lift. The other gaps come from OSM floors that the data itself maps a
 few decimetres apart. Missing room numbers are not in the drawings at all; the builder lets the person name them.

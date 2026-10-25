@@ -30,6 +30,12 @@ again), which shrinks into the search bar.
   eyewash stations and the stairs light up on every floor. Quick buttons (only what the building has) route to the
   nearest one at once, without Claude (`POST /sessions/{id}/nearest`); when FINNI doesn't know where you are yet, it
   asks.
+- **How you move** (`navcore/profiles.py`, the chip under the search bar: Walk · Wheelchair · Trolley · Forklift,
+  `POST /sessions/{id}/mobility`; or tell FINNI, its `set_mobility` tool): every route and "nearest" fits it
+  (step-free, door width; a forklift drives only through halls, aisles and storage, other rooms only as the
+  destination). The route card says why it isn't the plain walk, how much longer and the time at that speed
+  ("Why this way: Main aisle H-B2 is closed · 20 m longer · about 54 s"); with Forklift the quick searches start
+  with "Loading dock" and "Forklift charger". "Main aisle H-B2 is blocked" uses `block_aisle`. Live app only.
 - **Stairs and lifts between floors** (`shaftStops` in `BuildingBlocks.tsx`): every staircase (zig-zag) and lift
   (column) joins the slabs where it stands; hover one for its name and floors; red when out of service.
 - **Things along the route** (`routeSpaces` in `src/steps.ts`): the things in the rooms you pass stay bright, the

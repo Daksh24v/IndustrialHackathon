@@ -3,7 +3,7 @@
  * that is still being answered. */
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from 'react';
 
-import type { BuildingRow, Report } from '../api';
+import type { BuildingRow, Mobility, Report } from '../api';
 import { clock } from '../changes';
 import type { Category } from '../categories';
 import { groupBuildings } from '../components/BuildingPicker';
@@ -13,6 +13,10 @@ import { Mic, Send } from './icons';
 import { OrbMark } from './OrbMark';
 
 const LOOKING = ['Searching the building…', 'Finding the way…', 'Checking doors and stairs…'];
+const MOBILITY: { id: Mobility; label: string }[] = [
+  { id: 'walk', label: 'Walk' }, { id: 'wheelchair', label: 'Wheelchair' }, { id: 'trolley', label: 'Trolley' },
+  { id: 'forklift', label: 'Forklift' },
+];
 const LOOK_MS = 1600;
 
 interface Props {
@@ -30,6 +34,9 @@ interface Props {
   /** What's reported broken in the building: a red line under the bar that opens the list. */
   reports?: Report[];
   onReports?: () => void;
+  /** How the person moves: every route fits it (step-free, door width, a forklift only through halls and aisles). */
+  mobility?: Mobility;
+  onMobility?: (mobility: Mobility) => void;
 }
 
 export function SearchBar(props: Props) {
@@ -91,6 +98,16 @@ export function SearchBar(props: Props) {
           </button>
         )}
       </div>
+      {props.onMobility && (
+        <div className="fi-modes" role="radiogroup" aria-label="How you move" data-testid="mobility">
+          {MOBILITY.map((option) => (
+            <button key={option.id} type="button" role="radio" aria-checked={(props.mobility ?? 'walk') === option.id}
+                    className="fi-mode" data-testid={`mobility-${option.id}`} onClick={() => props.onMobility?.(option.id)}>
+              {option.label}
+            </button>
+          ))}
+        </div>
+      )}
       {categories.length > 0 && (
         <div className="fi-chips" role="list" aria-label="Quick searches">
           {categories.map((category) => (

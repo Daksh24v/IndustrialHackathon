@@ -5,7 +5,7 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   api, ApiError, buildingFromUrl, type BuildingRow, type Context, type MaintenanceMessage, pickBuilding, placeOf, type Point,
-  type Report, type SafetyKind, showBuildingInUrl,
+  type Mobility, type Report, type SafetyKind, showBuildingInUrl,
 } from './src/api';
 import { categories } from './src/categories';
 import { withReports } from './src/changes';
@@ -104,6 +104,9 @@ function Guide() {
   const [panelMode, setPanelMode] = useState<PanelMode>('answer');
   const [safety, setSafety] = useState(false);
   const [safetyBusy, setSafetyBusy] = useState<SafetyKind | null>(null);
+  // How the person moves (the chip under the search bar); the conversation's routes all fit it.
+  const [mobility, setMobility] = useState<Mobility>('walk');
+  const toldByFinni = useRef(false); // FINNI set it in the chat: the server has it already (with any width they gave)
   const window = useWindowDimensions();
   const wide = isWide(window.width);
   const handle = useRef<MapHandle | null>(null);
@@ -251,7 +254,22 @@ function Guide() {
     dispatch({ type: 'error', message: '' });
     setAttempt((n) => n + 1);
   };
-  const quick = useMemo(() => categories(state.detail), [state.detail]);
+  useEffect(() => {
+    if (!state.sessionId) return;
+    if (toldByFinni.current) {
+      toldByFinni.current = false;
+      return;
+    }
+    api.mobility(state.sessionId, mobility).catch(() => setToast("Couldn't change how you move; try again."));
+  }, [state.sessionId, mobility]);
+  useEffect(() => { // "I'm driving a forklift" in the chat: the chip follows
+    const said = state.map?.route?.profile?.toLowerCase() as Mobility | undefined;
+    if (said && said !== mobility && ['wheelchair', 'trolley', 'forklift'].includes(said)) {
+      toldByFinni.current = true;
+      setMobility(said);
+    }
+  }, [state.map]); // eslint-disable-line react-hooks/exhaustive-deps
+  const quick = useMemo(() => categories(state.detail, mobility), [state.detail, mobility]);
   const safetyChoices = useMemo(() => safetyButtons(state.detail), [state.detail]);
   const drawn = useMemo(() => withReports(state.map, reports), [state.map, reports]); // the map with reports in red
   const steps = useMemo(() => routeSteps(state.map, state.detail), [state.map, state.detail]);
@@ -407,7 +425,8 @@ function Guide() {
     <SearchBar busy={state.busy} mode={sphere} mic={voice.mic} notice={voice.notice}
                onSubmit={(text) => void ask(text)} onCancel={dropAnswer} onMic={voice.toggle}
                building={current} buildings={buildings} onPickBuilding={pickOther} categories={quick}
-               reports={reports} onReports={() => openPanel('reports')} />
+               reports={reports} onReports={() => openPanel('reports')}
+               mobility={mobility} onMobility={setMobility} />
   );
 
   return (
@@ -462,7 +481,7 @@ function Guide() {
       )}
 
       {inside && !walking && (
-        <div className="fi fi-floor" style={wide ? { left: mapLeft + (window.width - mapLeft - 72) / 2 } : { left: 12, top: 160, transform: 'none' }}>
+        <div className="fi fi-floor" style={wide ? { left: mapLeft + (window.width - mapLeft - 72) / 2 } : { left: 12, top: 200, transform: 'none' }}>
           <button type="button" className="fi-back" data-testid="building" aria-label="Back to the whole building (Escape)"
                   title="Back to the whole building (Esc)" onClick={() => dispatch({ type: 'back' })}>
             ‹ Building
