@@ -91,3 +91,16 @@ describe('quick searches', () => {
     expect(categories(null)).toEqual([]);
   });
 });
+
+describe('the rooms along a route', () => {
+  it('lists where the route starts, passes and ends', () => {
+    const { routeSpaces, landmarkNames } = require('../steps');
+    const spaces: Set<string> = routeSpaces(map, detail);
+    const names = [...spaces].map((id) => detail.spaces.find((space) => space.id === id)?.name);
+    expect(names).toEqual(expect.arrayContaining(['Quality lab 0.21', 'Office corridor 0.16', 'Staircase 0.17',
+                                                  'Office corridor 1.01', 'Office 1.04']));
+    expect(names).not.toContain('Toilet 0.22');
+    expect(routeSpaces(null, detail).size).toBe(0);
+    expect([...landmarkNames(routeSteps(map, detail))]).toEqual(['Coordinate measuring machine 0.21']);
+  });
+});

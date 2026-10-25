@@ -90,7 +90,30 @@ export interface Context {
 }
 
 /** Edits a facility manager made to the building in this conversation (absent = none). */
+/** Something a person reported broken for the whole building (server/reports.py): everyone's routes avoid it. */
+export interface Report {
+  element_id: string;
+  kind: string; // lift, stairs, door, entrance, room
+  label: string; // "Office lift (Ground floor ↔ Floor 1)"
+  floor_ids: string[];
+  problem: string;
+  reported_at: number; // seconds since 1970
+}
+
+/** One message to the maintenance team: in the on-screen inbox, and emailed when that is set up. */
+export interface MaintenanceMessage {
+  building_id: string;
+  subject: string;
+  body: string;
+  sent_at: number;
+  delivery: string; // inbox, emailing, emailed, email failed: ...
+}
+
+/** Safety mode's quick buttons: what to find the nearest of. */
+export type SafetyKind = 'exit' | 'fire_extinguisher' | 'defibrillator' | 'eyewash_station';
+
 export interface MapChanges {
+  reported?: Report[]; // broken for everyone (also listed in closed when drawn)
   closed: string[]; // opening ids, connector ids or space ids
   new_doors: { id: string; floor_id: string; position: Point; width_m: number }[];
   moved: { asset_id: string; label: string; space_id: string; floor_id: string; position: Point }[];
@@ -183,6 +206,21 @@ export const api = {
   /** Where the person is, by a place's name (the AR camera can call this too): from then on Finni doesn't ask. */
   setPosition: (sessionId: string, space: string, fetcher?: typeof fetch) =>
     call<Position>(`/sessions/${sessionId}/position`, { method: 'POST', body: JSON.stringify({ space }) }, fetcher),
+  /** What people reported broken in the building (polled: a colleague's report shows up here too). */
+  reports: (buildingId: string, fetcher?: typeof fetch) =>
+    call<{ reports: Report[]; email: boolean }>(`/buildings/${buildingId}/reports`, undefined, fetcher),
+  report: (buildingId: string, element: string, problem: string, fetcher?: typeof fetch) =>
+    call<{ report: Report; maintenance: string }>(
+      `/buildings/${buildingId}/reports`, { method: 'POST', body: JSON.stringify({ element, problem }) }, fetcher),
+  /** It works again. */
+  clearReport: (buildingId: string, elementId: string, fetcher?: typeof fetch) =>
+    call<{ maintenance: string }>(`/buildings/${buildingId}/reports/${elementId}`, { method: 'DELETE' }, fetcher),
+  maintenance: (buildingId: string, fetcher?: typeof fetch) =>
+    call<{ messages: MaintenanceMessage[]; email: boolean }>(`/maintenance?building_id=${buildingId}`, undefined, fetcher),
+  /** Safety mode: the route to the nearest exit or safety thing, at once and without Claude (409: where are you?). */
+  nearest: (sessionId: string, kind: SafetyKind, fetcher?: typeof fetch) =>
+    call<{ found: { kind: string; label: string; room: string; walk_m: number }; map: MapView }>(
+      `/sessions/${sessionId}/nearest`, { method: 'POST', body: JSON.stringify({ kind }) }, fetcher),
   /** Where the person is, by a point on a floor: a tap on the map ("I'm here"). */
   setPositionAt: (sessionId: string, floorId: string, [x, y]: Point, fetcher?: typeof fetch) =>
     call<Position>(
