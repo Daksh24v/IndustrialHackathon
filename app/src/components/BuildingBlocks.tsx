@@ -31,8 +31,6 @@ const SPIN_PER_S = (2 * Math.PI) / 90; // the idle turn: once round in 90 s
 const SPIN_PAUSE_MS = 5000; // after a touch the building holds still this long
 const TAP_SLOP_PX = 5;
 const TURN_MS = 450;
-const HOVER_TOP = '#34465C';
-const HOVER_WALL = '#2B3A4C';
 const GRID_M = 5;
 const GRID_REACH_M = 25; // how far the ground grid reaches beyond the building
 const NEAR_REACH_M = 120; // how much of the neighbourhood is drawn (it is redrawn as the building turns)
@@ -104,11 +102,12 @@ interface Look {
   top: string;
 }
 
-const SLABS: Look = { wall: mapColours.block, wallDark: mapColours.blockDark, top: mapColours.blockTop };
+/** The building's own slabs, in the colours of the look in use (read when drawn, so the light / dark switch shows). */
+const slabs = (): Look => ({ wall: mapColours.block, wallDark: mapColours.blockDark, top: mapColours.blockTop });
 
 /** Faces of one floor block in drawing order: the walls facing the viewer (far to near), then the top. */
 function floorFaces(iso: Iso, footprints: Point[][], bottom: number, top: number, toScreen: (p: Point) => Point,
-                    look: Look = SLABS): Face[] {
+                    look: Look = slabs()): Face[] {
   const walls: Face[] = [];
   const tops: Face[] = [];
   for (const raw of footprints) {
@@ -401,7 +400,7 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
                 <>
                   {faces.map((face, index) => (
                     <Path key={index} d={face.d}
-                          fill={lit ? (face.depth === Infinity ? HOVER_TOP : HOVER_WALL) : face.fill}
+                          fill={lit ? (face.depth === Infinity ? mapColours.hoverTop : mapColours.hoverWall) : face.fill}
                           stroke={lit ? colours.accent : onRoute ? '#F3B27A' : mapColours.blockEdge} strokeWidth={lit ? 1.2 : 0.7}
                           strokeLinejoin="round" />
                   ))}
@@ -456,8 +455,8 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
       </View>
       {hovered && hover && (
         <View pointerEvents="none" testID="floor-hint"
-              style={[styles.hint, { left: Math.min(hover.at[0] + 14, width - 190), top: Math.max(hover.at[1] - 34, 8) }]}>
-          <Text style={styles.hintText}>{hovered.name} · click to open</Text>
+              style={[styles.hint, { backgroundColor: mapColours.chrome, borderColor: mapColours.chromeEdge, left: Math.min(hover.at[0] + 14, width - 190), top: Math.max(hover.at[1] - 34, 8) }]}>
+          <Text style={[styles.hintText, { color: mapColours.chromeText }]}>{hovered.name} · click to open</Text>
         </View>
       )}
     </View>

@@ -15,11 +15,14 @@ import type { SphereMode } from './src/orb/sphere';
 import { chatTurn, RENEWED_NOTE } from './src/session';
 import { initial, nextStep, reduce } from './src/state';
 import { routeSteps, summary } from './src/steps';
-import { colours, isWide, map as mapColours } from './src/theme';
+import { flushSync } from 'react-dom';
+
+import { colours, isWide, map as mapColours, setTheme, startTheme, type ThemeName } from './src/theme';
 import { MapControls, type MapHandle, type ViewMode } from './src/ui/MapControls';
 import { OrbMark } from './src/ui/OrbMark';
 import { Panel, sheetHeight, type Snap } from './src/ui/Panel';
 import { SearchBar } from './src/ui/SearchBar';
+import { switchWithTransition } from './src/ui/ThemeToggle';
 import { WalkBanner } from './src/ui/WalkBanner';
 import './src/ui/finni.css';
 import { useVoice } from './src/useVoice';
@@ -59,6 +62,28 @@ export default function App() {
 function Guide() {
   const [state, dispatch] = useReducer(reduce, initial);
   const [view, setView] = useState<ViewMode>('3d');
+  // Dark (the digital twin) or light: the map's colours switch, the page's too (the "dark" class on <html>).
+  const [theme, setThemeState] = useState<ThemeName>(() => {
+    const first = startTheme(globalThis.location?.search ?? '', savedTheme());
+    setTheme(first);
+    return first;
+  });
+  useEffect(() => {
+    globalThis.document?.documentElement.classList.toggle('dark', theme === 'dark');
+  }, [theme]);
+  const toggleTheme = () => {
+    const next: ThemeName = theme === 'dark' ? 'light' : 'dark';
+    switchWithTransition(() => {
+      setTheme(next);
+      flushSync(() => setThemeState(next));
+      document.documentElement.classList.toggle('dark', next === 'dark');
+      try {
+        localStorage.setItem(THEME_KEY, next);
+      } catch {
+        // private window: the choice just isn't remembered
+      }
+    });
+  };
   const [buildings, setBuildings] = useState<BuildingRow[]>([]);
   const [buildingId, setBuildingId] = useState<string | null>(null);
   const [context, setContext] = useState<Context | null>(null); // the OpenStreetMap neighbourhood, if any
@@ -282,9 +307,9 @@ function Guide() {
   );
 
   return (
-    <View style={styles.screen}>
+    <View style={[styles.screen, { backgroundColor: mapColours.background }]}>
       <StatusBar style="dark" />
-      <View style={styles.map} testID="map-layer">
+      <View style={[styles.map, { backgroundColor: mapColours.background }]} testID="map-layer" key={theme}>
         {state.view === 'loading' && !state.error ? <ActivityIndicator color={colours.accent} style={{ flex: 1 }} /> : null}
         {state.outline && (state.view === 'outside' || state.view === 'flying') ? (
           <BuildingBlocks
@@ -314,7 +339,7 @@ function Guide() {
           )
         ) : null}
         {context?.buildings.length && (state.view !== 'floor' || view !== 'plan') ? (
-          <Text style={styles.credit} pointerEvents="none">{context.attribution}</Text>
+          <Text style={[styles.credit, { color: mapColours.chromeMuted }]} pointerEvents="none">{context.attribution}</Text>
         ) : null}
       </View>
 
@@ -348,7 +373,8 @@ function Guide() {
       <MapControls inside={inside} view={view} onView={setView} handle={handle} floors={floors}
                    floorId={state.floorId} onFloor={(floorId) => dispatch({ type: 'floor', floorId })}
                    onBuilding={() => dispatch({ type: 'back' })} onHere={openHere} bottom={controlsBottom}
-                   mapKey={`${state.view}:${state.floorId}:${view}`} />
+                   mapKey={`${state.view}:${state.floorId}:${view}:${theme}`} theme={theme} onTheme={toggleTheme}
+                   compact={!wide && inside} />
       {walking && (
         <WalkBanner steps={steps} index={state.walk!} left={wide ? mapLeft : 12} right={wide ? 88 : 12}
                     onNext={() => walkTo(Math.min(steps.length - 1, state.walk! + 1))}
@@ -375,6 +401,14 @@ function Guide() {
   );
 }
 
+const THEME_KEY = 'finni-theme';
+const savedTheme = (): string | null => {
+  try {
+    return globalThis.localStorage?.getItem(THEME_KEY) ?? null;
+  } catch {
+    return null;
+  }
+};
 const COLUMN_PX = 400; // FINNI's column on laptops: the search card and the answer under it
 const SESSION_WAIT_MS = 8000; // a question asked while the building still loads waits this long
 const DONE_MS = 1300; // the orb stays green this long after an answer

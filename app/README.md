@@ -24,6 +24,9 @@ again), which shrinks into the search bar.
 - **Dragging the map** (mouse): hold and drag sideways to turn the building or a floor all the way round, up and down
   to tilt it (down looks from above, up from the side); Shift+drag or right-drag moves a floor; a click is "I'm here".
   Touch: one finger moves, two fingers twist.
+- **Light / dark** (`src/ui/ThemeToggle.tsx`, top of the map buttons): the dark digital twin or the light map, with
+  FINNI's cards to match; the new look opens from the middle of the screen. The choice is remembered; `?theme=light`
+  or `?theme=dark` picks one. `main` opens dark, the `UI/UX-Design` branch light (`DEFAULT_THEME` in `src/theme.ts`).
 - **Voice:** while you talk to FINNI its orb grows big over the map ("Listening…", "Speaking…").
 
 The building (`src/components/BuildingBlocks.tsx`): a floor stack, every floor a slab with its rooms drawn on it,

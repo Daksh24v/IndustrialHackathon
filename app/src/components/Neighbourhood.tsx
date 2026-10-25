@@ -45,7 +45,7 @@ export function GroundLayers({ ground, flatten = 1 }: { ground: Ground; flatten?
     <G testID="neighbourhood">
       {ground.areas.map((area, i) => <Path key={`area-${i}`} d={area.d} fill={area.fill} />)}
       {ground.green.map((d, i) => <Path key={`green-${i}`} d={d} fill={mapColours.green} />)}
-      {ground.water.map((d, i) => <Path key={`water-${i}`} d={d} fill={mapColours.water} stroke="#1E4466" strokeWidth={0.6} />)}
+      {ground.water.map((d, i) => <Path key={`water-${i}`} d={d} fill={mapColours.water} stroke={mapColours.waterEdge} strokeWidth={0.6} />)}
       {ground.roads.map((road, i) => (
         <Path key={`road-${i}`} d={road.d} fill={road.fill} stroke={road.edge} strokeWidth={road.dashed ? 0.9 : 0.5}
               strokeDasharray={road.dashed ? [3, 3] : undefined} />

@@ -109,7 +109,7 @@ export function FloorPlan({ detail, floorId, map, width, height, onTapFloor, con
   const targetPx = target ? toScreen(transform, target.position) : null;
 
   return (
-    <View ref={frame} style={[styles.frame, { width, height }]} testID="floor-plan">
+    <View ref={frame} style={[styles.frame, { width, height, backgroundColor: mapColours.background }]} testID="floor-plan">
       <Animated.View {...gestures.panHandlers} style={[{ width, height }, gestures.style]}>
         <Svg width={width + 2 * MARGIN_PX} height={height + 2 * MARGIN_PX} style={{ position: 'absolute', left: -MARGIN_PX, top: -MARGIN_PX }}>
           <G transform={`translate(${MARGIN_PX} ${MARGIN_PX})`}>

@@ -4,7 +4,9 @@
 import { type PointerEvent as ReactPointerEvent, type RefObject, useEffect, useRef, useState } from 'react';
 
 import type { Floor } from '../api';
+import type { ThemeName } from '../theme';
 import { Building, Locate } from './icons';
+import { ThemeToggle } from './ThemeToggle';
 
 /** What the open floor view lets the buttons do. */
 export interface MapHandle {
@@ -89,9 +91,13 @@ interface Props {
   bottom: number;
   /** Changes whenever another map view is shown (loaded, a floor, the building): the compass follows the new one. */
   mapKey: string;
+  theme: ThemeName;
+  onTheme: () => void;
+  /** A phone inside a floor: fewer buttons (two fingers turn and zoom), the views side by side, so they all fit. */
+  compact?: boolean;
 }
 
-export function MapControls({ inside, view, onView, handle, floors, floorId, onFloor, onBuilding, onHere, bottom, mapKey }: Props) {
+export function MapControls({ inside, view, onView, handle, floors, floorId, onFloor, onBuilding, onHere, bottom, mapKey, theme, onTheme, compact = false }: Props) {
   const [yaw, setYaw] = useState(0);
   const [tip, setTip] = useState<{ name: string; y: number } | null>(null);
   const turns = !inside || view !== 'plan'; // the building and the 3D / top views turn; the flat plan stays north up
@@ -108,6 +114,7 @@ export function MapControls({ inside, view, onView, handle, floors, floorId, onF
   const top = [...floors].reverse();
   return (
     <div className="fi fi-controls" style={{ bottom }} data-testid="map-controls">
+      <ThemeToggle theme={theme} onToggle={onTheme} />
       <div className="fi-group">
         <button type="button" aria-label="I'm here: tap the floor where you are" title="I'm here" data-testid="here-button" onClick={onHere}>
           <Locate />
@@ -136,7 +143,7 @@ export function MapControls({ inside, view, onView, handle, floors, floorId, onF
         </div>
       )}
       {inside && (
-        <div className="fi-group" role="radiogroup" aria-label="View">
+        <div className={compact ? 'fi-group fi-row' : 'fi-group'} role="radiogroup" aria-label="View">
           {VIEWS.map((option) => (
             <button key={option.mode} type="button" className="txt" role="radio" aria-checked={view === option.mode}
                     aria-label={option.name} title={option.name} data-testid={option.testID}
@@ -148,16 +155,20 @@ export function MapControls({ inside, view, onView, handle, floors, floorId, onF
       )}
       {turns && (
         <div className="fi-group" aria-label="Turn the map">
-          <button type="button" aria-label="Turn left" title="Turn left" data-testid="turn-left" onClick={() => handle.current?.turnBy?.(-STEP)}>
-            <TurnArrow flip />
-          </button>
+          {!compact && (
+            <button type="button" aria-label="Turn left" title="Turn left" data-testid="turn-left" onClick={() => handle.current?.turnBy?.(-STEP)}>
+              <TurnArrow flip />
+            </button>
+          )}
           <Compass yaw={yaw} handle={handle} />
-          <button type="button" aria-label="Turn right" title="Turn right" data-testid="turn-right" onClick={() => handle.current?.turnBy?.(STEP)}>
-            <TurnArrow />
-          </button>
+          {!compact && (
+            <button type="button" aria-label="Turn right" title="Turn right" data-testid="turn-right" onClick={() => handle.current?.turnBy?.(STEP)}>
+              <TurnArrow />
+            </button>
+          )}
         </div>
       )}
-      {inside && (
+      {inside && !compact && (
         <div className="fi-group">
           <button type="button" aria-label="Zoom in" data-testid="zoom-in" onClick={() => handle.current?.zoomBy(1.5)}>+</button>
           <button type="button" aria-label="Zoom out" data-testid="zoom-out" onClick={() => handle.current?.zoomBy(1 / 1.5)}>−</button>

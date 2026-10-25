@@ -480,7 +480,7 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
   const flatten = Math.cos(tilt);
 
   return (
-    <Animated.View ref={frame} style={[styles.frame, { width, height, opacity: appear }]} testID="floor-scene">
+    <Animated.View ref={frame} style={[styles.frame, { width, height, opacity: appear, backgroundColor: mapColours.background }]} testID="floor-scene">
       <Animated.View {...gestures.panHandlers} style={[{ width, height }, gestures.style]}>
         <Svg width={width + 2 * MARGIN_PX} height={height + 2 * MARGIN_PX} style={{ position: 'absolute', left: -MARGIN_PX, top: -MARGIN_PX }}>
           <G transform={`translate(${MARGIN_PX} ${MARGIN_PX})`}>
