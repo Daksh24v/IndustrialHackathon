@@ -9,7 +9,7 @@ import { Animated, Easing, PanResponder, Platform, StyleSheet, Text, View } from
 import Svg, { Circle, G, Path, Text as SvgText } from 'react-native-svg';
 
 import type { MapView, Outline, Point, Space } from '../api';
-import { boundsOf, isoDepth, isoProject, pointInPolygon, signedArea, type Iso } from '../geometry';
+import { boundsOf, ISO_PITCH, isoDepth, isoProject, pointInPolygon, signedArea, type Iso } from '../geometry';
 import { colours, spaceFill } from '../theme';
 import type { MapHandle } from '../ui/MapControls';
 import { type Inset, LABEL_FONT, NO_INSET, wrapAngle } from './FloorScene';
@@ -18,7 +18,11 @@ const ZOOM_MS = 1300;
 const ZOOM_SCALE = 2.4;
 const FLOOR_GAP = 0.08; // fraction of a floor's height left as a visible seam
 const VIEW_ANGLE = Math.PI / 9; // a slight turn so two sides of the building show
-const DRAG_TURN = 0.008; // radians per pixel dragged
+const DRAG_TURN = 0.008; // radians per pixel dragged sideways
+const DRAG_TILT = 0.005; // radians per pixel dragged up or down: down looks more from above, up more from the side
+const PITCH_MIN = 0.2;
+const PITCH_MAX = 1.2;
+const clampPitch = (pitch: number) => Math.min(PITCH_MAX, Math.max(PITCH_MIN, pitch));
 const SPIN_PER_S = (2 * Math.PI) / 90; // the idle turn: once round in 90 s
 const SPIN_PAUSE_MS = 5000; // after a touch the building holds still this long
 const TAP_SLOP_PX = 5;
@@ -51,11 +55,11 @@ interface Props {
 
 /** How big the building may be drawn so that it fits at every angle (it never jumps while turning). */
 export function fitScale(floors: { elevation_m: number; height_m: number; footprints: Point[][] }[], centre: Point,
-                         width: number, height: number, widthShare = 0.82, heightShare = 0.7): number {
+                         width: number, height: number, widthShare = 0.82, heightShare = 0.7, pitch?: number): number {
   let spanX = 1;
   let spanY = 1;
   for (let step = 0; step < 24; step += 1) {
-    const iso: Iso = { angle: (step / 24) * 2 * Math.PI, centre };
+    const iso: Iso = { angle: (step / 24) * 2 * Math.PI, centre, pitch };
     const box = boundsOf(floors.flatMap((floor) => floor.footprints.flat().flatMap((p) => [
       isoProject(iso, p, floor.elevation_m), isoProject(iso, p, floor.elevation_m + floor.height_m)])));
     spanX = Math.max(spanX, box.maxX - box.minX);
@@ -120,7 +124,8 @@ export function BuildingBlocks({ outline, spaces = [], map = null, focusFloorId,
   const plan = boundsOf(all);
   const centre: Point = [(plan.minX + plan.maxX) / 2, (plan.minY + plan.maxY) / 2];
   const [angle, setAngle] = useState(VIEW_ANGLE);
-  const iso: Iso = { angle, centre };
+  const [pitch, setPitch] = useState(ISO_PITCH);
+  const iso: Iso = { angle, centre, pitch };
 
   // Pulled apart: each floor a thin slab, one gap above the other, whatever their real heights.
   const gap = Math.min(28, Math.max(5, Math.max(plan.maxX - plan.minX, plan.maxY - plan.minY) * STACK_GAP));
@@ -133,8 +138,8 @@ export function BuildingBlocks({ outline, spaces = [], map = null, focusFloorId,
   const free = { w: width - inset.left - inset.right - labels, h: height - inset.top - inset.bottom };
   const scale = useMemo(
     () => fitScale(stacked.map((floor) => ({ elevation_m: floor.z, height_m: slab, footprints: floor.footprints })), centre,
-                   free.w, free.h, 0.86, 0.72),
-    [stacked, slab, centre[0], centre[1], free.w, free.h]);
+                   free.w, free.h, 0.86, 0.72, pitch),
+    [stacked, slab, centre[0], centre[1], free.w, free.h, pitch]);
   const top = stacked.length ? stacked[stacked.length - 1].top : 0;
   const middle = isoProject(iso, centre, top / 2); // the stack's middle: the turning axis
   const mid: Point = [inset.left + free.w / 2, inset.top + free.h / 2];
@@ -234,8 +239,11 @@ export function BuildingBlocks({ outline, spaces = [], map = null, focusFloorId,
   pickRef.current = onPickFloor;
   const focused = useRef(!!focus);
   focused.current = !!focus;
+  const pitchRef = useRef(pitch);
+  pitchRef.current = pitch;
   const responder = useMemo(() => {
     let startAngle = 0;
+    let startPitch = ISO_PITCH;
     let moved = 0;
     return PanResponder.create({
       onStartShouldSetPanResponder: () => !focused.current,
@@ -243,6 +251,7 @@ export function BuildingBlocks({ outline, spaces = [], map = null, focusFloorId,
       onPanResponderGrant: () => {
         touched.current = Date.now();
         moved = 0;
+        startPitch = pitchRef.current;
         setAngle((a) => {
           startAngle = a;
           return a;
@@ -252,6 +261,7 @@ export function BuildingBlocks({ outline, spaces = [], map = null, focusFloorId,
         touched.current = Date.now();
         moved = Math.max(moved, Math.abs(g.dx) + Math.abs(g.dy));
         setAngle(startAngle + g.dx * DRAG_TURN);
+        setPitch(clampPitch(startPitch + g.dy * DRAG_TILT));
       },
       onPanResponderRelease: (event) => {
         touched.current = Date.now();

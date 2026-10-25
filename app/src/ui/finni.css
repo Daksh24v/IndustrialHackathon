@@ -452,3 +452,6 @@
   .mo-intro-veil { animation: none; }
   .mo-intro[data-stage="leave"] .mo-intro-words { left: 50%; top: 42%; transform: translate(-50%, -50%); }
 }
+
+/* dragging the map turns and tilts it: never select its labels */
+[data-testid="map-layer"] { -webkit-user-select: none; user-select: none; }

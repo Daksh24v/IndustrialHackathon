@@ -1,7 +1,8 @@
 /** One floor in 3D: the camera looks down at an angle with perspective, rooms are tiles on a floor slab, walls
  * stand up (low, so you can see into the rooms) with gaps at the doors, the route is an orange band on the
  * floor with arrows flowing along it, the target is a pin and you are an orange disc on the floor.
- * Drawn with SVG (no 3D engine: those crash Expo Go on iPhones). Drag to move, pinch or +/− to zoom, ⟳ to turn. */
+ * Drawn with SVG (no 3D engine: those crash Expo Go on iPhones). Drag to turn (mouse) or move (touch), Shift+drag
+ * or right-drag to move, wheel / pinch / +/− to zoom. */
 import { type ComponentRef, type MutableRefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { G, Path, Text as SvgText } from 'react-native-svg';
@@ -27,6 +28,18 @@ const MIN_LABEL_PX = 38;
 const MARGIN_PX = 120; // drawn beyond the edges, so dragging doesn't show blank space
 const TURN_MS = 450;
 const DRAG_TURN = 0.006; // radians per pixel of a turning drag
+const TAP_SLOP_PX = 5;
+const DRAG_TILT = 0.005; // radians per pixel dragged up or down: down looks more from above, up more from the side
+const TILT_MAX = (72 * Math.PI) / 180;
+
+/** The camera turned by `angle` and leaned to `tilt` about a plan point that stays where it is on the screen. */
+export function orbit(cam: Camera, pivot: Point, angle: number, tilt: number): Camera {
+  const turned = rotateAbout(cam, pivot, angle);
+  const leaned = { ...turned, tilt: Math.min(TILT_MAX, Math.max(0, tilt)) };
+  const [x0, y0] = project3d(turned, pivot);
+  const [x1, y1] = project3d(leaned, pivot);
+  return { ...leaned, ox: leaned.ox + x0 - x1, oy: leaned.oy + y0 - y1 };
+} // a click that moves less than this is a tap ("I'm here")
 const FLY_MS = 700; // walking through the steps: the camera moves to the next one
 const STEP_MARGIN_M = 3;
 const STEP_MIN_M = 10; // a step is shown with at least this much floor around it
@@ -229,24 +242,43 @@ export function FloorScene({ detail, floorId, map, footprints, width, height, on
     };
   }, [focus]); // eslint-disable-line react-hooks/exhaustive-deps -- a new stretch only
 
-  // Turn it all the way round like a map app: right-drag, Shift/Alt+drag (mouse) or a two-finger twist.
+  // With a mouse: hold and drag to turn it all the way round; Shift+drag or right-drag moves it; a click without
+  // dragging is "I'm here". On a touch screen one finger moves it and a two-finger twist turns it.
+  const tapRef = useRef<((point: Point) => void) | null>(null);
+  tapRef.current = onTapFloor ? (point) => onTapFloor(floorId, point) : null;
   useEffect(() => {
     const node = frame.current as unknown as HTMLElement | null;
     if (!node || typeof node.addEventListener !== 'function') return;
-    let drag: { x: number; start: Camera; pivot: Point; id: number } | null = null;
+    let drag: { mode: 'turn' | 'move'; x: number; y: number; start: Camera; pivot: Point; id: number; moved: boolean } | null = null;
     const pivotOf = (cam: Camera) => unproject3d(cam, middleRef.current());
+    node.style.cursor = 'grab';
     const onDown = (event: PointerEvent) => {
-      if (event.pointerType !== 'mouse' || !(event.button === 2 || event.shiftKey || event.altKey)) return;
-      event.preventDefault(); // no pan (and no "I'm here") while turning
-      drag = { x: event.clientX, start: camera.current, pivot: pivotOf(camera.current), id: event.pointerId };
+      if (event.pointerType !== 'mouse') return;
+      const mode = event.button === 2 ? 'move' : event.button === 0 && !event.shiftKey ? 'turn' : null;
+      if (!mode) return; // Shift+drag: the usual pan
+      event.preventDefault(); // the drag is ours (no pan underneath)
+      drag = { mode, x: event.clientX, y: event.clientY, start: camera.current, pivot: pivotOf(camera.current), id: event.pointerId, moved: false };
       node.setPointerCapture?.(event.pointerId);
+      node.style.cursor = 'grabbing';
     };
     const onMove = (event: PointerEvent) => {
       if (!drag || event.pointerId !== drag.id) return;
-      setCam(rotateAbout(drag.start, drag.pivot, (event.clientX - drag.x) * DRAG_TURN));
+      const dx = event.clientX - drag.x;
+      const dy = event.clientY - drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > TAP_SLOP_PX) drag.moved = true;
+      if (!drag.moved) return;
+      if (drag.mode === 'turn') setCam(orbit(drag.start, drag.pivot, dx * DRAG_TURN, drag.start.tilt - dy * DRAG_TILT));
+      else setCam(moveCamera(drag.start, 1, dx, dy, size.current.width, size.current.height));
     };
     const onUp = (event: PointerEvent) => {
-      if (drag && event.pointerId === drag.id) drag = null;
+      if (!drag || event.pointerId !== drag.id) return;
+      const was = drag;
+      drag = null;
+      node.style.cursor = 'grab';
+      if (was.mode === 'turn' && !was.moved && tapRef.current) {
+        const box = node.getBoundingClientRect();
+        tapRef.current(unproject3d(camera.current, [event.clientX - box.left, event.clientY - box.top]));
+      }
     };
     const noMenu = (event: MouseEvent) => event.preventDefault();
     let twist: { angle: number; start: Camera; pivot: Point } | null = null;

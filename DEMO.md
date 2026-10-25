@@ -18,9 +18,10 @@ question with options to tap, or for a route **From → To**, the metres and min
 Office corridor 0.16, by the Coordinate measuring machine") and **Start**, which walks the route one step at a time
 (Next goes up the stairs to the next floor). Hover a step and it lights up on the map. The buttons bottom right:
 I'm here, the floor stack, 3D / Top (bird's eye) / 2D, turn left / right with the compass between (click it for
-north up, drag it sideways to turn all the way round; the building turns the same way) and zoom. "‹ Building" at the
-top of a floor (or Escape) goes back to the whole building. Shift+drag or right-drag turns the map too (two fingers on
-a phone).
+north up, drag it sideways to turn all the way round) and zoom. **Hold and drag the map itself**: sideways turns the
+building or the floor all the way round, up and down tilts it (down looks from above, up from the side); Shift+drag or
+right-drag moves a floor, a click on it says "I'm here" (on a phone: one finger moves, two fingers twist).
+"‹ Building" at the top of a floor (or Escape) goes back to the whole building.
 
 **Optional, the real venue:** with `EXPO_PUBLIC_GOOGLE_MAPS_KEY` in `app/.env` (see app/README.md) the opening flies
 round Munich Urban Colab in Google's photorealistic 3D before our building takes over. Add `?intro=1` to the

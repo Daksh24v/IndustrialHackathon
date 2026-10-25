@@ -21,6 +21,9 @@ again), which shrinks into the search bar.
   top button shows the whole building), 3D / Top (bird's eye, straight down) / 2D, turn left / right 45° with the
   compass between them (click: north up; drag sideways: turn all the way round), and zoom. The building and the
   floors turn the same way. Inside a floor, "‹ Building" at the top (or Escape) goes back to the whole building.
+- **Dragging the map** (mouse): hold and drag sideways to turn the building or a floor all the way round, up and down
+  to tilt it (down looks from above, up from the side); Shift+drag or right-drag moves a floor; a click is "I'm here".
+  Touch: one finger moves, two fingers twist.
 - **Voice:** while you talk to FINNI its orb grows big over the map ("Listening…", "Speaking…").
 
 The building (`src/components/BuildingBlocks.tsx`): a floor stack, every floor a slab with its rooms drawn on it,

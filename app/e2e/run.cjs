@@ -146,17 +146,27 @@ const expect = (ok, message) => {
     await page.click('[data-testid="walk-done"]');
     await page.waitForSelector('[data-testid="walk"]', { state: 'detached' });
 
-    // turn the map round (Shift+drag on a laptop), the compass puts north up, 2D and back
-    if (size === 'laptop') {
-      await page.keyboard.down('Shift');
-      await page.mouse.move(900, 450);
-      await page.mouse.down();
-      await page.mouse.move(1100, 450, { steps: 10 });
-      await page.mouse.up();
-      await page.keyboard.up('Shift');
-      await page.waitForTimeout(500);
-      await shot('8-turned');
-    }
+    // hold and drag turns the floor round (and up / down tilts it); a click without dragging says "I'm here"
+    const scene = await (await page.$('[data-testid="floor-scene"]')).boundingBox();
+    const centre = [scene.x + scene.width * (size === 'laptop' ? 0.62 : 0.5), scene.y + scene.height * 0.5];
+    const facing = await compassTurn();
+    await page.mouse.move(centre[0], centre[1]);
+    await page.mouse.down();
+    await page.mouse.move(centre[0] + 160, centre[1], { steps: 10 });
+    await page.mouse.up();
+    await page.waitForTimeout(400);
+    expect((await compassTurn()) !== facing, 'dragging did not turn the floor');
+    await shot('8-turned');
+    const dot = await page.$('[data-testid="you-are-here"]');
+    const dotBefore = dot ? await dot.boundingBox() : null; // after the walk you are on Floor 1: no dot here yet
+    await page.mouse.click(centre[0] - 60, centre[1] + 40);
+    await page.waitForFunction((before) => {
+      const dot = document.querySelector('[data-testid="you-are-here"]');
+      if (!dot) return false;
+      if (!before) return true;
+      const box = dot.getBoundingClientRect();
+      return Math.abs(box.x - before.x) + Math.abs(box.y - before.y) > 10;
+    }, dotBefore, { timeout: 10000 });
     await page.click('[data-testid="compass"]');
     // the bird's eye view: straight down, still turns
     await page.click('[data-testid="view-top"]');
