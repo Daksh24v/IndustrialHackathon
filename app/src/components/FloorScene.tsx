@@ -76,6 +76,23 @@ const FLY_MS = 700; // walking through the steps: the camera moves to the next o
 const STEP_MARGIN_M = 3;
 export const SAFETY_DIM = 0.28; // how much of the map stays visible in safety mode
 const STEP_MIN_M = 10; // a step is shown with at least this much floor around it
+const ROOM_MARGIN_M = 1.5; // a double-clicked room is framed with this much around it
+const DOUBLE_MS = 260; // a click waits this long for a second one (a double-click flies there instead of "I'm here")
+/** How far you can zoom, from the fitted view: out to see it all small, in to a chair's armrest. */
+export const ZOOM_OUT = 0.3;
+export const ZOOM_IN = 40;
+
+/** A zoom by k, cut short so the scale stays between ZOOM_OUT and ZOOM_IN times the fitted one. */
+export function limitZoom(k: number, scale: number, fittedScale: number): number {
+  const next = Math.min(fittedScale * ZOOM_IN, Math.max(fittedScale * ZOOM_OUT, scale * k));
+  return next / scale;
+}
+
+/** The room under a plan point: the smallest one, so a room inside a hall wins over the hall. */
+export function roomAt<T extends { polygon: Point[]; area_m2: number; type: string }>(spaces: T[], point: Point): T | null {
+  const under = spaces.filter((space) => space.type !== 'outdoor' && pointInPolygon(point, space.polygon));
+  return under.reduce<T | null>((best, space) => (!best || space.area_m2 < best.area_m2 ? space : best), null);
+}
 
 /** The box grown about its middle to at least size x size metres. */
 export function atLeast(box: ReturnType<typeof boundsOf>, size: number): ReturnType<typeof boundsOf> {
@@ -375,9 +392,12 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
         frame.current?.measureInWindow((left, top) =>
           onTapFloor(floorId, unproject3d(camera.current, [pageX - left, pageY - top])))
     : undefined;
+  const fittedScale = useRef(fitted.scale);
+  fittedScale.current = fitted.scale;
   const gestures = useMapGestures(width, height, ({ k, tx, ty }) =>
-    setCam((current) => moveCamera(current, k, tx, ty, width, height)), tapped, frame);
-  const zoomBy = (k: number) => setCam((current) => moveCamera(current, k, 0, 0, width, height));
+    setCam((current) => moveCamera(current, limitZoom(k, current.scale, fittedScale.current), tx, ty, width, height)), tapped, frame);
+  const zoomBy = (k: number) =>
+    setCam((current) => moveCamera(current, limitZoom(k, current.scale, fittedScale.current), 0, 0, width, height));
 
   // Turn a quarter about whatever is in the middle of the screen.
   const turning = useRef<number | null>(null);
@@ -444,17 +464,12 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
     };
   }, [handleRef]);
 
-  // Walking through the steps: fly to the stretch, turned so that it goes up the screen (the way you walk).
+  // Fly the camera to a box on the plan, from the side `yaw` looks, leaning `lean`.
   const flying = useRef<number | null>(null);
-  useEffect(() => {
-    if (!focus?.length) return;
-    const [a, b] = [focus[0], focus[focus.length - 1]];
-    const along = Math.hypot(b[0] - a[0], b[1] - a[1]) > 0.5;
-    const yaw = along ? Math.atan2(b[0] - a[0], b[1] - a[1]) : camera.current.yaw;
-    const box = atLeast(grow(boundsOf(focus), STEP_MARGIN_M), STEP_MIN_M);
+  const flyTo = (box: ReturnType<typeof boundsOf>, yaw: number, lean: number) => {
     const corners: Point3[] = [];
     for (const x of [box.minX, box.maxX]) for (const y of [box.minY, box.maxY]) corners.push([x, y, 0], [x, y, WALL_M]);
-    const goal = inside(fitCamera(corners, width - inset.left - inset.right, height - inset.top - inset.bottom, yaw, tilt, 24), inset);
+    const goal = inside(fitCamera(corners, width - inset.left - inset.right, height - inset.top - inset.bottom, yaw, lean, 24), inset);
     const from = camera.current;
     const turnBy = wrapAngle(goal.yaw - from.yaw);
     const began = Date.now();
@@ -463,7 +478,8 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
       const t = Easing.inOut(Easing.cubic)(Math.min(1, (Date.now() - began) / FLY_MS));
       moving();
       setCam({
-        ...goal, yaw: from.yaw + turnBy * t, target: [mix(from.target[0], goal.target[0], t), mix(from.target[1], goal.target[1], t)],
+        ...goal, yaw: from.yaw + turnBy * t, tilt: mix(from.tilt, goal.tilt, t),
+        target: [mix(from.target[0], goal.target[0], t), mix(from.target[1], goal.target[1], t)],
         distance: mix(from.distance, goal.distance, t), scale: mix(from.scale, goal.scale, t), ox: mix(from.ox, goal.ox, t),
         oy: mix(from.oy, goal.oy, t),
       });
@@ -471,11 +487,27 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
     };
     if (flying.current !== null) cancelAnimationFrame(flying.current);
     flying.current = requestAnimationFrame(step);
-    return () => {
-      if (flying.current !== null) cancelAnimationFrame(flying.current);
-      flying.current = null;
-    };
+  };
+  useEffect(() => () => {
+    if (flying.current !== null) cancelAnimationFrame(flying.current);
+    flying.current = null;
+  }, []);
+
+  // Walking through the steps: fly to the stretch, turned so that it goes up the screen (the way you walk).
+  useEffect(() => {
+    if (!focus?.length) return;
+    const [a, b] = [focus[0], focus[focus.length - 1]];
+    const along = Math.hypot(b[0] - a[0], b[1] - a[1]) > 0.5;
+    flyTo(atLeast(grow(boundsOf(focus), STEP_MARGIN_M), STEP_MIN_M), along ? Math.atan2(b[0] - a[0], b[1] - a[1]) : camera.current.yaw, tilt);
   }, [focus]); // eslint-disable-line react-hooks/exhaustive-deps -- a new stretch only
+
+  // A double-click on a room flies to it, keeping the way you look.
+  const flyToRoom = (point: Point) => {
+    const room = roomAt(spaces, point);
+    if (room) flyTo(grow(boundsOf(room.polygon), ROOM_MARGIN_M), camera.current.yaw, camera.current.tilt);
+  };
+  const flyToRoomRef = useRef(flyToRoom);
+  flyToRoomRef.current = flyToRoom;
 
   // With a mouse: hold and drag to turn it all the way round; Shift+drag or right-drag moves it; a click without
   // dragging is "I'm here". On a touch screen one finger moves it and a two-finger twist turns it.
@@ -513,8 +545,20 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
       node.style.cursor = 'grab';
       if (was.mode === 'turn' && !was.moved && tapRef.current) {
         const box = node.getBoundingClientRect();
-        tapRef.current(unproject3d(camera.current, [event.clientX - box.left, event.clientY - box.top]));
+        const point = unproject3d(camera.current, [event.clientX - box.left, event.clientY - box.top]);
+        if (pending) clearTimeout(pending);
+        pending = setTimeout(() => {
+          pending = null;
+          tapRef.current?.(point);
+        }, DOUBLE_MS);
       }
+    };
+    let pending: ReturnType<typeof setTimeout> | null = null;
+    const onDouble = (event: MouseEvent) => {
+      if (pending) clearTimeout(pending); // not "I'm here": the double-click flies there
+      pending = null;
+      const box = node.getBoundingClientRect();
+      flyToRoomRef.current(unproject3d(camera.current, [event.clientX - box.left, event.clientY - box.top]));
     };
     const noMenu = (event: MouseEvent) => event.preventDefault();
     let twist: { angle: number; start: Camera; pivot: Point } | null = null;
@@ -537,9 +581,12 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
     node.addEventListener('pointermove', onMove);
     node.addEventListener('pointerup', onUp);
     node.addEventListener('contextmenu', noMenu);
+    node.addEventListener('dblclick', onDouble);
     node.addEventListener('touchmove', onTouch, { passive: true });
     node.addEventListener('touchend', onTouch);
     return () => {
+      if (pending) clearTimeout(pending);
+      node.removeEventListener('dblclick', onDouble);
       node.removeEventListener('pointerdown', onDown);
       node.removeEventListener('pointermove', onMove);
       node.removeEventListener('pointerup', onUp);

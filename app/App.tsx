@@ -460,7 +460,8 @@ function Guide() {
                         context={context} width={window.width} height={window.height} onTapFloor={tapHere} controls={false}
                         handleRef={handle} inset={inset} highlight={highlight} focus={focusPath} walls={walls} />
           ) : (
-            <FloorPlan detail={state.detail} floorId={state.floorId} map={drawn} safety={safety} width={window.width} height={window.height}
+            <FloorPlan detail={state.detail} floorId={state.floorId} map={drawn} footprints={footprints} safety={safety}
+                       width={window.width} height={window.height}
                        onTapFloor={tapHere} controls={false} handleRef={handle} inset={inset} highlight={highlight}
                        focus={focusPath} />
           )
