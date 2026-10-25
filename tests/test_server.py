@@ -232,6 +232,45 @@ def test_outline_has_one_footprint_set_per_floor(http):
     assert http.get("/buildings/nope/outline").status_code == 404
 
 
+def test_context_is_the_baked_neighbourhood_clear_of_our_footprint(http):
+    from shapely.geometry import LineString, Polygon
+    from shapely.ops import unary_union
+
+    body = http.get(f"/buildings/{BUILDING}/context").json()
+    assert body["attribution"] == "© OpenStreetMap contributors" and body["license"] == "ODbL-1.0"
+    assert body["buildings"] and body["roads"] and body["green"]
+    ground = http.get(f"/buildings/{BUILDING}/outline").json()["floors"][0]["footprints"]
+    ours = unary_union([Polygon(points) for points in ground])
+    for neighbour in body["buildings"]:
+        assert neighbour["height_m"] > 0
+        assert not Polygon(neighbour["polygon"]).intersects(ours.buffer(1.9))
+    for road in body["roads"]:
+        assert road["width_m"] > 0 and road["kind"]
+        assert LineString(road["line"]).intersection(ours).length < 0.5
+    radius = body["radius_m"]
+    assert all(math.dist(ours.centroid.coords[0], point) <= radius + 1
+               for item in body["buildings"] for point in item["polygon"])
+
+
+def test_context_without_a_baked_file_is_empty_not_an_error(http, monkeypatch, tmp_path):
+    from tests.conftest import DATA
+
+    empty = {"buildings": [], "roads": [], "green": [], "water": []}
+    body = http.get("/buildings/proc-campus-dev-000/context").json()
+    assert body.items() >= empty.items() and body["license"] == "ODbL-1.0"
+    assert set(body) == set(http.get(f"/buildings/{BUILDING}/context").json())
+    assert http.get("/buildings/nope/context").status_code == 404
+
+    monkeypatch.setattr(server, "DATA", tmp_path)  # a building dropped in on Sunday, no data/context at all
+    server.forget_buildings()
+    shutil.copytree(DATA / "dev" / BUILDING, tmp_path / "sunday" / "sunday-1")
+    try:
+        assert http.get("/buildings/sunday-1/context").json().items() >= empty.items()
+    finally:
+        monkeypatch.undo()
+        server.forget_buildings()
+
+
 def test_position_from_the_phone_is_used_without_asking(http):
     fake = http.script(([("show_on_map", {"target": "Office 1.04 (Floor 1)"})], "It's upstairs."))
     session = http.post("/sessions", json={"building_id": BUILDING}).json()["session_id"]

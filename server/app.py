@@ -7,6 +7,7 @@ Endpoints
 - POST /buildings/reload                  look for buildings again (one dropped into data/<split>/<id>/)
 - GET  /buildings/{id}                    everything needed to draw it (floors, spaces, doors, lifts, things)
 - GET  /buildings/{id}/outline            per floor: footprint, elevation, height (the 3D outside view)
+- GET  /buildings/{id}/context            the OpenStreetMap neighbourhood around it (empty lists if none)
 - POST /buildings/{id}/route              a route without the agent: length + lines per floor
 - POST /sessions                          start a conversation with the agent about one building
 - POST /sessions/{id}/chat                one turn: {reply, question, map}
@@ -172,6 +173,19 @@ def outline(building_id: str) -> dict:
                            for part in parts if not part.is_empty and part.area > 0.5],
         })
     return {"building": building.info, "floors": floors}
+
+
+@app.get("/buildings/{building_id}/context")
+def context(building_id: str) -> dict:
+    """The neighbourhood from OpenStreetMap (ODbL), baked by scripts/osm_context.py into
+    data/context/<id>.json: buildings with heights, roads and rail with widths, green and water, in the
+    building's own frame (metres). A building without one gets the same shape with empty lists."""
+    building_path(building_id)  # 404 for an unknown building
+    path = DATA / "context" / f"{building_id}.json"
+    if path.is_file():
+        return json.loads(path.read_text(encoding="utf-8"))
+    return {"attribution": "© OpenStreetMap contributors", "license": "ODbL-1.0", "placement": None,
+            "radius_m": 0, "buildings": [], "roads": [], "green": [], "water": []}
 
 
 class RouteRequest(BaseModel):
