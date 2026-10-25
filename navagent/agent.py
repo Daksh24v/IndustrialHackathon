@@ -9,6 +9,7 @@ Run a chat:  uv run --env-file .env python -m navagent data/dev/<building_id>
 """
 
 import json
+import re
 import time
 from collections.abc import Callable
 from functools import wraps
@@ -34,6 +35,10 @@ MAX_READINGS = 10  # a name shared by more spaces than this is reported, not exp
 POSITION_PREFIX = "[Position: the person is in "
 SPOKEN_NOTE = "\n\n[Spoken turn: the answer is read out.]"
 SPOKEN_EFFORT = "low"  # the agent is most of a spoken turn's wait
+LIST_ITEM = re.compile(r"^\s*(?:\d+[.)]|[-•*])\s+(.*\S)\s*$")  # "1. ...", "2) ...", "- ...", "• ..."
+BOLD = re.compile(r"\*\*(.+?)\*\*")
+MAX_ROUTE_STEPS = 4  # directions said in the reply; the map shows the whole route
+MAP_NOTE = "The rest is on your map."
 
 COMMON_RULES = """You are the indoor guide for one building, like Google Maps but inside.
 
@@ -202,6 +207,35 @@ def cached(messages: list[dict]) -> list[dict]:
                 {"type": "text", "text": message["content"], "cache_control": {"type": "ephemeral"}}]}
             break
     return marked
+
+
+def as_prose(text: str, route: bool = False) -> str:
+    """A chat reply as plain sentences: every run of list lines ("1. Turn left", "- Lab 0.12") becomes one
+    paragraph, and **bold** loses its stars. The prompt asks for this, but the model still writes numbered
+    route steps now and then, and those read badly on a phone and out loud. With route=True the directions
+    are cut to the first MAX_ROUTE_STEPS (and the map is mentioned); other lists are kept whole."""
+    lines, items, cut = [], [], False
+
+    def flush() -> None:
+        nonlocal items, cut
+        if items:
+            kept = items[:MAX_ROUTE_STEPS] if route else items
+            cut = cut or len(kept) < len(items)
+            lines.append(" ".join(item if item[-1] in ".!?:" else item + "." for item in kept))
+            items = []
+
+    for line in BOLD.sub(r"\1", text).splitlines():
+        match = LIST_ITEM.match(line)
+        if match:
+            items.append(match.group(1))
+            continue
+        flush()
+        lines.append(line)
+    flush()
+    reply = "\n".join(lines)
+    if cut and "map" not in reply.lower():
+        reply += "\n\n" + MAP_NOTE
+    return reply
 
 
 def position_note(session: Session) -> str | None:
@@ -871,6 +905,8 @@ class BuildingAgent:
             return "(no response)"
         if final.stop_reason == "refusal":
             return "Sorry, I can't help with that request."
+        if self.mode in (CHAT, BUILDER):  # benchmark replies stay as written (the scorer reads them)
+            return as_prose("\n\n".join(said), route=self.session.last_route is not None)
         return "\n\n".join(said)
 
     def answer_benchmark(self, question: str) -> str:

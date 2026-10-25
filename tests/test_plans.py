@@ -1,5 +1,7 @@
 """Level 4 plan import, on hand-written plans in the dataset's drawing style and on real build buildings."""
 
+import csv
+
 import pytest
 from shapely.geometry import Polygon
 
@@ -9,6 +11,8 @@ from navcore.plans import (
     PlanError,
     assemble,
     describe,
+    door_widths_from_room_types,
+    enrich_from_equipment,
     import_plans,
     measured_scale,
     read_svg,
@@ -183,6 +187,33 @@ def test_real_procedural_buildings_rebuild_exactly(building_id):
     assert scores["connectors_found"] == scores["connectors"]
     assert scores["floors_aligned"] == scores["floors_to_align"]
     assert scores["routes_right"] == scores["routes"] and scores["walls_right"] == scores["walls"]
+
+
+@pytest.mark.parametrize("building_id", ["proc-factory-dev-003", "proc-campus-dev-000"])
+def test_equipment_room_types_give_procedural_door_widths(building_id):
+    path = DATA / "dev" / building_id
+    truth = Building.load(path)
+    plans = sorted(path.glob("floor_*.svg"), key=lambda p: int(p.stem.split("_")[1]))
+    flat, _ = import_plans(plans, building_id="imp", floor_heights_m=told_heights(truth))
+    before = compare(truth, flat)
+    imported, _ = import_plans(plans, building_id="imp", floor_heights_m=told_heights(truth))
+    with (path / "equipment.csv").open(encoding="utf-8", newline="") as handle:
+        notes = enrich_from_equipment(imported, list(csv.DictReader(handle)))
+    after = compare(truth, imported)
+    assert any("Door widths from room types" in note for note in notes)
+    assert after["door_widths_right"] > before["door_widths_right"]
+    # rooms without equipment stay generic and keep 0.9 m: offices, which is right
+    assert after["door_widths_right"] == after["door_widths"]
+
+
+def test_door_widths_left_alone_without_generated_room_types():
+    building = {"spaces": [{"id": "a", "room_type": "toilet"}, {"id": "b", "room_type": "corridor"}],
+                "openings": [{"kind": "door", "space_ids": ["a", "b"], "width_m": 0.9}]}
+    assert door_widths_from_room_types(building) == [] and building["openings"][0]["width_m"] == 0.9
+    building["spaces"].append({"id": "c", "room_type": "server_room"})
+    building["openings"].append({"kind": "entrance", "space_ids": ["outside", "c"], "width_m": 0.9})
+    assert door_widths_from_room_types(building)
+    assert [o["width_m"] for o in building["openings"]] == [1.2, 0.9]  # the entrance keeps its width
 
 
 def test_stair_halls_join_floors_when_no_shafts_are_drawn(tmp_path):
