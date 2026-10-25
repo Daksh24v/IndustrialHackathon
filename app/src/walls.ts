@@ -7,8 +7,9 @@ import { pointInPolygon, wallSegments } from './geometry';
 import { box, faceY, type Part, rect } from './models/kit';
 import { CUT_M } from './stairs';
 
-export const OUTER_M = 0.2;
-export const INNER_M = 0.1;
+export const OUTER_M = 0.3;
+export const INNER_M = 0.12;
+const SHADOW_M = 0.18; // the soft shadow along the foot of a wall, on each side it shows
 export const FULL_M = 2.7; // a full wall, as far as the ceiling of a floor allows
 export const LOW_M = 0.4;
 export type WallMode = 'cutaway' | 'low' | 'full';
@@ -100,6 +101,20 @@ export interface DoorLeaf {
   arc: Point[];
 }
 
+/** The direction of the wall an opening is cut into: the wall whose end is nearest the gap's side. */
+function gapDirection(opening: { position: Point }, width: number, walls: Wall[]): Point | null {
+  let best: { along: Point; d: number } | null = null;
+  for (const wall of walls) {
+    const along: Point = [Math.cos(wall.angle), Math.sin(wall.angle)];
+    for (const end of [wall.a, wall.b]) {
+      const d = Math.hypot(end[0] - opening.position[0], end[1] - opening.position[1]);
+      const off = Math.abs((opening.position[0] - end[0]) * along[1] - (opening.position[1] - end[1]) * along[0]);
+      if (off < 0.15 && Math.abs(d - width / 2) < 0.12 && (!best || Math.abs(d - width / 2) < best.d)) best = { along, d: Math.abs(d - width / 2) };
+    }
+  }
+  return best?.along ?? null;
+}
+
 /** The open leaf of each door (not of plain openings or entrances), hinged at one side of its gap and swung into
  * the room that isn't a corridor. */
 export function doorLeaves(openings: Opening[], spaces: Space[], walls: Wall[]): DoorLeaf[] {
@@ -107,20 +122,11 @@ export function doorLeaves(openings: Opening[], spaces: Space[], walls: Wall[]):
   return openings.flatMap((opening) => {
     if (opening.kind !== 'door') return [];
     const width = opening.width_m ?? 0.9;
-    // the wall the door is in: the nearest wall end to the gap's side
-    let best: { wall: Wall; along: Point; d: number } | null = null;
-    for (const wall of walls) {
-      const along: Point = [Math.cos(wall.angle), Math.sin(wall.angle)];
-      for (const end of [wall.a, wall.b]) {
-        const d = Math.hypot(end[0] - opening.position[0], end[1] - opening.position[1]);
-        const off = Math.abs((opening.position[0] - end[0]) * along[1] - (opening.position[1] - end[1]) * along[0]);
-        if (off < 0.15 && Math.abs(d - width / 2) < 0.12 && (!best || Math.abs(d - width / 2) < best.d)) best = { wall, along, d: Math.abs(d - width / 2) };
-      }
-    }
-    if (!best) return [];
-    const along = best.along;
+    const along = gapDirection(opening, width, walls);
+    if (!along) return [];
     const normal: Point = [-along[1], along[0]];
     const rooms = opening.space_ids.map((id) => byId.get(id)).filter((space): space is Space => !!space);
+    if (rooms.some((space) => space.type === 'lift')) return []; // a lift has sliding doors of its own (stairs.ts liftCar)
     const room = rooms.find((space) => space.type === 'room') ?? rooms.find((space) => space.type !== 'corridor') ?? rooms[0];
     let side = 1;
     if (room) {
@@ -142,4 +148,43 @@ export function doorLeaves(openings: Opening[], spaces: Space[], walls: Wall[]):
 /** The leaf as parts in its own frame: x from the hinge into the room. */
 export function leafParts(leaf: DoorLeaf, height: number): Part[] {
   return [box(0.02, -0.02, leaf.width - 0.02, 0.02, 0, height, 'woodLight', 1, { top: height < FULL_M - 0.2 ? 'wallCap' : 'woodLight' })];
+}
+
+export interface EntranceMark {
+  key: string;
+  /** The doormat just inside, on the floor. */
+  mat: Point[];
+  /** Where the step-free tick stands, just outside (null when there is a step). */
+  tick: Point | null;
+}
+
+/** The building's entrances: a doormat just inside each, and a tick outside the step-free ones. */
+export function entranceMarks(openings: Opening[], spaces: Space[], walls: Wall[]): EntranceMark[] {
+  const byId = new Map(spaces.map((space) => [space.id, space]));
+  return openings.flatMap((opening) => {
+    if (opening.kind !== 'entrance') return [];
+    const width = opening.width_m ?? 1.8;
+    const along = gapDirection(opening, width, walls);
+    if (!along) return [];
+    const room = opening.space_ids.map((id) => byId.get(id)).find((space): space is Space => !!space);
+    const normal: Point = [-along[1], along[0]];
+    const probe: Point = [opening.position[0] + normal[0] * 0.5, opening.position[1] + normal[1] * 0.5];
+    const side = room && !pointInPolygon(probe, room.polygon) ? -1 : 1;
+    const inward: Point = [normal[0] * side, normal[1] * side];
+    const [p, half] = [opening.position, Math.min(width, 3) * 0.4];
+    const at = (u: number, v: number): Point => [p[0] + along[0] * u + inward[0] * v, p[1] + along[1] * u + inward[1] * v];
+    const mat = [at(-half, OUTER_M / 2 + 0.05), at(half, OUTER_M / 2 + 0.05), at(half, OUTER_M / 2 + 0.75), at(-half, OUTER_M / 2 + 0.75)];
+    return [{ key: `entrance|${opening.id}`, mat, tick: opening.step_free ? at(0, -1.1) : null }];
+  });
+}
+
+/** The soft shadow along the foot of a wall: a band on the floor beside it (inside only, for outside walls). */
+export function wallShadow(wall: Wall): Point[] {
+  const t = (wall.outer ? OUTER_M : INNER_M) / 2;
+  const [nx, ny] = [-Math.sin(wall.angle), Math.cos(wall.angle)];
+  const inwardSide = wall.inward ? Math.sign(wall.inward[0] * nx + wall.inward[1] * ny) : 0;
+  const [left, right] = inwardSide > 0 ? [t + SHADOW_M, -t] : inwardSide < 0 ? [t, -t - SHADOW_M] : [t + SHADOW_M, -t - SHADOW_M];
+  const [a, b] = [wall.a, wall.b];
+  return [[a[0] + nx * left, a[1] + ny * left], [b[0] + nx * left, b[1] + ny * left],
+          [b[0] + nx * right, b[1] + ny * right], [a[0] + nx * right, a[1] + ny * right]];
 }

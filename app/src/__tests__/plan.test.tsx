@@ -1,13 +1,14 @@
 import { render, screen } from '@testing-library/react-native';
 
 import type { BuildingDetail, Point, Space } from '../api';
+import { roofFaces } from '../components/BuildingBlocks';
 import { FloorPlan } from '../components/FloorPlan';
 import { drawSolids, limitMove, limitZoom, placeThings, roomAt, ZOOM_IN, ZOOM_OUT } from '../components/FloorScene';
 import { box } from '../models/kit';
 import { doorSymbol, layered, OVERHEAD_M, partsFromAbove, stairPlan, wallBand } from '../plan';
 import { layoutStairs } from '../stairs';
 import { CUT_M } from '../stairs';
-import { doorLeaves, floorWalls, FULL_M, INNER_M, LOW_M, OUTER_M, wallHeight, wallParts } from '../walls';
+import { doorLeaves, entranceMarks, floorWalls, FULL_M, INNER_M, LOW_M, OUTER_M, wallHeight, wallParts, wallShadow } from '../walls';
 
 const room = (id: string, x: number, roomType: string, w = 8): Space => ({
   id, floor_id: 'F0', type: 'room', room_type: roomType, name: id, ref: null, area_m2: w * 5, anchor: [x + w / 2, 2.5],
@@ -55,6 +56,24 @@ describe('walls', () => {
     expect(wallHeight(south, fromNorth, 'low', 3)).toBe(LOW_M);
     expect(wallHeight(inner, fromNorth, 'full', 3)).toBeCloseTo(FULL_M);
     expect(wallHeight(inner, fromNorth, 'full', 2.4)).toBeCloseTo(2.3); // never through a low ceiling
+  });
+
+  it('lays a doormat inside an entrance and a step-free tick outside it', () => {
+    const entrance = { id: 'E', floor_id: 'F0', space_ids: ['A', 'outside'], kind: 'entrance', position: [4, 0] as Point, width_m: 2,
+                       step_free: true };
+    const marks = entranceMarks([entrance], spaces, floorWalls(spaces, [door, entrance], footprint));
+    expect(marks).toHaveLength(1);
+    for (const p of marks[0].mat) expect(p[1]).toBeGreaterThan(0); // inside: the building is at y > 0
+    expect(marks[0].tick![1]).toBeLessThan(0); // outside
+    const stepped = entranceMarks([{ ...entrance, step_free: false }], spaces, floorWalls(spaces, [door, entrance], footprint));
+    expect(stepped[0].tick).toBeNull();
+  });
+
+  it('shades the foot of an outside wall on the inside only', () => {
+    const south = walls.find((wall) => wall.outer && Math.abs(wall.centre[1]) < 1e-6)!;
+    const ys = wallShadow(south).map(([, y]) => y);
+    expect(Math.min(...ys)).toBeCloseTo(-OUTER_M / 2);
+    expect(Math.max(...ys)).toBeGreaterThan(OUTER_M / 2);
   });
 
   it('puts glass in a full-height outside wall, none in a cut one', () => {
@@ -198,5 +217,16 @@ describe('the plan', () => {
     expect(screen.getByTestId('plan-doors')).toBeTruthy();
     expect(screen.getByTestId('plan-stairs')).toBeTruthy();
     expect(screen.getByTestId('plan-things')).toBeTruthy();
+  });
+});
+
+describe('the roof of the assembled building', () => {
+  it('has a parapet all round and the rooftop plant on it', () => {
+    const iso = { angle: Math.PI / 6, centre: [5, 5] as Point, pitch: Math.PI / 6 };
+    const square: Point[] = [[0, 0], [10, 0], [10, 10], [0, 10]];
+    const bare = roofFaces(iso, [square], 6, (p: Point) => p, []);
+    expect(bare).toHaveLength(4); // one parapet face per side: two seen from inside, two from outside
+    const plant = roofFaces(iso, [square], 6, (p: Point) => p, [{ position: [5, 5], footprint: { width_m: 2, depth_m: 1.5, rotation_deg: 0 } }]);
+    expect(plant.length).toBeGreaterThan(4);
   });
 });

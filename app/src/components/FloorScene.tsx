@@ -10,7 +10,7 @@
  * or right-drag to move, wheel / pinch / +/− to zoom. */
 import { type ComponentRef, type MutableRefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
-import Svg, { Circle, ClipPath, Defs, G, Path, Text as SvgText } from 'react-native-svg';
+import Svg, { Circle, ClipPath, Defs, G, Path, Rect, Text as SvgText } from 'react-native-svg';
 
 import type { BuildingDetail, Context, MapView, Point } from '../api';
 import { assetsOn, changesOn } from '../changes';
@@ -24,9 +24,9 @@ import { modelOf, SITS_ON_SURFACE, surfaceOf } from '../models/catalog';
 import type { Part } from '../models/kit';
 import { colourOf } from '../models/materials';
 import { cameraView, modelFaces } from '../models/render';
-import { layoutStairs, stairInput } from '../stairs';
+import { flatStairs, layoutStairs, liftCar, stairClimb, stairInput } from '../stairs';
 import { colours, map as mapColours, nearStyle, roomStyle } from '../theme';
-import { doorLeaves, floorWalls, leafParts, wallHeight, type WallMode, wallParts } from '../walls';
+import { doorLeaves, entranceMarks, floorWalls, leafParts, wallHeight, type WallMode, wallParts, wallShadow } from '../walls';
 import type { MapHandle } from '../ui/MapControls';
 import { safetyMarks } from '../safety';
 import { landmarkNames, routeSpaces, routeSteps } from '../steps';
@@ -156,21 +156,24 @@ interface Props {
   walls?: WallMode;
 }
 
-type SignKind = 'wc' | 'kitchen' | 'stairs' | 'lift' | 'meeting';
+type SignKind = 'wc' | 'kitchen' | 'stairs' | 'lift' | 'meeting' | 'exit';
 
-/** The rooms people look for get a small sign by their name. */
-function signOf(space: { type: string; room_type: string }): SignKind | null {
+/** The rooms people look for get a small sign by their name (exit: a room with a way out of the building). */
+function signOf(space: { id: string; type: string; room_type: string }, exits: Set<string>): SignKind | null {
+  if (exits.has(space.id)) return 'exit';
   if (space.room_type === 'toilet' || space.room_type === 'bathroom') return 'wc';
   if (space.room_type === 'kitchen' || space.room_type === 'canteen') return 'kitchen';
-  if (space.type === 'stair') return 'stairs';
+  if (space.type === 'stair' || space.room_type === 'stairwell') return 'stairs';
   if (space.type === 'lift') return 'lift';
   if (space.room_type === 'meeting_room' || space.room_type === 'seminar_room') return 'meeting';
   return null;
 }
 
 const SIGN_COLOURS: Record<SignKind, string> = {
-  wc: '#2F80ED', kitchen: '#B565D9', stairs: '#2E9E5B', lift: '#3B82F6', meeting: '#5B6CFF',
+  wc: '#2F80ED', kitchen: '#B565D9', stairs: '#2E9E5B', lift: '#3B82F6', meeting: '#5B6CFF', exit: '#1E8E4E',
 };
+/** Exits and stairs are the way out: their names go first after the target's. */
+const ESCAPE = new Set<SignKind>(['exit', 'stairs']);
 
 /** A round sign: WC, a cup, steps, a lift's arrows, a table. */
 function Sign({ kind, x, y, size }: { kind: SignKind; x: number; y: number; size: number }) {
@@ -186,6 +189,9 @@ function Sign({ kind, x, y, size }: { kind: SignKind; x: number; y: number; size
           `L${x - s * 0.6} ${y + s * 0.15} Z`,
     meeting: `M${x - s} ${y - s * 0.2} L${x + s} ${y - s * 0.2} M${x - s * 0.6} ${y - s * 0.2} L${x - s * 0.6} ${y + s * 0.8} ` +
              `M${x + s * 0.6} ${y - s * 0.2} L${x + s * 0.6} ${y + s * 0.8}`,
+    // a door with an arrow going out through it
+    exit: `M${x - s * 0.9} ${y + s} L${x - s * 0.9} ${y - s} L${x + s * 0.1} ${y - s} M${x + s * 0.1} ${y + s} L${x - s * 0.9} ${y + s} ` +
+          `M${x - s * 0.3} ${y} L${x + s} ${y} M${x + s * 0.6} ${y - s * 0.4} L${x + s} ${y} L${x + s * 0.6} ${y + s * 0.4}`,
   };
   return (
     <G>
@@ -336,12 +342,29 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
     return floorWalls(spaces, [...openings, ...added], footprints);
   }, [spaces, openings, newDoors, floorId, footprints]);
   const leaves = useMemo(() => doorLeaves(openings, spaces, walls), [openings, spaces, walls]);
+  const entrances = useMemo(() => entranceMarks(openings, spaces, walls), [openings, spaces, walls]);
+  const wallShadows = useMemo(() => walls.map((wall) => ({ centre: wall.centre, ring: wallShadow(wall) })), [walls]);
   const stairs = useMemo(() => spaces.flatMap((space) => {
     if (space.type !== 'stair') return [];
     const laid = layoutStairs(stairInput(detail, space));
     return laid ? [{ id: space.id, ...laid }] : [];
   }), [spaces, detail]);
+  // Stairwells too irregular for real flights: flat treads and an arrow.
+  const flatStairwells = useMemo(() => spaces.flatMap((space) => {
+    if (space.type !== 'stair' && space.room_type !== 'stairwell') return [];
+    if (stairs.some((stair) => stair.id === space.id)) return [];
+    const flat = flatStairs(stairInput(detail, space));
+    return flat ? [{ id: space.id, centre: space.anchor, ...flat }] : [];
+  }), [spaces, detail, stairs]);
+  const lifts = useMemo(() => spaces.flatMap((space) => {
+    if (space.type !== 'lift') return [];
+    const doors = detail.openings.filter((opening) => opening.space_ids.includes(space.id)).map((opening) => opening.position);
+    const car = liftCar(space.polygon, doors);
+    return car ? [car] : [];
+  }), [spaces, detail]);
   const assets = useMemo(() => assetsOn(detail, map, floorId), [detail, map, floorId]);
+  const exits = useMemo(() => new Set(openings.filter((opening) => opening.kind === 'entrance').flatMap((opening) => opening.space_ids)),
+    [openings]);
   const placed = useMemo(() => placeThings(assets), [assets]);
   const roomOf = useMemo(() => new Map(spaces.map((space) => [space.id, space.room_type])), [spaces]);
   const finishes = useMemo(() => spaces.flatMap((space) => {
@@ -370,6 +393,38 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
     [context, footprints],
   );
   const pieces = useMemo(() => (map?.route?.pieces ?? []).filter((piece) => piece.floor_id === floorId), [map, floorId]);
+  // The route on this floor, with its way up or down the stairs following the steps: on the flight up when it goes
+  // on to the floor above, rising out of the opening when it came up from the floor below (and the other way down).
+  const ways = useMemo(() => {
+    const all = map?.route?.pieces ?? [];
+    const elevation = new Map(detail.floors.map((floor) => [floor.id, floor.elevation_m]));
+    const polygonOf = new Map(spaces.map((space) => [space.id, space.polygon]));
+    const wellAt = (p: Point | undefined) => (p ? stairs.find((stair) => pointInPolygon(p, polygonOf.get(stair.id) ?? [])) : undefined);
+    const higher = (a: string, b: string) => (elevation.get(a) ?? 0) > (elevation.get(b) ?? 0);
+    return all.flatMap((piece, i) => {
+      if (piece.floor_id !== floorId) return [];
+      let flat = piece.points;
+      const climbs: Point3[][] = [];
+      const to = piece.then?.kind === 'stairs' ? piece.then.to_floor_id : undefined;
+      const goingWell = to ? wellAt(flat[flat.length - 1]) : undefined;
+      const going = to && goingWell?.arrows.find((arrow) => arrow.up === higher(to, floorId));
+      if (goingWell && going) {
+        const way = stairClimb(flat, polygonOf.get(goingWell.id)!, going.points, true);
+        flat = way.flat;
+        if (way.climb.length) climbs.push(way.climb);
+      }
+      const before = all[i - 1];
+      const from = before?.then?.kind === 'stairs' && before.floor_id !== floorId ? before.floor_id : undefined;
+      const comingWell = from ? wellAt(flat[0]) : undefined;
+      const coming = from && comingWell?.arrows.find((arrow) => arrow.up === higher(from, floorId)); // up from below: out of the opening
+      if (comingWell && coming) {
+        const way = stairClimb(flat, polygonOf.get(comingWell.id)!, coming.points, false);
+        flat = way.flat;
+        if (way.climb.length) climbs.push(way.climb);
+      }
+      return [{ flat, climbs }];
+    });
+  }, [map, detail, spaces, stairs, floorId]);
   const here = map?.you_are_here?.floor_id === floorId ? map.you_are_here : null;
   const target = map?.target?.floor_id === floorId ? map.target : null;
 
@@ -396,10 +451,27 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
   useLayoutEffect(() => {
     camera.current = cam;
   }, [cam]);
+  // A tap says "I'm here", a double tap flies to the room: so a tap waits a moment for a second one.
+  const lastTap = useRef<{ at: [number, number]; timer: ReturnType<typeof setTimeout> } | null>(null);
+  useEffect(() => () => {
+    if (lastTap.current) clearTimeout(lastTap.current.timer);
+  }, []);
   const tapped = onTapFloor
     ? ([pageX, pageY]: [number, number]) =>
-        frame.current?.measureInWindow((left, top) =>
-          onTapFloor(floorId, unproject3d(camera.current, [pageX - left, pageY - top])))
+        frame.current?.measureInWindow((left, top) => {
+          const point = unproject3d(camera.current, [pageX - left, pageY - top]);
+          const before = lastTap.current;
+          if (before) clearTimeout(before.timer);
+          if (before && Math.hypot(before.at[0] - pageX, before.at[1] - pageY) < 30) {
+            lastTap.current = null;
+            flyToRoomRef.current(point);
+            return;
+          }
+          lastTap.current = { at: [pageX, pageY], timer: setTimeout(() => {
+            lastTap.current = null;
+            onTapFloor(floorId, point);
+          }, DOUBLE_MS) };
+        })
     : undefined;
   const fittedScale = useRef(fitted.scale);
   fittedScale.current = fitted.scale;
@@ -520,6 +592,24 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
   const flyToRoomRef = useRef(flyToRoom);
   flyToRoomRef.current = flyToRoom;
 
+  // Hover (web): the room under the mouse lights up, and a pill names the thing (and its room) or the room.
+  const [hover, setHover] = useState<{ x: number; y: number; text: string; roomId: string | null } | null>(null);
+  const hoverAt = (point: Point, x: number, y: number) => {
+    const room = roomAt(spaces, point);
+    let thing: { name: string; area: number } | null = null;
+    for (const asset of assets) {
+      const angle = placed.get(asset.id)?.angle ?? (asset.footprint.rotation_deg * Math.PI) / 180;
+      if (!pointInPolygon(point, assetRect(asset.position, { ...asset.footprint, rotation_deg: (angle * 180) / Math.PI }))) continue;
+      const area = asset.footprint.width_m * asset.footprint.depth_m;
+      if (!thing || area < thing.area) thing = { name: asset.name, area };
+    }
+    const text = thing ? (room ? `${thing.name} · ${room.name}` : thing.name) : room?.name;
+    setHover((current) => (text ? (current?.text === text && current.roomId === (room?.id ?? null) && Math.abs(current.x - x) < 1
+      && Math.abs(current.y - y) < 1 ? current : { x, y, text, roomId: room?.id ?? null }) : null));
+  };
+  const hoverRef = useRef(hoverAt);
+  hoverRef.current = hoverAt;
+
   // With a mouse: hold and drag to turn it all the way round; Shift+drag or right-drag moves it; a click without
   // dragging is "I'm here". On a touch screen one finger moves it and a two-finger twist turns it.
   const tapRef = useRef<((point: Point) => void) | null>(null);
@@ -539,7 +629,18 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
       node.setPointerCapture?.(event.pointerId);
       node.style.cursor = 'grabbing';
     };
+    let hoverFrame: number | null = null;
     const onMove = (event: PointerEvent) => {
+      if (!drag && event.pointerType === 'mouse') {
+        const [cx, cy] = [event.clientX, event.clientY];
+        if (hoverFrame === null) hoverFrame = requestAnimationFrame(() => {
+          hoverFrame = null;
+          const box = node.getBoundingClientRect();
+          const at: Point = [cx - box.left, cy - box.top];
+          hoverRef.current(unproject3d(camera.current, at), at[0], at[1]);
+        });
+      }
+      if (drag) setHover(null);
       if (!drag || event.pointerId !== drag.id) return;
       const dx = event.clientX - drag.x;
       const dy = event.clientY - drag.y;
@@ -593,11 +694,15 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
     node.addEventListener('pointerup', onUp);
     node.addEventListener('contextmenu', noMenu);
     node.addEventListener('dblclick', onDouble);
+    const onLeave = () => setHover(null);
+    node.addEventListener('pointerleave', onLeave);
     node.addEventListener('touchmove', onTouch, { passive: true });
     node.addEventListener('touchend', onTouch);
     return () => {
       if (pending) clearTimeout(pending);
       node.removeEventListener('dblclick', onDouble);
+      node.removeEventListener('pointerleave', onLeave);
+      if (hoverFrame !== null) cancelAnimationFrame(hoverFrame);
       node.removeEventListener('pointerdown', onDown);
       node.removeEventListener('pointermove', onMove);
       node.removeEventListener('pointerup', onUp);
@@ -683,11 +788,21 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
     });
 
     const lit = highlight && highlight.length > 1 ? flat(ribbon(highlight, 0.5), 0.035) : null;
-    const routes = pieces.map((piece) => ({
-      glow: flat(ribbon(piece.points, 1.1), 0.02),
-      band: flat(ribbon(piece.points, 0.42), 0.03),
-      line: path(piece.points.filter((p) => depthOf(cam, p) > cam.distance * 0.3).map((p) => project3d(cam, p, 0.04)), false),
+    const routes = ways.map((way) => ({
+      glow: flat(ribbon(way.flat, 1.1), 0.02),
+      band: flat(ribbon(way.flat, 0.42), 0.03),
+      line: path(way.flat.filter((p) => depthOf(cam, p) > cam.distance * 0.3).map((p) => project3d(cam, p, 0.04)), false),
     }));
+    // On the stairs: the band step by step at each tread's height, drawn over the steps.
+    const climbs = ways.flatMap((way) => way.climbs).map((climb) => {
+      const steps = climb.slice(1).map((b, i) => {
+        const a = climb[i];
+        return flat(ribbon([[a[0], a[1]], [b[0], b[1]]], 0.42), Math.max(a[2], b[2]) + 0.03);
+      }).filter(Boolean).join(' ');
+      const line = path(climb.filter(([x, y]) => depthOf(cam, [x, y]) > cam.distance * 0.3)
+        .map(([x, y, z]) => project3d(cam, [x, y], z + 0.04)), false);
+      return { steps, line };
+    });
 
     const solids: Solid[] = [];
     const facesOf = (faces: ReturnType<typeof modelFaces>) => faces.map(({ d, fill, stroke, opacity }) => ({ d, fill, stroke, opacity }));
@@ -709,6 +824,24 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
       solids.push({ faces: facesOf(modelFaces(`wall|${wall.length.toFixed(2)}|${wall.outer}|${key}`, parts,
                                                { at: wall.centre, angle: wall.angle }, view, wallDetail)),
                     depth: depthOf(cam, wall.a) + depthOf(cam, wall.b) });
+    }
+
+    // The soft shadow along the foot of every wall, close up: it grounds them.
+    const wallFeet = nearPpm < DETAIL_PX[1] ? '' : wallShadows.filter((foot) => seen(foot.centre))
+      .map((foot) => flat(foot.ring, 0.003)).filter(Boolean).join(' ');
+    // Entrances: a doormat inside, and a green tick outside when you can come in without a step.
+    const mats: string[] = [];
+    const ticks: { key: string; x: number; y: number; r: number }[] = [];
+    for (const entrance of entrances) {
+      if (!seen(entrance.mat[0])) continue;
+      const ppm = pixelsPerMetre(cam, entrance.mat[0]);
+      if (ppm < DETAIL_PX[0]) continue;
+      const mat = flat(entrance.mat, 0.006);
+      if (mat) mats.push(mat);
+      if (entrance.tick && seen(entrance.tick)) {
+        const [x, y] = project3d(cam, entrance.tick, 0.02);
+        ticks.push({ key: entrance.key, x, y, r: Math.min(11, Math.max(6, ppm * 0.35)) });
+      }
     }
 
     // Open doors, cut at the walls' height, and the arc each swings through.
@@ -733,7 +866,7 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
 
     // Stairs: the steps, the opening going down, and what is drawn over them (outlines above the cut, rails, arrows).
     const voids: string[] = [];
-    const stairLines: { d: string; kind: 'ghost' | 'rail' | 'break' | 'arrow' }[] = [];
+    const stairLines: { d: string; kind: 'ghost' | 'rail' | 'break' | 'arrow' | 'tread' }[] = [];
     const stairTags: { id: string; x: number; y: number; text: string }[] = [];
     const line3 = (points: Point3[], close = false) => path(points.map(([x, y, z]) => project3d(cam, [x, y], z)), close);
     for (const stair of stairs) {
@@ -762,6 +895,26 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
           const [x, y] = project3d(cam, [arrow.points[0][0], arrow.points[0][1]], arrow.points[0][2]);
           stairTags.push({ id: `${stair.id}-${arrow.up ? 'up' : 'dn'}`, x, y, text: arrow.up ? 'UP' : 'DN' });
         }
+      }
+    }
+
+    // Lift cars, with their doors and the up / down pictogram.
+    for (const car of lifts) {
+      if (!seen(car.centre) || pixelsPerMetre(cam, car.centre) < DETAIL_PX[0]) continue;
+      solids.push({ faces: facesOf(modelFaces(car.key, car.parts, { at: car.centre, angle: car.angle }, view, wallDetail)),
+                    depth: 2 * depthOf(cam, car.centre) });
+    }
+
+    for (const well of flatStairwells) {
+      if (!seen(well.centre)) continue;
+      const ppm = pixelsPerMetre(cam, well.centre);
+      if (ppm < DETAIL_PX[0]) continue;
+      const onFloor = (points: Point[]) => path(points.filter(seen).map((p) => project3d(cam, p, 0.01)), false);
+      stairLines.push({ d: well.treads.map(onFloor).join(' '), kind: 'tread' });
+      stairLines.push({ d: `${onFloor(well.arrow.line)} ${onFloor(well.arrow.head)}`, kind: 'arrow' });
+      if (ppm >= DETAIL_PX[1] && seen(well.arrow.tag)) {
+        const [x, y] = project3d(cam, well.arrow.tag, 0.01);
+        stairTags.push({ id: `${well.id}-flat`, x, y, text: well.arrow.up ? 'UP' : 'DN' });
       }
     }
 
@@ -830,13 +983,14 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
       if (space.type === 'outdoor' || depthOf(cam, space.anchor) < cam.distance * 0.3) return [];
       const ppm = pixelsPerMetre(cam, space.anchor);
       const side = Math.sqrt(space.area_m2) * ppm;
-      const icon = signOf(space);
+      const icon = signOf(space, exits);
       if (side < (icon ? MIN_LABEL_PX * 0.6 : MIN_LABEL_PX)) return [];
       const [x, y] = project3d(cam, space.anchor);
       if (x < -40 || x > width + 40 || y < -20 || y > height + 20) return [];
       const text = side > 110 || !space.ref ? space.name : space.ref;
       const size = Math.min(13, Math.max(8.5, ppm * 0.9));
-      const rank = (map?.target?.space_id === space.id ? 4 : 0) + (icon ? 2 : 0) + Math.min(1.9, space.area_m2 / 200);
+      // target, then the way out, then what people look for, then the big rooms
+      const rank = (map?.target?.space_id === space.id ? 8 : 0) + (icon && ESCAPE.has(icon) ? 4 : icon ? 2 : 0) + Math.min(1.9, space.area_m2 / 200);
       return [{ id: space.id, x, y, text, size, icon, rank }];
     }).sort((a, b) => b.rank - a.rank);
     const placedBoxes: [number, number, number, number][] = [];
@@ -848,10 +1002,10 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
       placedBoxes.push(box);
       return true;
     });
-    return { slabSides, slabTops, grid, near, tiles, floorings, voids, swings, shadows, glows, flats: [...flatGroups.values()], routes,
+    return { slabSides, slabTops, grid, near, tiles, floorings, voids, swings, wallFeet, mats, ticks, climbs, shadows, glows, flats: [...flatGroups.values()], routes,
              drawn, stairLines, stairTags, labels, lit, tags };
   }, [cam, footprints, around, spaces, assets, pieces, walls, width, height, changes, highlight, map, onWay, named, finishes,
-      leaves, stairs, placed, roomOf, storey, wallMode, wallCache, sharp]);
+      leaves, stairs, placed, roomOf, storey, wallMode, wallCache, sharp, exits, wallShadows, entrances, lifts, flatStairwells, ways]);
 
   // The route fades in; arrows flow along it.
   const flow = useLoop(900);
@@ -906,6 +1060,8 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
                                        strokeWidth={floor.kind === 'panels' ? 0.8 : 0.5} fill="none" /> : null}
                 </G>
               ))}
+              {scene.wallFeet ? <Path d={scene.wallFeet} fill={mapColours.shadow} fillOpacity={0.5} /> : null}
+              {scene.mats.length > 0 && <Path d={scene.mats.join(' ')} fill={colourOf('floorMat')} testID="entrance-mat" />}
               {scene.voids.length > 0 && <Path d={scene.voids.join(' ')} fill={colourOf('void')} testID="stair-opening" />}
               {scene.swings.length > 0 && (
                 <Path d={scene.swings.join(' ')} stroke={mapColours.label} strokeOpacity={0.45} strokeWidth={0.7} fill="none"
@@ -930,11 +1086,18 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
               <Path key={face.key} d={face.d} fill={face.fill} fillOpacity={face.fillOpacity} stroke={face.stroke} strokeWidth={0.5}
                     strokeOpacity={face.fillOpacity >= 1 ? 1 : 0.5} strokeLinejoin="round" opacity={dim * face.opacity} />
             ))}
+            {scene.climbs.map((climb, i) => (
+              <G key={`climb-${i}`} testID="route-on-stairs">
+                {climb.steps ? <Path d={climb.steps} fill={colours.accent} /> : null}
+                <AnimatedPath d={climb.line} stroke="#FFFFFF" strokeOpacity={0.85} strokeWidth={2} strokeLinecap="round"
+                              strokeLinejoin="round" fill="none" strokeDasharray={[6, 18]} strokeDashoffset={dashOffset} />
+              </G>
+            ))}
             <G opacity={safety ? 1 : dim} testID="stairs">
               {scene.stairLines.map((line, i) => (
                 <Path key={`stair-${i}`} d={line.d} fill="none" strokeLinejoin="round" strokeLinecap="round"
                       stroke={line.kind === 'rail' ? colourOf('steel') : line.kind === 'arrow' ? mapColours.chromeText : mapColours.label}
-                      strokeOpacity={line.kind === 'ghost' ? 0.5 : line.kind === 'rail' ? 0.8 : 0.95}
+                      strokeOpacity={line.kind === 'ghost' ? 0.5 : line.kind === 'rail' ? 0.8 : line.kind === 'tread' ? 0.6 : 0.95}
                       strokeWidth={line.kind === 'rail' ? 1.1 : line.kind === 'arrow' ? 1.6 : 0.8}
                       strokeDasharray={line.kind === 'ghost' ? [3, 2.5] : undefined} />
               ))}
@@ -954,10 +1117,23 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
                 );
               })}
             </G>
+            {hover?.roomId && (() => {
+              const tile = scene.tiles.find((item) => item.id === hover.roomId);
+              return tile ? <Path d={tile.d!} fill={colours.accentFaint} stroke={colours.accent} strokeWidth={1.5} strokeOpacity={0.7}
+                                  pointerEvents="none" testID="hover-room" /> : null;
+            })()}
             {/* the route seen through the walls, faintly, so it never disappears behind one */}
             {scene.routes.map((route, i) => (
               <Path key={`ghost-${i}`} d={route.line} stroke={colours.accent} strokeOpacity={0.35} strokeWidth={2.5}
                     strokeLinecap="round" strokeLinejoin="round" fill="none" />
+            ))}
+            {scene.ticks.map((tick) => (
+              <G key={tick.key} testID="step-free">
+                <Circle cx={tick.x} cy={tick.y} r={tick.r} fill="#2E9E5B" stroke={mapColours.background} strokeWidth={1} />
+                <Path d={`M${n(tick.x - tick.r * 0.45)} ${n(tick.y)} L${n(tick.x - tick.r * 0.1)} ${n(tick.y + tick.r * 0.35)} ` +
+                         `L${n(tick.x + tick.r * 0.5)} ${n(tick.y - tick.r * 0.35)}`}
+                      stroke="#FFFFFF" strokeWidth={Math.max(1.2, tick.r * 0.22)} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+              </G>
             ))}
             <ChangeMarks changes={changes} project={(p) => project3d(cam, p)} fontFamily={LABEL_FONT}
                          visible={(p) => depthOf(cam, p) > cam.distance * 0.3} />
@@ -981,6 +1157,18 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
               <TargetPin x={targetPx.at[0]} y={targetPx.at[1]} height={Math.min(48, Math.max(30, targetPx.ppm * 2.6))}
                          flatten={flatten} />
             )}
+            {hover && (() => {
+              const w = hover.text.length * 6.6 + 18;
+              const x = Math.min(hover.x + 14, width - w - 4);
+              const y = Math.max(4, hover.y - 34);
+              return (
+                <G pointerEvents="none" testID="hover-pill">
+                  <Rect x={x} y={y} width={w} height={24} rx={12} fill={mapColours.chrome} stroke={mapColours.chromeEdge} strokeWidth={0.8} />
+                  <SvgText x={x + w / 2} y={y + 16} fontSize={12} fontWeight="600" fontFamily={LABEL_FONT} textAnchor="middle"
+                           fill={mapColours.chromeText}>{hover.text}</SvgText>
+                </G>
+              );
+            })()}
             {herePx && (
               <HereMarker x={herePx.at[0]} y={herePx.at[1]} radius={Math.min(13, Math.max(7, herePx.ppm * 0.55))}
                           flatten={flatten} />

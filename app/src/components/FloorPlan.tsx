@@ -16,7 +16,7 @@ import { useMapGestures } from '../gestures';
 import { modelOf } from '../models/catalog';
 import { colourOf } from '../models/materials';
 import { doorSymbol, layered, partsFromAbove, type PlanShape, stairPlan, wallBand } from '../plan';
-import { layoutStairs, stairInput } from '../stairs';
+import { flatStairs, layoutStairs, liftCar, stairInput } from '../stairs';
 import { assetStyle, colours, map as mapColours, roomStyle, shade } from '../theme';
 import type { MapHandle } from '../ui/MapControls';
 import { doorLeaves, floorWalls } from '../walls';
@@ -87,9 +87,18 @@ export function FloorPlan({ detail, floorId, map, footprints = NO_FOOTPRINTS, wi
   const bands = useMemo(() => walls.map(wallBand), [walls]);
   const doors = useMemo(() => doorLeaves(openings, spaces, walls).map(doorSymbol), [openings, spaces, walls]);
   const stairs = useMemo(() => spaces.flatMap((space) => {
-    if (space.type !== 'stair') return [];
-    const laid = layoutStairs(stairInput(detail, space));
-    return laid ? [{ id: space.id, ...stairPlan(laid) }] : [];
+    if (space.type !== 'stair' && space.room_type !== 'stairwell') return [];
+    const input = stairInput(detail, space);
+    const laid = space.type === 'stair' ? layoutStairs(input) : null;
+    if (laid) return [{ id: space.id, ...stairPlan(laid) }];
+    const flat = flatStairs(input); // too irregular for real flights: flat treads and an arrow
+    return flat ? [{ id: space.id, treads: [], above: [], breaks: flat.treads, arrows: [flat.arrow], voids: [] }] : [];
+  }), [spaces, detail]);
+  const lifts = useMemo(() => spaces.flatMap((space) => {
+    if (space.type !== 'lift') return [];
+    const doors = detail.openings.filter((opening) => opening.space_ids.includes(space.id)).map((opening) => opening.position);
+    const car = liftCar(space.polygon, doors);
+    return car ? partsFromAbove(car.parts, car.centre, car.angle, 2).shapes : [];
   }), [spaces, detail]);
   // Each thing's model from above, at each level of detail, worked out once (moving the plan only redraws it).
   const symbols = useMemo(() => {
@@ -191,13 +200,13 @@ export function FloorPlan({ detail, floorId, map, footprints = NO_FOOTPRINTS, wi
     });
     const layers = (list: PlanShape[]) => layered(list).map((layer) => ({ key: layer.key, d: d(layer.rings), fill: layer.fill }));
 
-    const stairsShown = stairs.filter((stair) => stair.voids.concat(stair.treads.map((tread) => tread.ring)).some((ring) =>
-      ring.some((p) => onScreen(p, 1))));
+    const stairsShown = stairs.filter((stair) => [...stair.voids, ...stair.treads.map((tread) => tread.ring), ...stair.breaks]
+      .some((ring) => ring.some((p) => onScreen(p, 1))));
     return {
       walls: d(bands),
       doors: ppm >= DOOR_PX ? { leaves: lines(doors.map((door) => door.leaf)), swings: lines(doors.map((door) => door.swing)) } : null,
       footprints: [...footprintsByColour.values()].map((group) => ({ ...group, d: d(group.rings) })),
-      things: layers(shapes.on),
+      things: layers(ppm >= SYMBOL_PX[0] ? [...lifts, ...shapes.on] : shapes.on),
       thingsOff: layers(shapes.off),
       overhead: d(overhead.on),
       overheadOff: d(overhead.off),
@@ -213,7 +222,7 @@ export function FloorPlan({ detail, floorId, map, footprints = NO_FOOTPRINTS, wi
         }))) : [],
       },
     };
-  }, [transform, width, height, assets, symbols, placed, pieces, onWay, map, bands, doors, stairs]);
+  }, [transform, width, height, assets, symbols, placed, pieces, onWay, map, bands, doors, stairs, lifts]);
 
   // The route draws itself in.
   const draw = useRef(new Animated.Value(0)).current;

@@ -18,6 +18,7 @@ import {
   type Iso, wallSegments,
 } from '../geometry';
 import { box, type Part } from '../models/kit';
+import { modelOf } from '../models/catalog';
 import { colourOf } from '../models/materials';
 import { isoView, modelFaces } from '../models/render';
 import { storeyStairs } from '../stairs';
@@ -49,6 +50,9 @@ const NEAR_REACH_M = 120; // how much of the neighbourhood is drawn (it is redra
 const STACK_GAP = 0.2; // the slabs are this share of the building's width apart
 const EXPLODE_MS = 650; // the assembled building opening up into the floor stack, and back
 const SLAB_WALL_M = 1.2; // the low walls on each slab (cut like the floor view's)
+const PARAPET_M = 0.9; // the low wall round the roof
+const CANOPY_M = 1.6; // how far an entrance canopy reaches out, and at what height
+const CANOPY_Z = 2.8;
 const WINDOW_W = 1.4;
 const WINDOW_EVERY = 2.8;
 const SLAB = 0.1; // a slab's thickness, as a share of the gap
@@ -175,9 +179,11 @@ function floorFaces(iso: Iso, footprints: Point[][], bottom: number, top: number
 /** Window bands along a floor's outside walls facing the viewer, and its entrances (doors where the data has
  * them): what makes the assembled building read as a building. */
 function facade(iso: Iso, footprints: Point[][], bottom: number, height: number, toScreen: (p: Point) => Point,
-                entrances: { position: Point; width_m?: number }[]): { windows: string; doors: string } {
+                entrances: { position: Point; width_m?: number }[]): { windows: string; doors: string; canopies: string; canopyFronts: string } {
   const windows: string[] = [];
   const doors: string[] = [];
+  const canopies: string[] = [];
+  const canopyFronts: string[] = [];
   const tall = height > 5; // a hall: one high band of windows
   const sill = tall ? height * 0.55 : Math.min(0.9, height * 0.25);
   const head = tall ? height * 0.85 : Math.min(height - 0.5, Math.max(sill + 0.6, 2.1));
@@ -207,10 +213,54 @@ function facade(iso: Iso, footprints: Point[][], bottom: number, height: number,
         const t = ((entrance.position[0] - a[0]) * (b[0] - a[0]) + (entrance.position[1] - a[1]) * (b[1] - a[1])) / (length * length);
         const half = Math.max(0.6, entrance.width_m ?? 1.2) / 2 / length;
         doors.push(quad(a, b, t - half, t + half, bottom, bottom + Math.min(2.4, height * 0.8)));
+        // a canopy over it, reaching out from the wall
+        const out: Point = [nx / length, ny / length];
+        const z = bottom + Math.min(CANOPY_Z, height * 0.9);
+        const along = (u: number, reach: number): Point =>
+          [a[0] + (b[0] - a[0]) * u + out[0] * reach, a[1] + (b[1] - a[1]) * u + out[1] * reach];
+        const wide = half + 0.5 / length;
+        const corners = [along(t - wide, 0), along(t + wide, 0), along(t + wide, CANOPY_M), along(t - wide, CANOPY_M)];
+        canopies.push(path(corners.map((p) => toScreen(isoProject(iso, p, z)))));
+        canopyFronts.push(path([isoProject(iso, corners[3], z), isoProject(iso, corners[2], z), isoProject(iso, corners[2], z - 0.25),
+                                isoProject(iso, corners[3], z - 0.25)].map(toScreen)));
       }
     });
   }
-  return { windows: windows.join(' '), doors: doors.join(' ') };
+  return { windows: windows.join(' '), doors: doors.join(' '), canopies: canopies.join(' '), canopyFronts: canopyFronts.join(' ') };
+}
+
+/** The roof of the assembled building: the parapet round its edge (the inside of the far side, then the outside of
+ * the near side) with the rooftop plant (the top floor's HVAC units) standing between. */
+export function roofFaces(iso: Iso, footprints: Point[][], z: number, toScreen: (p: Point) => Point,
+                   plant: { position: Point; footprint: { width_m: number; depth_m: number; rotation_deg: number } }[]): Face[] {
+  const inner: Face[] = [];
+  const outer: Face[] = [];
+  const look = slabs();
+  for (const raw of footprints) {
+    const ring = signedArea(raw) >= 0 ? raw : [...raw].reverse();
+    ring.forEach((a, i) => {
+      const b = ring[(i + 1) % ring.length];
+      const nx = b[1] - a[1];
+      const ny = -(b[0] - a[0]);
+      const rx = nx * Math.cos(iso.angle) - ny * Math.sin(iso.angle);
+      const ry = nx * Math.sin(iso.angle) + ny * Math.cos(iso.angle);
+      const quad = [isoProject(iso, a, z), isoProject(iso, b, z), isoProject(iso, b, z + PARAPET_M), isoProject(iso, a, z + PARAPET_M)]
+        .map(toScreen);
+      const depth = (isoDepth(iso, a) + isoDepth(iso, b)) / 2;
+      if (rx + ry >= 0) inner.push({ d: path(quad), points: quad, fill: look.wallDark, depth }); // far side: its inside
+      else outer.push({ d: path(quad), points: quad, fill: rx < ry ? look.wall : look.wallDark, depth });
+    });
+  }
+  inner.sort((x, y) => x.depth - y.depth);
+  outer.sort((x, y) => x.depth - y.depth);
+  const view = isoView(iso, toScreen);
+  const units = plant.map((unit) => ({ unit, depth: isoDepth(iso, unit.position) })).sort((x, y) => x.depth - y.depth)
+    .flatMap(({ unit, depth }) => {
+      const model = modelOf('hvac_unit', 'equipment', unit.footprint.width_m, unit.footprint.depth_m);
+      return modelFaces(model.key, model.parts, { at: unit.position, angle: (unit.footprint.rotation_deg * Math.PI) / 180, z }, view, 1)
+        .map((face) => ({ d: face.d, points: [], fill: face.fill, depth }));
+    });
+  return [...inner, ...units, ...outer];
 }
 
 /** A floor's walls standing low on its slab (no thickness at this size): one path per shade, and their tops. */
@@ -344,6 +394,16 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
     }
     return byFloor;
   }, [detail]);
+
+  // The roof is on the floor that reaches highest (a mezzanine inside a tall hall doesn't), with that floor's HVAC
+  // units standing on it.
+  const roofId = floors.reduce<{ id: string; top: number } | null>((best, floor) => {
+    const top = floor.elevation_m + floor.height_m;
+    return !best || top > best.top + 1e-6 ? { id: floor.id, top } : best;
+  }, null)?.id;
+  const plantOnRoof = useMemo(() => (detail?.assets ?? []).flatMap((asset) =>
+    asset.type === 'hvac_unit' && asset.floor_id === roofId && asset.footprint ? [{ position: asset.position, footprint: asset.footprint }] : []),
+  [detail, roofId]);
 
   const focus = floors.find((floor) => floor.id === focusFloorId);
   const zoom = useRef(new Animated.Value(0)).current;
@@ -617,6 +677,17 @@ export function BuildingBlocks({ outline, context, spaces = [], map = null, focu
                       <G opacity={fade} testID="facade">
                         {marks.windows ? <Path d={marks.windows} fill={mapColours.window} stroke={mapColours.blockEdge} strokeWidth={0.4} /> : null}
                         {marks.doors ? <Path d={marks.doors} fill={colourOf('black')} stroke={colours.added} strokeWidth={1} /> : null}
+                        {marks.canopyFronts ? <Path d={marks.canopyFronts} fill={mapColours.blockDark} stroke={mapColours.blockEdge}
+                                                    strokeWidth={0.5} /> : null}
+                        {marks.canopies ? <Path d={marks.canopies} fill={mapColours.blockTop} stroke={mapColours.blockEdge}
+                                                strokeWidth={0.6} testID="canopy" /> : null}
+                        {floor.id === roofId && (
+                          <G testID="roof">
+                            {roofFaces(iso, floor.footprints, floor.top, toScreen, plantOnRoof).map((face, k) => (
+                              <Path key={k} d={face.d} fill={face.fill} stroke={mapColours.blockEdge} strokeWidth={0.5} strokeLinejoin="round" />
+                            ))}
+                          </G>
+                        )}
                       </G>
                     );
                   })()}
