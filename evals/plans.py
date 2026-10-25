@@ -113,9 +113,13 @@ def compare(truth: Building, imported: dict) -> dict:
     for opening in truth.openings.values():
         result["doors"] += 1
         want = {mapping.get(s, s) for s in opening["space_ids"]}
-        if any(math.dist(o["position"], opening["position"]) <= DOOR_SNAP_M and set(o["space_ids"]) == want
-               for o in imported["openings"]):
+        found = [o for o in imported["openings"]
+                 if math.dist(o["position"], opening["position"]) <= DOOR_SNAP_M and set(o["space_ids"]) == want]
+        if found:
             result["doors_found"] += 1
+        if opening["kind"] == "door":
+            result["door_widths"] += 1
+            result["door_widths_right"] += any(abs(o["width_m"] - opening["width_m"]) < 0.01 for o in found)
     result["imported_doors"] = len(imported["openings"])
 
     true_links = {(c["kind"], frozenset(zip(c["floor_ids"], [mapping.get(s) for s in c["space_ids"]])))

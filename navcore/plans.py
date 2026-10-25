@@ -36,6 +36,20 @@ SPACE_COLOURS = {  # fill colour -> (space type, room type default)
 }
 MARKERS = {"#8b4513": "door", "#9e9e9e": "opening", "#d32f2f": "entrance"}
 DEFAULT_DOOR_WIDTH_M = 0.9
+# Door widths in the dataset's generated buildings, by the room a door leads into (kit README, "Door widths";
+# its "halls" are also lecture halls, canteens, makerspaces and quality labs). On the build buildings this gives
+# every procedural door its width; OSM, Swiss and ResPlan doors don't follow it, so it's used only when the
+# room types are ones only generated buildings have.
+PROCEDURAL_DOOR_WIDTHS_M = {
+    "office": 0.9, "lift": 1.1,
+    "lab": 1.2, "seminar_room": 1.2, "meeting_room": 1.2, "library": 1.2, "toilet": 1.2, "stairwell": 1.2,
+    "lobby": 1.6, "storage": 1.6, "server_room": 1.6, "technical_room": 1.6,
+    "lecture_hall": 1.6, "canteen": 1.6, "makerspace": 1.6, "quality_lab": 1.6,
+}
+PROCEDURAL_ROOM_TYPES = frozenset({
+    "lab", "seminar_room", "server_room", "makerspace", "quality_lab", "locker_room", "production_zone",
+    "additive_zone", "assembly_zone", "warehouse_zone", "logistics_zone",
+})
 DEFAULT_FLOOR_HEIGHT_M = 3.5
 DOOR_REACH_M = 3.0  # a door marker joins the two nearest spaces within this distance
 TYPE_WORDS = {"generic_room": "Room", "corridor": "Corridor", "lobby": "Hall", "stairwell": "Stairwell",
@@ -617,4 +631,25 @@ def enrich_from_equipment(building: dict, rows: list[dict]) -> list[str]:
             "source": "equipment.csv",
         })
     building["assets"] = assets
-    return [f"From the equipment list: names and room types for {len(named)} rooms, {len(assets)} things placed."]
+    notes = [f"From the equipment list: names and room types for {len(named)} rooms, {len(assets)} things placed."]
+    return notes + door_widths_from_room_types(building)
+
+
+def door_widths_from_room_types(building: dict) -> list[str]:
+    """Doors of a generated-style building (it has rooms like labs, server rooms or production zones) get the
+    width its room types imply: the widest of the two rooms a door joins. Other doors, entrances and openings
+    keep theirs. Returns a note on what was changed, to confirm in conversation."""
+    types = {space["id"]: space.get("room_type") for space in building["spaces"]}
+    if not PROCEDURAL_ROOM_TYPES & set(types.values()):
+        return []
+    changed = 0
+    for opening in building["openings"]:
+        widths = [PROCEDURAL_DOOR_WIDTHS_M[t] for t in map(types.get, opening["space_ids"])
+                  if t in PROCEDURAL_DOOR_WIDTHS_M]
+        if opening["kind"] == "door" and widths and opening["width_m"] != max(widths):
+            opening["width_m"] = max(widths)
+            changed += 1
+    if not changed:
+        return []
+    return [f"Door widths from room types for {changed} doors (0.9 m offices, 1.1 m lifts, 1.2 m labs, meeting "
+            "rooms and toilets, 1.6 m halls, storage and server rooms). Confirm any door that differs."]
