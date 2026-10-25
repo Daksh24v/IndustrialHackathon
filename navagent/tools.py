@@ -5,6 +5,7 @@ import itertools
 import math
 import re
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 
 from shapely.geometry import Point
@@ -114,6 +115,9 @@ def space_types(types: list[str] | None, default: frozenset[str]) -> frozenset[s
     return wanted
 
 
+SAFETY_THINGS = ("fire_extinguisher", "defibrillator", "eyewash_station")  # safety mode's quick buttons
+
+
 @dataclass
 class Session:
     """One building plus the changes made in this conversation (closures, new doors)."""
@@ -130,6 +134,11 @@ class Session:
     last_route: list[Route] | None = None  # legs of the most recent find_route, for show_on_map
     map_view: dict | None = None  # what the app should draw after this turn (show_on_map)
     draft: object | None = None  # navagent.builder.Draft while a building is being set up from plans
+    # What people reported broken for the whole building (live app only, server/reports.py), by element id:
+    # every route here avoids them. The server fills this before each turn; the benchmark never does.
+    reported: dict[str, dict] = field(default_factory=dict)
+    # The server's way to file a report for everyone (and tell maintenance); None outside the live app.
+    on_report: Callable[[dict, bool], dict] | None = None
 
     @property
     def here(self) -> str | None:
@@ -150,7 +159,7 @@ class Session:
         return Constraints(
             step_free=step_free,
             min_width_m=min_width_m,
-            closed=frozenset(self.closed | extra_closed),
+            closed=frozenset(self.closed | set(self.reported) | extra_closed),
             extra_openings=tuple(self.new_openings),
         )
 
@@ -473,6 +482,31 @@ class Session:
             "walk_m": rounded(distance),
         }
 
+    def nearest_safety(self, kind: str) -> dict:
+        """Safety mode's quick buttons, without the agent: the nearest exit or the nearest fire extinguisher,
+        defibrillator or eyewash station from where the person is, shown on the map with the route (closures and
+        reports respected)."""
+        building = self.building
+        if kind == "exit":
+            self.nearest_exit()
+            route = self.last_route[0]
+            opening = building.openings[route.nodes[-1].removeprefix(DOOR_PREFIX)]
+            self.show_on_map(show_last_route=True)
+            self.map_view["target"] = {"space_id": self.inside_of(opening), "label": "Exit",
+                                       "floor_id": opening["floor_id"], "position": list(opening["position"])}
+            return {"kind": kind, "label": "the nearest exit", "room": building.label(self.inside_of(opening)),
+                    "walk_m": rounded(route.length_m)}
+        if kind not in SAFETY_THINGS:
+            raise EngineError(f"Unknown safety kind {kind!r}: exit, {', '.join(SAFETY_THINGS)}.")
+        found = self.nearest_with_asset(None, kind)
+        asset = min((item for item in building.assets.values()
+                     if item["type"] == found["asset_type"] and item["space_id"] == found["space_id"]),
+                    key=lambda item: item["id"])
+        self.route(None, found["space_id"])
+        self.show_on_map(target=asset["id"], show_last_route=True)
+        return {"kind": kind, "label": asset["name"], "room": building.label(asset["space_id"]),
+                "walk_m": found["walk_m"]}
+
     def errand_walk(self, start: str | None, asset_type: str, destination: str, step_free: bool = False) -> dict:
         """Walk from start (default: where the person is) to the nearest room holding an asset type, then on
         to the destination."""
@@ -553,6 +587,41 @@ class Session:
         self.show_change(self.floor_of(element_id))
         return {"element_id": element_id, "closed": closed, "all_closed": sorted(self.closed)}
 
+    def element_summary(self, element_id: str) -> dict:
+        """A lift, staircase, door or room as people say it: kind, a label with its floors, the floors it is on."""
+        building = self.building
+        if element_id in building.connectors:
+            connector = building.connectors[element_id]
+            floors = [building.floor_name(floor_id) for floor_id in connector["floor_ids"]]
+            return {"element_id": element_id, "kind": connector["kind"],
+                    "label": f"{connector['name']} ({' ↔ '.join(floors)})", "floor_ids": list(connector["floor_ids"])}
+        if element_id in building.openings:
+            opening = building.openings[element_id]
+            rooms = " and ".join(building.spaces[space]["name"] for space in opening["space_ids"] if space in building.spaces)
+            kind = "entrance" if opening.get("kind") == "entrance" else "door"
+            return {"element_id": element_id, "kind": kind,
+                    "label": f"{kind.capitalize()} {'to ' if kind == 'entrance' else 'between '}{rooms}".strip(),
+                    "floor_ids": [opening["floor_id"]]}
+        space = building.spaces[element_id]
+        return {"element_id": element_id, "kind": "room", "label": building.label(element_id),
+                "floor_ids": [space["floor_id"]]}
+
+    def report_problem(self, element: str, problem: str, fixed: bool = False) -> dict:
+        """Something is broken or out of service for everyone (or works again): every conversation about this
+        building routes around it, the map shows it, and maintenance is told."""
+        if self.on_report is None:
+            raise EngineError("Reports for the whole building only work in the live app; use set_closed here.")
+        summary = self.element_summary(find_element(self.building, element))
+        filed = self.on_report({**summary, "problem": problem}, fixed)
+        element_id = summary["element_id"]
+        if fixed:
+            self.reported.pop(element_id, None)
+        else:
+            self.reported[element_id] = filed["report"]
+        self.show_change(summary["floor_ids"][0])
+        return {"reported": summary["label"], "status": "works again" if fixed else "out of service for everyone",
+                "maintenance": filed["maintenance"]}
+
     def add_door(self, first: str, second: str, width_m: float = 0.9, step_free: bool = True) -> dict:
         building = self.building
         door = building.door_between(find_space(building, first), find_space(building, second))
@@ -602,10 +671,11 @@ class Session:
     def changes(self) -> dict | None:
         """What this conversation changed, for the map: closed doors, stairs, lifts and rooms, new doors, moved
         things. None when nothing changed."""
-        if not (self.closed or self.new_openings or self.moved):
+        if not (self.closed or self.new_openings or self.moved or self.reported):
             return None
         return {
             "closed": sorted(self.closed),
+            "reported": [dict(report) for report in self.reported.values()],
             "new_doors": [{"id": door["id"], "floor_id": door["floor_id"], "position": door["position"],
                            "width_m": door.get("width_m")} for door in self.new_openings],
             "moved": [{"asset_id": asset["id"], "label": asset["name"], "space_id": asset["space_id"],

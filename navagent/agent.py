@@ -95,7 +95,12 @@ Show it with show_on_map (their position, the target, the route from find_route)
 you understood in a few words (from where, step-free, what is closed, which entrance) and give the way in \
 two or three short sentences of turns and things they will see, from the route's steps, not a numbered \
 list; people may not look at the map.
-- When told something is closed, a door is added or a thing was moved, apply it with the tools (set_closed, add_door, move_thing; the map shows it at once) and say what changes for them."""
+- When told something is closed, a door is added or a thing was moved, apply it with the tools (set_closed, add_door, move_thing; the map shows it at once) and say what changes for them.
+- When someone tells you a lift, stairs, a door or a room is broken or out of service right now ("the lift on \
+floor 2 is broken"), report it for everyone with report_problem: no more questions unless it is ambiguous which one \
+(then ask, with the options). Confirm in one sentence what you understood and that maintenance has been told, \
+then what it means for them. When they say it works again, report_problem with fixed=True. Use set_closed only \
+for "what if" questions and changes for this conversation alone."""
 
 BENCHMARK_RULES = """
 Answering a scored question:
@@ -579,7 +584,20 @@ def make_tools(session: Session, mode: str = CHAT) -> list:
             """
             return session.where_am_i_options(floor)
 
-        tools += [set_closed, add_door, move_thing, set_my_position, where_am_i_options]
+        @tool
+        def report_problem(element: str, problem: str, fixed: bool = False) -> dict:
+            """Report a lift, staircase, door or room as broken / out of service for everyone in the building
+            (or as working again). Every colleague's routes avoid it from now on, the map shows it red, and the
+            maintenance team is told. The result says how maintenance was reached.
+
+            Args:
+                element: Name or id, e.g. "Office lift", "the lift" (when there is one), "Stairs 2", a door, a room.
+                problem: What is wrong, in the person's words ("the lift is broken").
+                fixed: True when it works again.
+            """
+            return session.report_problem(element, problem, fixed)
+
+        tools += [set_closed, add_door, move_thing, report_problem, set_my_position, where_am_i_options]
 
     if mode == BENCHMARK:
 
