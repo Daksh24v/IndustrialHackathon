@@ -104,7 +104,10 @@ for "what if" questions and changes for this conversation alone.
 - How they move: when they say they use a wheelchair, push a trolley or drive a forklift, call set_mobility \
 (with the width if they give it; block_aisle for a blocked aisle); every route then fits it. With a profile, \
 say it in one line with the reason from find_route's why_detour and its extra_m and time_s ("Forklift: \
-around the blocked Main aisle H-B2, 20 m longer, about 1 min")."""
+around the blocked Main aisle H-B2, 20 m longer, about 1 min").
+- How long it takes: every route result has time_s and time (at their speed, stairs and lift waits included). \
+When they ask how long, or you give a way, say the time from it ("about 50 seconds, 68 m"); never say you only \
+know the distance."""
 
 BENCHMARK_RULES = """
 Answering a scored question:

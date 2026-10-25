@@ -364,6 +364,18 @@ export function moveCamera(cam: Camera, k: number, tx: number, ty: number, width
            oy: height / 2 + k * (cam.oy - height / 2) + ty };
 }
 
+/** The same view with the camera aimed at the plan point drawn at `anchor` (a screen point), and that point kept
+ * there. A pan or zoom only shifts and scales the picture, which leaves the camera aimed at its old place: after
+ * a close-up (strong perspective) the floor then looks sheared as it slides away from the middle. Aiming the camera
+ * again keeps the perspective centred on what you're looking at. Unchanged when the anchor is above the horizon. */
+export function recentre(cam: Camera, [ax, ay]: Point): Camera {
+  const py = (ay - cam.oy) / cam.scale;
+  if (cam.distance * Math.cos(cam.tilt) + py * Math.sin(cam.tilt) <= cam.distance * 0.05) return cam;
+  const target = unproject3d(cam, [ax, ay]);
+  if (!Number.isFinite(target[0]) || !Number.isFinite(target[1])) return cam;
+  return { ...cam, target, ox: ax, oy: ay };
+}
+
 /** The same for the flat 2D view. */
 export function moveTransform(t: Transform, k: number, tx: number, ty: number, width: number, height: number): Transform {
   return { ...t, scale: t.scale * k, offsetX: width / 2 + k * (t.offsetX - width / 2) + tx,

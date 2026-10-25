@@ -4,7 +4,7 @@ import { join } from 'path';
 
 import type { BuildingDetail, MapView, Point } from '../api';
 import { categories } from '../categories';
-import { bare, heading, routeSteps, summary, turnWord, whyThisWay } from '../steps';
+import { bare, heading, routeSteps, sayDuration, summary, turnWord, whyThisWay } from '../steps';
 
 const detail: BuildingDetail = JSON.parse(
   readFileSync(join(__dirname, '../../../data/dev/proc-factory-dev-003/building.json'), 'utf-8'));
@@ -72,12 +72,23 @@ describe('route steps', () => {
   });
 
   it('sums it up', () => {
-    expect(summary(map, detail)).toEqual({ length_m: 30, minutes: 1, floors: 1, up: true, stepFree: false });
+    expect(summary(map, detail)).toEqual({ length_m: 30, time_s: 23, time: 'about 23 s', floors: 1, up: true,
+                                          stepFree: false }); // 30 m at 1.3 m/s
     const lift = { ...map, route: { ...map.route!, pieces: [
       { ...map.route!.pieces[0], then: { kind: 'lift', name: 'Office lift', to_floor_id: F1 } }, map.route!.pieces[1]] } };
     expect(summary(lift, detail)?.stepFree).toBe(true);
     expect(routeSteps(lift, detail)[2]).toMatchObject({ kind: 'lift', action: 'Take Office lift up to Floor 1' });
     expect(bare('Office 1.04 (Floor 1)')).toBe('Office 1.04');
+  });
+});
+
+describe('how long it takes', () => {
+  it('says seconds, then minutes, then hours', () => {
+    expect(sayDuration(52)).toBe('about 52 s');
+    expect(sayDuration(0.4)).toBe('about 1 s');
+    expect(sayDuration(95)).toBe('about 2 min');
+    expect(sayDuration(1500)).toBe('about 25 min');
+    expect(sayDuration(3900)).toBe('about 1 h 5 min');
   });
 });
 
@@ -111,7 +122,7 @@ describe('profiles', () => {
       extra_m: 20.2, time_s: 54 };
     expect(whyThisWay(route)).toBe('Why this way: Main aisle H-B2 (Ground floor) is closed · 20 m longer · about 54 s');
     const sum = summary({ ...map, route }, detail);
-    expect(sum).toMatchObject({ profile: 'Forklift', minutes: 1 });
+    expect(sum).toMatchObject({ profile: 'Forklift', time_s: 54, time: 'about 54 s' });
     expect(whyThisWay({ ...route, why_detour: [], extra_m: 0, time_s: 300 })).toBe('The direct way fits a forklift · about 5 min');
     expect(summary(map, detail)?.why).toBeUndefined(); // on foot: nothing new
   });

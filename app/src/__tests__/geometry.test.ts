@@ -112,3 +112,23 @@ describe('the building view tilted up and down', () => {
     expect(height(steep)).toBeLessThan(height(flat));
   });
 });
+
+describe('panning a close-up', () => {
+  const { fitCamera, moveCamera, project3d, recentre, unproject3d } = require('../geometry');
+  it('aims the camera at the middle again, so the floor keeps its shape', () => {
+    const close = fitCamera([[0, 0, 0], [8, 0, 0], [0, 8, 0], [8, 8, 0]], 800, 600, 0.3, 0.9);
+    const dragged = moveCamera(close, 1, -500, 0, 800, 600); // slid far to the left
+    const middle: Point = [400, 300];
+    const aimed = recentre(dragged, middle);
+    const there = unproject3d(dragged, middle);
+    expect(aimed.target[0]).toBeCloseTo(there[0]);
+    expect(aimed.target[1]).toBeCloseTo(there[1]);
+    expect(project3d(aimed, aimed.target)).toEqual(middle); // what's in the middle stays in the middle
+    // the same picture point, but the camera now looks straight at it: no extra shear there
+    expect(project3d(dragged, there)[0]).toBeCloseTo(400);
+  });
+  it('leaves a view alone when the middle is the sky', () => {
+    const side = { target: [0, 0], yaw: 0, tilt: 1.5, distance: 20, scale: 10, ox: 400, oy: 300 };
+    expect(recentre(side, [400, -5000])).toBe(side);
+  });
+});

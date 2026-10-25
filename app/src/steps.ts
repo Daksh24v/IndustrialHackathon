@@ -10,8 +10,7 @@ const STRAIGHT_DEG = 30;
 const AROUND_DEG = 150;
 const LANDMARK_MAX_PER_FLOOR = 2; // a kind of thing at most this often on a floor is a landmark
 const LANDMARK_NEAR_DOOR_M = 3;
-const WALK_M_PER_S = 1.2;
-const LIFT_S = 15;
+const WALK_M_PER_S = 1.3; // navcore/profiles.py "walk"; the route length already counts stairs and lift waits
 
 export type StepKind = 'turn' | 'stairs' | 'lift' | 'arrive';
 
@@ -27,7 +26,8 @@ export interface Step {
 
 export interface Summary {
   length_m: number;
-  minutes: number;
+  time_s: number;
+  time: string; // "about 50 s", "about 4 min"
   floors: number; // floors changed
   up: boolean;
   stepFree: boolean;
@@ -163,16 +163,16 @@ export function summary(map: MapView | null, detail: BuildingDetail | null): Sum
   const route = map?.route;
   if (!route) return null;
   const changes = route.pieces.filter((piece) => piece.then?.to_floor_id);
-  const lifts = changes.filter((piece) => piece.then?.kind === 'lift').length;
   const level = (id: string | undefined) => detail?.floors.find((floor) => floor.id === id)?.level ?? 0;
   const first = route.pieces[0]?.floor_id;
   const last = route.pieces[route.pieces.length - 1]?.floor_id;
   const stepped = (detail?.openings ?? []).some((opening) => opening.step_free === false && route.pieces.some(
     (piece) => piece.floor_id === opening.floor_id && piece.points.some((p) => dist(p, opening.position) < 0.5)));
+  const seconds = route.time_s ?? Math.round(route.length_m / WALK_M_PER_S);
   return {
     length_m: Math.round(route.length_m),
-    minutes: route.time_s != null ? Math.max(1, Math.round(route.time_s / 60))
-      : Math.max(1, Math.round((route.length_m / WALK_M_PER_S + lifts * LIFT_S) / 60)),
+    time_s: seconds,
+    time: sayDuration(seconds),
     floors: changes.length,
     up: level(last) >= level(first),
     stepFree: !changes.some((piece) => piece.then?.kind === 'stairs') && !stepped,
@@ -180,12 +180,20 @@ export function summary(map: MapView | null, detail: BuildingDetail | null): Sum
   };
 }
 
-const duration = (seconds: number) => (seconds < 90 ? `about ${Math.max(1, Math.round(seconds))} s` : `about ${Math.round(seconds / 60)} min`);
+/** A time as people say it, like the agent's (navagent/tools.py `say_duration`): seconds under a minute and a
+ * half, then whole minutes, then hours and minutes. */
+export function sayDuration(seconds: number): string {
+  if (seconds < 90) return `about ${Math.max(1, Math.round(seconds))} s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `about ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  return minutes % 60 ? `about ${hours} h ${minutes % 60} min` : `about ${hours} h`;
+}
 
 /** The line under the metres when a profile is set: the reason the route isn't the plain walk, the extra metres and
  * the time at that profile's speed. */
 export function whyThisWay(route: NonNullable<MapView['route']>): string {
-  const time = route.time_s != null ? duration(route.time_s) : '';
+  const time = route.time_s != null ? sayDuration(route.time_s) : '';
   const reasons = route.why_detour ?? [];
   if (!reasons.length) return [`The direct way fits a ${(route.profile ?? '').toLowerCase()}`, time].filter(Boolean).join(' · ');
   const said = reasons.join('; ');

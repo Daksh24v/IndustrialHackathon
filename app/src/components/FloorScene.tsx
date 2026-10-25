@@ -16,7 +16,7 @@ import type { BuildingDetail, Context, MapView, Point } from '../api';
 import { assetsOn, changesOn } from '../changes';
 import { finishOf, finishPattern } from '../finishes';
 import {
-  assetRect, boundsOf, chooseCamera, clipNear, depthOf, fitCamera, grow, moveCamera, nearby, pixelsPerMetre, pointInPolygon,
+  assetRect, boundsOf, chooseCamera, clipNear, depthOf, fitCamera, grow, moveCamera, nearby, recentre, pixelsPerMetre, pointInPolygon,
   project3d, ribbon, rotateAbout, signedArea, unproject3d, type Camera, type Point3,
 } from '../geometry';
 import { useMapGestures } from '../gestures';
@@ -477,10 +477,11 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
   fittedScale.current = fitted.scale;
   const gestures = useMapGestures(width, height, (move) => setCam((current) => {
     const { k, tx, ty } = limitMove(move, current.scale, fittedScale.current);
-    return moveCamera(current, k, tx, ty, width, height);
+    return recentre(moveCamera(current, k, tx, ty, width, height), middleRef.current());
   }), tapped, frame);
   const zoomBy = (k: number) =>
-    setCam((current) => moveCamera(current, limitZoom(k, current.scale, fittedScale.current), 0, 0, width, height));
+    setCam((current) => recentre(moveCamera(current, limitZoom(k, current.scale, fittedScale.current), 0, 0, width, height),
+                                 middleRef.current()));
 
   // Turn a quarter about whatever is in the middle of the screen.
   const turning = useRef<number | null>(null);
@@ -648,7 +649,7 @@ export function FloorScene({ detail, floorId, map, footprints, context, width, h
       if (!drag.moved) return;
       moving();
       if (drag.mode === 'turn') setCam(orbit(drag.start, drag.pivot, dx * DRAG_TURN, drag.start.tilt - dy * DRAG_TILT));
-      else setCam(moveCamera(drag.start, 1, dx, dy, size.current.width, size.current.height));
+      else setCam(recentre(moveCamera(drag.start, 1, dx, dy, size.current.width, size.current.height), middleRef.current()));
     };
     const onUp = (event: PointerEvent) => {
       if (!drag || event.pointerId !== drag.id) return;

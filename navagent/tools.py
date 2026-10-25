@@ -106,6 +106,17 @@ def rounded(value: float) -> float:
     return round(value, 2)
 
 
+def say_duration(seconds: float) -> str:
+    """A time as people say it: "about 45 seconds" under a minute and a half, then whole minutes, then hours."""
+    if seconds < 90:
+        return f"about {max(1, round(seconds))} seconds"
+    minutes = round(seconds / 60)
+    if minutes < 60:
+        return f"about {minutes} minutes"
+    hours, rest = divmod(minutes, 60)
+    return f"about {hours} h {rest} min" if rest else f"about {hours} h"
+
+
 def space_types(types: list[str] | None, default: frozenset[str]) -> frozenset[str]:
     """Which kinds of space count, e.g. ["room", "hall"]; None keeps the README default."""
     if types is None:
@@ -424,7 +435,8 @@ class Session:
             spaces += [space for space in leg.space_path if not spaces or spaces[-1] != space]
         self.active_route = {"stops": stops, "spaces": spaces, "destination": stops[-1], "progress": 0,
                              "step_free": step_free, "min_width_m": min_width_m}
-        how = self.last_how = self.how_it_goes(legs, constraints) if self.profile else {}
+        how = self.last_how = self.how_it_goes(legs, constraints) if self.profile else \
+            self.travel_time(sum(leg.length_m for leg in legs))
         return {
             "from": building.label(stops[0]),
             "to": building.label(stops[-1]),
@@ -451,7 +463,14 @@ class Session:
             extra += why["extra_m"] or 0.0
         length = sum(leg.length_m for leg in legs)
         return {"profile": self.profile.label, "why_detour": reasons, "extra_m": rounded(extra),
-                "time_s": round(length / self.profile.speed_mps)}
+                **self.travel_time(length)}
+
+    def travel_time(self, length_m: float) -> dict:
+        """How long a route takes at this person's speed (walking 1.3 m/s unless a profile is set): the route
+        length already counts stairs by the height climbed and a lift ride with its wait."""
+        speed = (self.profile or find_profile("walk")).speed_mps
+        seconds = round(length_m / speed)
+        return {"time_s": seconds, "time": say_duration(seconds)}
 
     def directions(self, route: Route) -> list[str]:
         """Followable steps: one line per door into another space and per stair or lift, with the metres, the
@@ -509,8 +528,9 @@ class Session:
         building = self.building
         space_id = self.start_or_here(room)
         route = building.exit_route(space_id, self.constraints(step_free))
-        self.last_route, self.last_how = [route], {}
-        return {"from": building.label(space_id), "walk_m": rounded(route.length_m), "steps": self.directions(route)}
+        self.last_route, self.last_how = [route], self.travel_time(route.length_m)
+        return {"from": building.label(space_id), "walk_m": rounded(route.length_m), **self.last_how,
+                "steps": self.directions(route)}
 
     def nearest_with_asset(self, start: str | None, asset_type: str, step_free: bool = False) -> dict:
         building = self.building
@@ -522,6 +542,7 @@ class Session:
             "nearest_room": building.label(space_id),
             "space_id": space_id,
             "walk_m": rounded(distance),
+            **self.travel_time(distance),
         }
 
     def nearest_safety(self, kind: str) -> dict:
